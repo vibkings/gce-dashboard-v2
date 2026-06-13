@@ -4893,111 +4893,318 @@ function renderReports() {
   const curMonth = now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
   const repFilter = window._repFilter || 'month';
   const today = now.toLocaleDateString();
+  const pad = n=>String(n).padStart(2,'0');
+
+  // Custom range state
+  const customFrom = window._repFrom||'';
+  const customTo   = window._repTo||'';
 
   function inRange(date, month) {
     if (repFilter==='today') return date===today;
     if (repFilter==='month') return (month||'')===curMonth;
+    if (repFilter==='custom') {
+      const d=new Date(date);
+      const f=customFrom?new Date(customFrom):null;
+      const t=customTo?(()=>{const x=new Date(customTo);x.setHours(23,59,59,999);return x;})():null;
+      return (!f||d>=f)&&(!t||d<=t);
+    }
     return true;
   }
 
-  const allSales = Object.values(STATE.sales||{});
-  const allExp = Object.values(STATE.cashflow||{}).filter(c=>c.type==='out'&&!['Restock','Supplier Payment','Supplier Deposit','Change'].includes(c.cat));
-  const salesF = allSales.filter(s=>inRange(s.date,s.month));
-  const expF = allExp.filter(e=>inRange(e.date,e.month));
+  const allSales     = Object.values(STATE.sales||{});
+  const allCashflow  = Object.values(STATE.cashflow||{});
+  const EXC = ['Restock','Supplier Payment','Supplier Deposit','Change'];
+  const allExp       = allCashflow.filter(c=>c.type==='out'&&!EXC.includes(c.cat));
+  const restocking   = allCashflow.filter(c=>c.type==='out'&&c.cat==='Restock');
 
-  const revenue = salesF.reduce((a,s)=>a+s.total,0);
-  const grossProfit = salesF.reduce((a,s)=>a+s.profit,0);
-  const expenses = expF.reduce((a,e)=>a+e.amount,0);
-  const netProfit = grossProfit - expenses;
-  const margin = revenue>0?Math.round(netProfit/revenue*100):0;
-  const cashReceived = salesF.filter(s=>s.payment!=='credit').reduce((a,s)=>a+s.total,0);
-  const creditOwed = salesF.filter(s=>s.payment==='credit').reduce((a,s)=>a+s.total,0);
-  const allCreditOwed = Object.values(STATE.customers||{}).reduce((a,c)=>a+(c.creditBalance||0),0);
+  const salesF       = allSales.filter(s=>inRange(s.date,s.month));
+  const expF         = allExp.filter(e=>inRange(e.date,e.month));
+  const restockF     = restocking.filter(r=>inRange(r.date,r.month));
 
-  // Payment breakdown
-  const cashSales = salesF.filter(s=>s.payMode==='cash'||s.payment==='cash').reduce((a,s)=>a+s.total,0);
-  const posSales = salesF.filter(s=>s.payMode==='pos').reduce((a,s)=>a+s.total,0);
-  const transferSales = salesF.filter(s=>s.payMode==='transfer').reduce((a,s)=>a+s.total,0);
+  // Core metrics
+  const revenue      = salesF.reduce((a,s)=>a+(s.total||0),0);
+  const grossProfit  = salesF.reduce((a,s)=>a+(s.profit||0),0);
+  const expenses     = expF.reduce((a,e)=>a+(e.amount||0),0);
+  const restockTotal = restockF.reduce((a,r)=>a+(r.amount||0),0);
+  const netProfit    = grossProfit - expenses;
+  const margin       = revenue>0?Math.round(netProfit/revenue*100):0;
+  const grossMargin  = revenue>0?Math.round(grossProfit/revenue*100):0;
+
+  // Cash received vs credit
+  const cashReceived = salesF.filter(s=>s.payment!=='credit'&&s.payment!=='deposit').reduce((a,s)=>a+(s.total||0),0);
+  const creditOwed   = salesF.filter(s=>s.payment==='credit').reduce((a,s)=>a+(s.total||0),0);
+  const allCreditOwed= Object.values(STATE.customers||{}).reduce((a,c)=>a+(c.creditBalance||0),0);
+  const depositPaid  = salesF.filter(s=>s.payment==='deposit').reduce((a,s)=>a+(s.partPayment||s.total||0),0);
+
+  // Net cash = cash received - expenses - restocking
+  const netCash = cashReceived - expenses - restockTotal;
+
+  // Discounts
+  const discounts = salesF.reduce((a,s)=>a+(s.discount||0),0);
+
+  // Goods not yet supplied
+  const pendingSupply = salesF.filter(s=>s.pendingSupply||s.supplyStatus==='pending');
+  const pendingSupplyTotal = pendingSupply.reduce((a,s)=>a+(s.total||0),0);
+  const pendingSupplySet = new Set(pendingSupply.map(s=>s.invoiceNum)).size;
+
+  // Payment mode breakdown
+  const cashSales     = salesF.filter(s=>s.payMode==='cash'||(s.payment==='cash'&&!s.payMode)).reduce((a,s)=>a+(s.total||0),0);
+  const posSales      = salesF.filter(s=>s.payMode==='pos').reduce((a,s)=>a+(s.total||0),0);
+  const transferSales = salesF.filter(s=>s.payMode==='transfer').reduce((a,s)=>a+(s.total||0),0);
+  const splitSales    = salesF.filter(s=>s.payMode==='split').reduce((a,s)=>a+(s.total||0),0);
 
   // Top selling items
   const itemTotals = {};
   salesF.forEach(s=>{
-    if(!itemTotals[s.name])itemTotals[s.name]={name:s.name,qty:0,revenue:0,profit:0};
-    itemTotals[s.name].qty+=s.qty||1;
-    itemTotals[s.name].revenue+=s.total||0;
-    itemTotals[s.name].profit+=s.profit||0;
+    const k = s.name||'Unknown';
+    if(!itemTotals[k]) itemTotals[k]={name:k,qty:0,revenue:0,profit:0};
+    itemTotals[k].qty    += s.qty||1;
+    itemTotals[k].revenue+= s.total||0;
+    itemTotals[k].profit += s.profit||0;
   });
   const topItems = Object.values(itemTotals).sort((a,b)=>b.revenue-a.revenue).slice(0,10);
 
-  const periodLabel = repFilter==='today'?'Today':repFilter==='month'?now.toLocaleString('default',{month:'long',year:'numeric'}):'All time';
+  // Top expense categories
+  const expCatMap = {};
+  expF.forEach(e=>{ expCatMap[e.cat||'Other']=(expCatMap[e.cat||'Other']||0)+(e.amount||0); });
+  const topExpCats = Object.entries(expCatMap).sort((a,b)=>b[1]-a[1]).slice(0,5);
+
+  // 7-day Revenue & Profit chart data
+  const last7 = Array.from({length:7},(_,i)=>{
+    const d=new Date(now); d.setDate(now.getDate()-6+i);
+    const ds=d.toLocaleDateString();
+    const dm=d.getFullYear()+'-'+pad(d.getMonth()+1);
+    const dayS=allSales.filter(s=>s.date===ds);
+    return {
+      label:['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][d.getDay()],
+      rev:dayS.reduce((a,s)=>a+(s.total||0),0),
+      profit:dayS.reduce((a,s)=>a+(s.profit||0),0)
+    };
+  });
+  const maxBar = Math.max(...last7.map(d=>Math.max(d.rev,d.profit)),1);
+
+  const barChart = `
+    <div style="display:flex;align-items:flex-end;gap:6px;height:90px;padding:0 4px">
+      ${last7.map(d=>`
+        <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px">
+          <div style="display:flex;gap:2px;align-items:flex-end;height:72px">
+            <div style="width:10px;background:var(--brand);border-radius:3px 3px 0 0;height:${Math.max(2,Math.round(d.rev/maxBar*70))}px;opacity:.85" title="Rev: ${fmt(d.rev)}"></div>
+            <div style="width:10px;background:var(--success);border-radius:3px 3px 0 0;height:${Math.max(0,Math.round(Math.max(0,d.profit)/maxBar*70))}px" title="Profit: ${fmt(d.profit)}"></div>
+          </div>
+          <div style="font-size:9px;color:var(--text3);margin-top:2px">${d.label}</div>
+        </div>`).join('')}
+    </div>
+    <div style="display:flex;gap:12px;margin-top:6px">
+      <span style="font-size:10px;color:var(--text3);display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;background:var(--brand);border-radius:2px;display:inline-block"></span>Revenue</span>
+      <span style="font-size:10px;color:var(--text3);display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;background:var(--success);border-radius:2px;display:inline-block"></span>Profit</span>
+    </div>`;
+
+  const periodLabel = repFilter==='today'?'Today':repFilter==='month'?now.toLocaleString('en',{month:'long',year:'numeric'}):repFilter==='custom'?'Custom Range':'All time';
+  const invoiceCount = new Set(salesF.map(s=>s.invoiceNum)).size;
+
+  // Revenue reconciliation
+  const revenueRecon = cashReceived + creditOwed + depositPaid;
+  const revenueReconNote = `${fmt(cashReceived)} collected + ${fmt(creditOwed)} owed + ${fmt(depositPaid)} deposits = ${fmt(revenueRecon)}`;
 
   el.innerHTML = `
     <!-- Period filter -->
-    <div style="display:flex;gap:8px;margin-bottom:1.5rem;align-items:center;flex-wrap:wrap">
-      <span style="font-size:12px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.05em">Period:</span>
-      <button class="btn btn-sm ${repFilter==='today'?'btn-primary':''}" onclick="window._repFilter='today';renderReports()">Today</button>
-      <button class="btn btn-sm ${repFilter==='month'?'btn-primary':''}" onclick="window._repFilter='month';renderReports()">This Month</button>
-      <button class="btn btn-sm ${repFilter==='all'?'btn-primary':''}" onclick="window._repFilter='all';renderReports()">All Time</button>
+    <div style="display:flex;gap:8px;margin-bottom:1rem;align-items:center;flex-wrap:wrap">
+      <span style="font-size:12px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.05em">PERIOD:</span>
+      ${['today','month','all','custom'].map(f=>`
+        <button class="btn btn-sm ${repFilter===f?'btn-primary':''}" onclick="window._repFilter='${f}';renderReports()">
+          ${f==='today'?'Today':f==='month'?'This Month':f==='all'?'All Time':'Custom'}
+        </button>`).join('')}
       <span style="font-size:13px;font-weight:600;color:var(--text2);margin-left:4px">— ${periodLabel}</span>
     </div>
+    ${repFilter==='custom'?`
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:1rem;flex-wrap:wrap">
+      <input type="date" class="form-input" style="width:150px;font-size:13px;padding:5px 8px" value="${customFrom}" onchange="window._repFrom=this.value;renderReports()">
+      <span style="color:var(--text3)">to</span>
+      <input type="date" class="form-input" style="width:150px;font-size:13px;padding:5px 8px" value="${customTo}" onchange="window._repTo=this.value;renderReports()">
+    </div>`:''}
 
-    <!-- Hero -->
-    <div style="background:linear-gradient(135deg,#1a56db 0%,#0e2e8a 100%);border-radius:var(--radius-xl);padding:1.75rem 2rem;margin-bottom:1.5rem;color:#fff;position:relative;overflow:hidden">
-      <div style="position:absolute;right:-20px;top:-20px;width:160px;height:160px;border-radius:50%;background:rgba(255,255,255,.05)"></div>
-      <div style="font-size:11px;text-transform:uppercase;letter-spacing:.1em;opacity:.65;margin-bottom:6px">Financial Summary — ${periodLabel}</div>
-      <div style="font-size:32px;font-weight:800;letter-spacing:-.5px">${fmt(revenue)}</div>
-      <div style="font-size:12px;opacity:.65;margin-bottom:1.25rem">Total Revenue</div>
-      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:1.5rem">
-        <div style="border-left:1px solid rgba(255,255,255,.2);padding-left:1.25rem">
-          <div style="font-size:10px;text-transform:uppercase;letter-spacing:.08em;opacity:.6;margin-bottom:4px">Gross Profit</div>
+    <!-- How to read glossary -->
+    <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:var(--radius-lg);padding:12px 16px;margin-bottom:1.25rem">
+      <div style="font-size:11px;font-weight:700;color:#1d4ed8;margin-bottom:8px;display:flex;align-items:center;gap:6px">ℹ️ How to read this dashboard</div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px 16px;font-size:11px;color:var(--text2)">
+        <div><b style="color:#1d4ed8">Revenue</b> — total of all invoices raised</div>
+        <div><b style="color:#059669">Gross Profit</b> — revenue minus what the goods cost you</div>
+        <div><b style="color:#0891b2">Cash Received</b> — what customers actually paid (no credit)</div>
+        <div><b style="color:#dc2626">Credit Owed</b> — invoices not yet paid by customers</div>
+        <div><b style="color:#d97706">Expenses</b> — running costs (transport, food, etc)</div>
+        <div><b style="color:#7c3aed">Net Profit</b> — Gross Profit minus Expenses (true profit before restocking)</div>
+      </div>
+    </div>
+
+    <!-- Hero banner -->
+    <div style="background:linear-gradient(135deg,#1a56db 0%,#1341b0 60%,#0e2e8a 100%);border-radius:var(--radius-xl);padding:1.75rem 2rem;margin-bottom:1.5rem;color:#fff;position:relative;overflow:hidden">
+      <div style="position:absolute;right:-30px;top:-30px;width:180px;height:180px;border-radius:50%;background:rgba(255,255,255,.05)"></div>
+      <div style="position:absolute;right:80px;bottom:-40px;width:100px;height:100px;border-radius:50%;background:rgba(255,255,255,.04)"></div>
+      <div style="font-size:11px;text-transform:uppercase;letter-spacing:.12em;opacity:.6;margin-bottom:6px">Financial Summary — ${periodLabel}</div>
+      <div style="font-size:36px;font-weight:800;letter-spacing:-.5px;margin-bottom:2px">${fmt(revenue)}</div>
+      <div style="font-size:12px;opacity:.55;margin-bottom:1.5rem">Total Revenue · ${invoiceCount} invoice${invoiceCount!==1?'s':''}</div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:1rem">
+        <div style="border-left:1px solid rgba(255,255,255,.2);padding-left:1rem">
+          <div style="font-size:10px;text-transform:uppercase;letter-spacing:.08em;opacity:.55;margin-bottom:4px">Gross Profit</div>
           <div style="font-size:20px;font-weight:700">${fmt(grossProfit)}</div>
-          <div style="font-size:11px;opacity:.6">${revenue>0?Math.round(grossProfit/revenue*100):0}% margin</div>
+          <div style="font-size:11px;opacity:.55">${grossMargin}% margin</div>
         </div>
-        <div style="border-left:1px solid rgba(255,255,255,.2);padding-left:1.25rem">
-          <div style="font-size:10px;text-transform:uppercase;letter-spacing:.08em;opacity:.6;margin-bottom:4px">Expenses</div>
+        <div style="border-left:1px solid rgba(255,255,255,.2);padding-left:1rem">
+          <div style="font-size:10px;text-transform:uppercase;letter-spacing:.08em;opacity:.55;margin-bottom:4px">Expenses</div>
           <div style="font-size:20px;font-weight:700">${fmt(expenses)}</div>
+          <div style="font-size:11px;opacity:.55">${expF.length} transactions</div>
         </div>
-        <div style="border-left:1px solid rgba(255,255,255,.2);padding-left:1.25rem">
-          <div style="font-size:10px;text-transform:uppercase;letter-spacing:.08em;opacity:.6;margin-bottom:4px">Net Profit</div>
-          <div style="font-size:20px;font-weight:700">${fmt(netProfit)}</div>
-          <div style="font-size:11px;opacity:.6">${margin}% net margin</div>
+        <div style="border-left:1px solid rgba(255,255,255,.2);padding-left:1rem">
+          <div style="font-size:10px;text-transform:uppercase;letter-spacing:.08em;opacity:.55;margin-bottom:4px">Net Profit</div>
+          <div style="font-size:20px;font-weight:700;color:${netProfit<0?'#fca5a5':'#86efac'}">${fmt(netProfit)}</div>
+          <div style="font-size:11px;opacity:.55">${margin}% net margin</div>
+        </div>
+        <div style="border-left:1px solid rgba(255,255,255,.2);padding-left:1rem">
+          <div style="font-size:10px;text-transform:uppercase;letter-spacing:.08em;opacity:.55;margin-bottom:4px">Cash Received</div>
+          <div style="font-size:20px;font-weight:700">${fmt(cashReceived)}</div>
+          <div style="font-size:11px;opacity:.55">Paid invoices only</div>
         </div>
       </div>
     </div>
 
-    <!-- KPI Cards -->
-    <div class="sec-title">💰 Revenue Breakdown</div>
-    <div class="kpi-grid">
-      ${kpiCard('success','💵','Cash',fmt(cashSales),'Cash sales')}
-      ${kpiCard('info','🏧','POS',fmt(posSales),'POS sales')}
-      ${kpiCard('brand','🏦','Transfer',fmt(transferSales),'Bank transfer')}
-      ${kpiCard('danger','💳','Credit',fmt(creditOwed),'Unpaid this period',creditOwed>0)}
+    <!-- Goods not yet supplied warning -->
+    ${pendingSupplySet>0?`
+    <div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:var(--radius-lg);padding:10px 16px;margin-bottom:1rem;font-size:13px;display:flex;align-items:center;gap:10px">
+      <span>⚠️</span>
+      <span><b>Goods not yet supplied:</b> ${fmt(pendingSupplyTotal)} — payment received but stock not yet deducted (${pendingSupplySet} invoice${pendingSupplySet!==1?'s':''})</span>
+    </div>`:''}
+
+    <!-- Revenue reconciliation -->
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:10px 16px;margin-bottom:1.25rem;font-size:12px;color:var(--text2)">
+      📊 <b>Revenue reconciliation:</b> ${revenueReconNote} ${Math.abs(revenueRecon-revenue)>1?`<span style="color:var(--danger);font-weight:700"> ≠ ${fmt(revenue)} (diff: ${fmt(revenueRecon-revenue)})</span>`:`<span style="color:var(--success)">✓ balanced</span>`}
     </div>
 
-    <div class="sec-title">📊 Business Health</div>
-    <div class="kpi-grid">
-      ${kpiCard('success','📈','Gross Profit',fmt(grossProfit),revenue>0?Math.round(grossProfit/revenue*100)+'% margin':'')}
-      ${kpiCard('danger','💸','Expenses',fmt(expenses),expF.length+' transactions')}
-      ${kpiCard(netProfit>=0?'success':'danger','🏦','Net Profit',fmt(netProfit),margin+'% net margin',netProfit<0)}
-      ${kpiCard('warning','⏳','Total Outstanding',fmt(allCreditOwed),'All credit customers',allCreditOwed>0)}
+    <!-- Revenue Breakdown -->
+    <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--brand);margin-bottom:10px;display:flex;align-items:center;gap:6px">
+      <span style="width:3px;height:14px;background:var(--brand);border-radius:2px;display:inline-block"></span>
+      💰 REVENUE BREAKDOWN
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:1.25rem">
+      ${[
+        {label:'REVENUE',val:revenue,sub:'All invoices raised',color:'var(--brand)'},
+        {label:'CASH RECEIVED',val:cashReceived,sub:'Money actually collected',color:'var(--success)'},
+        {label:'CREDIT OWED',val:creditOwed,sub:'Invoices not yet paid',color:'var(--danger)'},
+        {label:'TOTAL OUTSTANDING',val:allCreditOwed,sub:'All credit customers',color:'var(--warning)'},
+      ].map(k=>`<div class="kpi-card" style="border-left:3px solid ${k.color}">
+        <div class="kpi-label" style="color:${k.color}">${k.label}</div>
+        <div class="kpi-value" style="color:${k.color};font-size:20px">${fmt(k.val)}</div>
+        <div class="kpi-sub">${k.sub}</div>
+      </div>`).join('')}
+    </div>
+
+    <!-- Business Health -->
+    <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--brand);margin-bottom:10px;display:flex;align-items:center;gap:6px">
+      <span style="width:3px;height:14px;background:var(--brand);border-radius:2px;display:inline-block"></span>
+      📊 BUSINESS HEALTH
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:1.25rem">
+      ${[
+        {label:'GROSS PROFIT',val:grossProfit,sub:grossMargin+'% margin — revenue minus cost of goods',color:'var(--success)'},
+        {label:'EXPENSES',val:expenses,sub:expF.length+' transactions',color:'var(--danger)'},
+        {label:'NET PROFIT',val:netProfit,sub:margin+'% margin — Gross Profit minus Expenses',color:netProfit>=0?'var(--success)':'var(--danger)'},
+        {label:'RESTOCKING',val:restockTotal,sub:'Stock purchased',color:'#7c3aed'},
+      ].map(k=>`<div class="kpi-card" style="border-left:3px solid ${k.color}">
+        <div class="kpi-label" style="color:${k.color}">${k.label}</div>
+        <div class="kpi-value" style="color:${k.color};font-size:20px">${fmt(k.val)}</div>
+        <div class="kpi-sub">${k.sub}</div>
+      </div>`).join('')}
+    </div>
+
+    <!-- Net Cash + Discounts -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:1.25rem">
+      <div class="kpi-card" style="border-left:3px solid var(--info)">
+        <div class="kpi-label" style="color:var(--info)">NET CASH</div>
+        <div class="kpi-value" style="color:${netCash>=0?'var(--info)':'var(--danger)'};font-size:20px">${fmt(netCash)}</div>
+        <div class="kpi-sub">Cash flow (in-out): all money collected minus all expenses</div>
+      </div>
+      <div class="kpi-card" style="border-left:3px solid var(--warning)">
+        <div class="kpi-label" style="color:var(--warning)">DISCOUNTS GIVEN</div>
+        <div class="kpi-value" style="color:var(--warning);font-size:20px">${fmt(discounts)}</div>
+        <div class="kpi-sub">Total discounts applied on invoices</div>
+      </div>
+    </div>
+
+    <!-- 7-day chart + Expense breakdown side by side -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:1.25rem">
+      <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px 16px">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--brand);margin-bottom:12px;display:flex;align-items:center;gap:6px">
+          <span style="width:3px;height:14px;background:var(--brand);border-radius:2px;display:inline-block"></span>
+          📈 REVENUE & PROFIT — LAST 7 DAYS
+        </div>
+        ${barChart}
+        <div style="font-size:11px;color:var(--text3);margin-top:8px;text-align:right">Hover bars for details</div>
+      </div>
+      <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px 16px">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--danger);margin-bottom:12px;display:flex;align-items:center;gap:6px">
+          <span style="width:3px;height:14px;background:var(--danger);border-radius:2px;display:inline-block"></span>
+          💸 EXPENSE BREAKDOWN
+        </div>
+        ${topExpCats.length?topExpCats.map(([cat,amt])=>{
+          const pct=Math.round(amt/expenses*100)||0;
+          return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+            <div style="width:80px;font-size:12px;color:var(--text2);flex-shrink:0">${esc(cat)}</div>
+            <div style="flex:1;background:var(--border);border-radius:4px;height:8px;overflow:hidden">
+              <div style="height:100%;width:${pct}%;background:var(--danger);border-radius:4px"></div>
+            </div>
+            <div style="font-size:11px;font-weight:600;color:var(--danger);white-space:nowrap">${fmt(amt)} <span style="color:var(--text3)">(${pct}%)</span></div>
+          </div>`;
+        }).join(''):`<div style="color:var(--text3);font-size:13px;text-align:center;padding:20px">No expenses this period</div>`}
+      </div>
+    </div>
+
+    <!-- Payment breakdown -->
+    <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--brand);margin-bottom:10px;display:flex;align-items:center;gap:6px">
+      <span style="width:3px;height:14px;background:var(--brand);border-radius:2px;display:inline-block"></span>
+      💳 PAYMENT BREAKDOWN
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:1.25rem">
+      ${[
+        {label:'CASH',val:cashSales,icon:'💵',color:'var(--success)'},
+        {label:'POS',val:posSales,icon:'🏧',color:'var(--info)'},
+        {label:'TRANSFER',val:transferSales,icon:'🏦',color:'var(--brand)'},
+        {label:'SPLIT',val:splitSales,icon:'🔀',color:'#7c3aed'},
+      ].map(k=>`<div class="kpi-card" style="border-left:3px solid ${k.color}">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start">
+          <div class="kpi-label" style="color:${k.color}">${k.label}</div>
+          <span style="font-size:18px;opacity:.25">${k.icon}</span>
+        </div>
+        <div class="kpi-value" style="color:${k.color};font-size:18px">${fmt(k.val)}</div>
+      </div>`).join('')}
     </div>
 
     <!-- Top Items -->
     ${topItems.length?`
-    <div class="sec-title">🏆 Top Selling Items — ${periodLabel}</div>
-    <div class="tbl-wrap">
+    <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--brand);margin-bottom:10px;display:flex;align-items:center;gap:6px">
+      <span style="width:3px;height:14px;background:var(--brand);border-radius:2px;display:inline-block"></span>
+      🏆 TOP SELLING ITEMS — ${periodLabel}
+    </div>
+    <div class="tbl-wrap" style="border-radius:var(--radius);border:1px solid var(--border)">
       <table>
-        <thead><tr><th>#</th><th>Item</th><th class="td-center">Qty Sold</th><th class="td-right">Revenue</th><th class="td-right">Profit</th></tr></thead>
-        <tbody>${topItems.map((item,i)=>`<tr>
-          <td style="color:var(--text3);font-weight:700">${i+1}</td>
-          <td><b>${esc(item.name)}</b></td>
-          <td class="td-center">${item.qty}</td>
-          <td class="td-right">${fmt(item.revenue)}</td>
-          <td class="td-right" style="color:var(--success)">${fmt(item.profit)}</td>
-        </tr>`).join('')}</tbody>
+        <thead><tr><th>#</th><th>ITEM</th><th class="td-center">QTY SOLD</th><th class="td-right">REVENUE</th><th class="td-right">PROFIT</th><th class="td-right">MARGIN</th></tr></thead>
+        <tbody>${topItems.map((item,i)=>{
+          const m=item.revenue>0?Math.round(item.profit/item.revenue*100):0;
+          const bar=Math.round(item.revenue/topItems[0].revenue*100);
+          return `<tr>
+            <td style="color:var(--text3);font-weight:700;font-size:13px">${i===0?'🥇':i===1?'🥈':i===2?'🥉':i+1}</td>
+            <td>
+              <b>${esc(item.name)}</b>
+              <div style="height:3px;background:var(--border);border-radius:2px;margin-top:4px;overflow:hidden">
+                <div style="height:100%;width:${bar}%;background:var(--brand);border-radius:2px"></div>
+              </div>
+            </td>
+            <td class="td-center" style="font-weight:700">${item.qty}</td>
+            <td class="td-right" style="font-weight:700">${fmt(item.revenue)}</td>
+            <td class="td-right" style="color:var(--success);font-weight:700">${fmt(item.profit)}</td>
+            <td class="td-right" style="color:${m>=20?'var(--success)':m>=10?'var(--warning)':'var(--danger)'};font-size:12px;font-weight:700">${m}%</td>
+          </tr>`;
+        }).join('')}</tbody>
       </table>
-    </div>`:''
-    }
+    </div>`:''}
   `;
 }
 
