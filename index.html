@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 <title>Great Chid Electro — Dashboard v2</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/localforage/1.10.0/localforage.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
 /* ═══════════════════════════════════════════════════════════
@@ -908,55 +909,59 @@ async function saveSaleDoc(invoiceMonth, id, data) {
 
 // ── STARTUP SEQUENCE ─────────────────────────────────────
 async function initDataLayer() {
-  // Load localForage (CDN)
-  if (typeof localforage === 'undefined') {
-    await new Promise((res, rej) => {
-      const s = document.createElement('script');
-      s.src = 'https://cdnjs.cloudflare.com/ajax/libs/localforage/1.10.0/localforage.min.js';
-      s.onload = res; s.onerror = rej;
-      document.head.appendChild(s);
-    });
-  }
-  _lf = localforage;
+  // localForage is loaded via <script> in <head> — no dynamic load needed
+  _lf = typeof localforage !== 'undefined' ? localforage : null;
   await _loadSyncQueue();
 
-  // Test Firestore connectivity (non-blocking)
+  // Test Firestore connectivity (non-blocking, no await)
   _testFirestoreConnection();
 
-  // Load all static collections in parallel
+  // Load all collections with a hard timeout — app works even if Firestore is down
   setSyncStatus('connecting');
-  await Promise.all([
-    loadCollection(COLS.USERS,       'users'),
-    loadCollection(COLS.INVENTORY,   'inventory'),
-    loadCollection(COLS.CUSTOMERS,   'customers'),
-    loadCollection(COLS.SUPPLIERS,   'suppliers'),
-    loadCollection(COLS.PURCHASES,   'purchases'),
-    loadCollection(COLS.CASHFLOW,    'cashflow'),
-    loadCollection(COLS.WAREHOUSE,   'warehouse'),
-    loadCollection(COLS.SETTINGS,    'settings'),
-    loadCollection(COLS.BORROWS,     'borrows'),
-    loadCollection(COLS.PROFORMAS,   'proformas'),
-    loadCollection(COLS.ADJLOG,      'adjLog'),
-    loadCollection(COLS.SALESRETURNS,'salesReturns'),
-  ]);
+  const TIMEOUT = 8000; // 8s max wait
 
-  // Load current month's sales + last month's
+  function withTimeout(promise, ms) {
+    return Promise.race([
+      promise,
+      new Promise(resolve => setTimeout(resolve, ms)) // resolve (not reject) on timeout
+    ]);
+  }
+
+  await withTimeout(Promise.all([
+    loadCollection(COLS.USERS,        'users'),
+    loadCollection(COLS.INVENTORY,    'inventory'),
+    loadCollection(COLS.CUSTOMERS,    'customers'),
+    loadCollection(COLS.SUPPLIERS,    'suppliers'),
+    loadCollection(COLS.PURCHASES,    'purchases'),
+    loadCollection(COLS.CASHFLOW,     'cashflow'),
+    loadCollection(COLS.WAREHOUSE,    'warehouse'),
+    loadCollection(COLS.SETTINGS,     'settings'),
+    loadCollection(COLS.BORROWS,      'borrows'),
+    loadCollection(COLS.PROFORMAS,    'proformas'),
+    loadCollection(COLS.ADJLOG,       'adjLog'),
+    loadCollection(COLS.SALESRETURNS, 'salesReturns'),
+  ]), TIMEOUT);
+
+  // Load current month's sales (with timeout)
   const now = new Date();
-  await Promise.all([
+  await withTimeout(Promise.all([
     loadMonthlySales(now.getFullYear(), now.getMonth()+1),
     loadMonthlySales(
       now.getMonth()===0 ? now.getFullYear()-1 : now.getFullYear(),
       now.getMonth()===0 ? 12 : now.getMonth()
     ),
-  ]);
+  ]), TIMEOUT);
 
   // Load settings object
   const settingsDoc = STATE.settings?.['config'];
   if (settingsDoc) STATE.settings = settingsDoc;
 
   // Load inv counter
-  const counterDoc = await (async()=>{try{const s=_lfStore(COLS.SETTINGS);return s?await s.getItem('invCounter'):null;}catch(e){return null;}})();
-  if (counterDoc?.value) STATE.invCounter = counterDoc.value;
+  try {
+    const s = _lfStore(COLS.SETTINGS);
+    const counterDoc = s ? await s.getItem('invCounter') : null;
+    if (counterDoc?.value) STATE.invCounter = counterDoc.value;
+  } catch(e) {}
 
   // Run any pending sync
   if (_online && _syncQueue.length) runSyncQueue();
@@ -1052,17 +1057,13 @@ function uid() {
 }
 
 async function initAuth() {
-  // Load data layer first (IndexedDB + Firestore)
-  await initDataLayer();
-  // Try to restore session
+  // Show login screen immediately — never block on data loading
   const saved = localStorage.getItem('gce_v2_session');
   if (saved) {
     try {
       const session = JSON.parse(saved);
       STATE.user = session;
-      // Merge with fresh user data from STATE if available
-      const freshUser = STATE.users?.[session.id||session.username];
-      if (freshUser) STATE.user = {...session, ...freshUser};
+      // Show app shell immediately, load data in background
       await initApp();
       return;
     } catch(e) { console.warn('Session restore failed:', e); }
@@ -1088,20 +1089,19 @@ async function doLogin() {
 
   let user = null;
 
-  // 1. Check STATE.users (loaded from IndexedDB/Firestore at initAuth)
-  const stateUser = Object.values(STATE.users||{}).find(u=>(u.username||u.id||'').toLowerCase()===username);
-  if (stateUser) {
-    // Compare password — stored as btoa or plain (default users)
-    const matchPlain = stateUser.password === password;
-    let matchBase64 = false;
-    try { matchBase64 = atob(stateUser.password) === password; } catch(e){}
-    if (matchPlain || matchBase64) user = stateUser;
-  }
+  // 1. Check hardcoded default users FIRST — instant, no network
+  const def = DEFAULT_USERS[username];
+  if (def && def.password === password) user = def;
 
-  // 2. Check hardcoded default users (offline fallback)
+  // 2. Check STATE.users if already loaded from IndexedDB
   if (!user) {
-    const def = DEFAULT_USERS[username];
-    if (def && def.password === password) user = def;
+    const stateUser = Object.values(STATE.users||{}).find(u=>(u.username||u.id||'').toLowerCase()===username);
+    if (stateUser) {
+      const matchPlain = stateUser.password === password;
+      let matchB64 = false;
+      try { matchB64 = atob(stateUser.password) === password; } catch(e){}
+      if (matchPlain || matchB64) user = stateUser;
+    }
   }
 
   if (!user) {
@@ -1111,10 +1111,12 @@ async function doLogin() {
     return;
   }
 
+  // Authenticated — save session and go
   STATE.user = user;
   localStorage.setItem('gce_v2_session', JSON.stringify(user));
+
   try {
-    await initApp();
+    await initApp(); // initApp calls initDataLayer internally
   } catch(e) {
     console.error('initApp error:', e);
     showAuthError('Login succeeded but app failed to load. Please refresh.');
@@ -1158,11 +1160,28 @@ async function initApp() {
   av.style.background = (ROLES[STATE.user.role] || {}).color || '#6b7280';
   // Build nav
   buildNav();
-  // Start background refresh listeners
-  startListeners();
-  startExtraListeners();
-  // Show overview by default
+  // Show overview immediately with whatever data is in STATE
   switchPage('overview');
+  // Mobile menu
+  document.getElementById('mob-menu-btn').style.display = '';
+  document.getElementById('mob-menu-btn').onclick = () => {
+    document.getElementById('sidebar').classList.toggle('open');
+  };
+  document.getElementById('signout-btn').onclick = doSignout;
+  setSyncStatus('connecting');
+  // Load data AFTER UI is shown — never block the user
+  initDataLayer().then(() => {
+    renderOverviewIfActive();
+    updateInventoryBadge();
+    // Refresh whichever page is active
+    const page = document.querySelector('.page.active')?.id?.replace('page-','');
+    if (page && page !== 'overview') switchPage(page);
+    startListeners();
+    startExtraListeners();
+  }).catch(e => {
+    console.error('Data layer init failed:', e);
+    setSyncStatus('error');
+  });
   // Mobile menu
   document.getElementById('mob-menu-btn').style.display = '';
   document.getElementById('mob-menu-btn').onclick = () => {
