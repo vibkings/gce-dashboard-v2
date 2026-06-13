@@ -4949,10 +4949,26 @@ function renderReports() {
   const pendingSupplySet = new Set(pendingSupply.map(s=>s.invoiceNum)).size;
 
   // Payment mode breakdown
-  const cashSales     = salesF.filter(s=>s.payMode==='cash'||(s.payment==='cash'&&!s.payMode)).reduce((a,s)=>a+(s.total||0),0);
-  const posSales      = salesF.filter(s=>s.payMode==='pos').reduce((a,s)=>a+(s.total||0),0);
-  const transferSales = salesF.filter(s=>s.payMode==='transfer').reduce((a,s)=>a+(s.total||0),0);
-  const splitSales    = salesF.filter(s=>s.payMode==='split').reduce((a,s)=>a+(s.total||0),0);
+  // Payment mode breakdown — split amounts distributed into their actual modes
+  let cashSales = 0, posSales = 0, transferSales = 0;
+  salesF.forEach(s => {
+    if (s.payMode === 'split' && s.splitPayment) {
+      const sp = s.splitPayment;
+      const add = (mode, amt) => {
+        if (mode==='cash') cashSales += amt;
+        else if (mode==='pos') posSales += amt;
+        else if (mode==='transfer') transferSales += amt;
+      };
+      add(sp.mode1, sp.amt1||0);
+      add(sp.mode2, sp.amt2||0);
+    } else if (s.payMode==='cash' || s.payment==='cash') {
+      cashSales += s.total||0;
+    } else if (s.payMode==='pos') {
+      posSales += s.total||0;
+    } else if (s.payMode==='transfer') {
+      transferSales += s.total||0;
+    }
+  });
 
   // Top selling items
   const itemTotals = {};
@@ -5163,18 +5179,17 @@ function renderReports() {
       <span style="width:3px;height:14px;background:var(--brand);border-radius:2px;display:inline-block"></span>
       💳 PAYMENT BREAKDOWN
     </div>
-    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:1.25rem">
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:1.25rem">
       ${[
-        {label:'CASH',val:cashSales,icon:'💵',color:'var(--success)'},
-        {label:'POS',val:posSales,icon:'🏧',color:'var(--info)'},
+        {label:'CASH',val:cashSales,icon:'💵',color:'var(--success)'},        {label:'POS',val:posSales,icon:'🏧',color:'var(--info)'},
         {label:'TRANSFER',val:transferSales,icon:'🏦',color:'var(--brand)'},
-        {label:'SPLIT',val:splitSales,icon:'🔀',color:'#7c3aed'},
       ].map(k=>`<div class="kpi-card" style="border-left:3px solid ${k.color}">
         <div style="display:flex;justify-content:space-between;align-items:flex-start">
           <div class="kpi-label" style="color:${k.color}">${k.label}</div>
           <span style="font-size:18px;opacity:.25">${k.icon}</span>
         </div>
         <div class="kpi-value" style="color:${k.color};font-size:18px">${fmt(k.val)}</div>
+        <div class="kpi-sub" style="font-size:11px;color:var(--text3)">Incl. split payments</div>
       </div>`).join('')}
     </div>
 
