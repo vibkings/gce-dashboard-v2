@@ -690,6 +690,40 @@ const COLS = {
   ADJLOG:     'v2_adjLog',
 };
 
+// ── Nav Config ─────────────────────────────────────────────
+const NAV = [
+  {section:'Operations'},
+  {id:'overview',         label:'Overview',             icon:'🏠', perm:'all'},
+  {id:'inventory',        label:'Inventory',            icon:'📦', perm:'all'},
+  {id:'stockmgmt',        label:'Stock Management',     icon:'📋', perm:'all'},
+  {id:'warehouse',        label:'Warehouse',            icon:'🏭', perm:'all'},
+  {id:'borrows',          label:'Borrows',              icon:'🔄', perm:'all'},
+  {id:'sales',            label:'Sales',                icon:'🧾', perm:'all'},
+  {id:'purchases',        label:'Purchases',            icon:'🛒', perm:'all'},
+  {id:'proformas',        label:'Proforma Invoices',    icon:'📄', perm:'all'},
+  {section:'Demo'},
+  {id:'demosales',        label:'Demo Sales',           icon:'🎯', perm:'all'},
+  {section:'Finance'},
+  {id:'expenses',         label:'Expenses',             icon:'💸', perm:'all'},
+  {id:'reports',          label:'Financial Dashboard',  icon:'📊', perm:'all'},
+  {id:'credit',           label:'Credit',               icon:'💳', perm:'all'},
+  {id:'closing',          label:'Daily Closing',        icon:'📋', perm:'all'},
+  {id:'supplieroverview', label:'Supplier Overview',    icon:'🚛', perm:'all'},
+  {id:'customeroverview', label:'Customer Overview',    icon:'👥', perm:'all'},
+  {id:'invvaluation',     label:'Inventory Valuation',  icon:'💰', perm:'all'},
+  {id:'pandl',            label:'Profit & Loss',        icon:'📈', perm:'all'},
+  {id:'returns',          label:'Returns Tracker',      icon:'↩️',  perm:'all'},
+  {id:'productreport',    label:'Product Report',       icon:'📦', perm:'all'},
+  {id:'monthly',          label:'Monthly Summary',      icon:'📅', perm:'all'},
+  {section:'Management'},
+  {id:'suppliers',        label:'Suppliers',            icon:'🏭', perm:'all'},
+  {id:'customers',        label:'Customers',            icon:'👤', perm:'all'},
+  {id:'settings',         label:'Settings',             icon:'⚙️',  perm:'all'},
+  {id:'users',            label:'Users & Profile',      icon:'🛡️',  perm:'admin'},
+  {id:'activitylog',      label:'Activity Log',         icon:'📜', perm:'admin'},
+  {id:'recyclebin',       label:'Recycle Bin',          icon:'🗑️',  perm:'admin'},
+];
+
 // Monthly collections use pattern: v2_sales_YYYY_MM
 function salesCol(year, month) {
   return `v2_sales_${year}_${String(month).padStart(2,'0')}`;
