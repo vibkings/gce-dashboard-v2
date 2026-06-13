@@ -15,6 +15,9 @@
   --brand:       #1a56db;
   --brand-dk:    #1341b0;
   --brand-lt:    #eff6ff;
+  --primary:     #1a56db;
+  --primary-dk:  #1341b0;
+  --primary-bg:  #eff6ff;
   --accent:      #F5A623;
   --dark:        #111827;
   --dark2:       #1f2937;
@@ -34,7 +37,9 @@
   --danger-bg:   #fef2f2;
   --info:        #2563eb;
   --info-bg:     #eff6ff;
+  --neutral:     #6b7280;
   --radius:      10px;
+  --radius-sm:   6px;
   --radius-lg:   14px;
   --radius-xl:   20px;
   --shadow-sm:   0 1px 3px rgba(0,0,0,.06),0 1px 2px rgba(0,0,0,.04);
@@ -237,6 +242,42 @@ select.form-input{cursor:pointer}
 .empty-state-icon{font-size:48px;margin-bottom:12px;opacity:.4}
 .empty-state-title{font-size:15px;font-weight:600;color:var(--text2);margin-bottom:6px}
 .empty-state-sub{font-size:13px}
+
+/* ── Card ── */
+.card{background:var(--white);border:1px solid var(--border);border-radius:var(--radius-lg);padding:1.25rem;margin-bottom:.75rem}
+
+/* ── Subtabs ── */
+.subtabs{display:flex;gap:0;margin-bottom:1.5rem;border-bottom:2px solid var(--border);overflow-x:auto}
+.subtab{padding:10px 18px;font-size:13px;font-weight:600;color:var(--text3);background:none;border:none;border-bottom:2px solid transparent;cursor:pointer;white-space:nowrap;margin-bottom:-2px;transition:all .15s}
+.subtab:hover{color:var(--text1)}
+.subtab.active{color:var(--primary);border-bottom-color:var(--primary)}
+
+/* ── Form grid ── */
+.form-grid{display:grid;gap:12px}
+.form-grid.c2{grid-template-columns:1fr 1fr}
+.form-grid.c3{grid-template-columns:1fr 1fr 1fr}
+.form-group{display:flex;flex-direction:column;gap:5px}
+.form-group label{font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text3)}
+.req{color:var(--danger)}
+
+/* ── Table helpers ── */
+.td-right{text-align:right}
+.td-center{text-align:center}
+.font-mono{font-family:var(--font-mono)}
+
+/* ── Badge ── */
+.badge{display:inline-flex;align-items:center;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:700}
+.badge-success{background:#d1fae5;color:#065f46}
+.badge-danger{background:#fee2e2;color:#991b1b}
+.badge-warning{background:#fef3c7;color:#92400e}
+.badge-info{background:#dbeafe;color:#1e40af}
+.badge-neutral{background:var(--surface);color:var(--text3);border:1px solid var(--border)}
+
+/* ── Alert ── */
+.alert{padding:10px 14px;border-radius:var(--radius);font-size:13px;margin-bottom:1rem}
+.alert-info{background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe}
+.alert-warning{background:#fffbeb;color:#92400e;border:1px solid #fde68a}
+.alert-danger{background:#fef2f2;color:#991b1b;border:1px solid #fecaca}
 
 /* ── Inventory specific ── */
 .inv-filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:1rem;align-items:center}
