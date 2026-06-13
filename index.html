@@ -609,6 +609,69 @@ const FB = {
   base:      'https://firestore.googleapis.com/v1/projects/great-chid-electro-daad3/databases/(default)/documents'
 };
 
+// ── App State ──────────────────────────────────────────────
+const STATE = {
+  user:               null,
+  users:              {},
+  inventory:          {},
+  sales:              {},
+  customers:          {},
+  suppliers:          {},
+  purchases:          {},
+  cashflow:           {},
+  warehouse:          {},
+  pendingDeliveries:  {},
+  proformas:          {},
+  borrows:            {},
+  adjLog:             {},
+  salesReturns:       {},
+  demoSales:          {},
+  stockCounts:        {},
+  recycleBin:         {},
+  activityLog:        {},
+  banks:              {},
+  settings:           {},
+  invCounter:         0,
+  syncStatus:         'connecting'
+};
+
+// ── Default Users (always available offline) ───────────────
+const DEFAULT_USERS = {
+  'admin': {
+    id:'admin', username:'admin', password:'admin123',
+    name:'Admin', role:'admin', permissions:{all:true}
+  },
+  'staff1': {
+    id:'staff1', username:'staff1', password:'staff1pass',
+    name:'Staff 1', role:'sales', permissions:{sales:true,inventory_view:true,customers:true}
+  },
+  'staff2': {
+    id:'staff2', username:'staff2', password:'staff2pass',
+    name:'Staff 2', role:'sales', permissions:{sales:true,inventory_view:true,customers:true}
+  },
+  'staff3': {
+    id:'staff3', username:'staff3', password:'staff3pass',
+    name:'Staff 3', role:'sales', permissions:{sales:true,inventory_view:true,customers:true}
+  },
+  'staff4': {
+    id:'staff4', username:'staff4', password:'staff4pass',
+    name:'Staff 4', role:'purchase',
+    permissions:{purchases:true,suppliers:true,inventory_view:true,inventory_edit:true,customers:true,credit:true}
+  },
+  'staff5': {
+    id:'staff5', username:'staff5', password:'staff5pass',
+    name:'Staff 5', role:'purchase',
+    permissions:{purchases:true,suppliers:true,inventory_view:true,inventory_edit:true,customers:true,credit:true,expenses:true,reports:true}
+  }
+};
+
+// ── Role Labels ────────────────────────────────────────────
+const ROLES = {
+  admin:    {label:'Administrator', color:'#7c3aed'},
+  sales:    {label:'Sales',         color:'#0891b2'},
+  purchase: {label:'Purchase',      color:'#059669'}
+};
+
 // ── Collection names ─────────────────────────────────────
 // Static collections (small, fully loaded at startup)
 // Monthly collections: sales_YYYY_MM, cashflow_YYYY_MM (loaded on demand)
