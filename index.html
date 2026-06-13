@@ -1736,7 +1736,7 @@ function renderInventory() {
       <td>
         <div style="display:flex;gap:4px;white-space:nowrap">
           ${canEdit ? `<button class="btn btn-sm" onclick="showEditItemModal('${i._id}')" style="color:var(--brand);border-color:var(--brand);font-size:11px;padding:4px 8px">✏ Edit</button>` : ''}
-          ${canEdit ? `<button class="btn btn-sm" onclick="confirmDelItem('${i._id}')" style="color:var(--danger);border-color:var(--danger);font-size:11px;padding:4px 8px">Del</button>` : ''}
+          ${STATE.user?.role==='admin' ? `<button class="btn btn-sm" onclick="confirmDelItem('${i._id}')" style="color:var(--danger);border-color:var(--danger);font-size:11px;padding:4px 8px">Del</button>` : ''}
         </div>
       </td>
     </tr>`;
@@ -2430,7 +2430,7 @@ function renderSales() {
         <button class="btn btn-sm" onclick="reprintSaleInvoice('${k}')" style="color:#1a237e;border-color:#93c5fd;font-size:11px">Print</button>
         ${hasPending?`<button class="btn btn-sm" onclick="markAsSupplied('${k}')" style="background:#16a34a;color:#fff;border-color:#16a34a;font-size:11px">✓ Mark supplied</button>`:''}
         ${!hasPending?`<button class="btn btn-sm" onclick="showReturnModal('${k}')" style="color:#dc3545;border-color:#f5c2c7;font-size:11px">↩ Return</button>`:''}
-        <button class="btn btn-sm btn-danger" onclick="voidInvoice('${k}')" style="font-size:11px">🗑️ Void</button>
+        ${STATE.user?.role==='admin'?`<button class="btn btn-sm btn-danger" onclick="voidInvoice('${k}')" style="font-size:11px">🗑️ Void</button>`:''}
       </div></td>
     </tr>`;
   }).join('');
@@ -3292,7 +3292,7 @@ function renderPurchases() {
         <div style="flex:1;font-size:13px">${esc(item.itemName||'')}</div>
         <div style="font-size:12px;color:var(--text3)">${item.receivedQty||0}/${item.orderedQty||0}</div>
         <button class="btn btn-sm btn-primary" style="padding:2px 10px;font-size:11px" onclick="receivePendingItem('${item.id}')">Receive</button>
-        <button class="btn btn-sm" style="padding:2px 8px;font-size:11px;color:var(--danger)" onclick="cancelPendingItem('${item.id}')">✕</button>
+        ${STATE.user?.role==='admin'?`<button class="btn btn-sm" style="padding:2px 8px;font-size:11px;color:var(--danger)" onclick="cancelPendingItem('${item.id}')">✕</button>`:''}
       </div>`).join('');
     return `
       <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--radius-lg);margin-bottom:10px;padding:12px 14px">
@@ -4325,7 +4325,7 @@ function renderExpenses() {
     <td style="font-size:11px;color:var(--text3)">${esc(e.by||'')}</td>
     ${isAdmin?`<td style="text-align:center">
       <button class="btn btn-sm" title="Edit" style="padding:2px 8px;font-size:11px" onclick="showEditExpenseModal('${e.id}')">✏️</button>
-      <button class="btn btn-sm" title="Delete" style="padding:2px 8px;font-size:11px;color:var(--danger)" onclick="deleteExpense('${e.id}')">🗑</button>
+      ${STATE.user?.role==='admin'?`<button class="btn btn-sm" title="Delete" style="padding:2px 8px;font-size:11px;color:var(--danger)" onclick="deleteExpense('${e.id}')">🗑</button>`:''}
     </td>`:'<td></td>'}
   </tr>`).join('');
 
@@ -5824,7 +5824,7 @@ function renderProformas(){
     const validUntil=p.validDays?new Date(new Date(p.date).getTime()+86400000*p.validDays).toLocaleDateString():'—';
     const isExpired=validUntil!=='—'&&new Date()>new Date(validUntil);
     const statusBadge=p.status==='converted'?'<span style="background:#d1fae5;color:#065f46;padding:2px 8px;border-radius:20px;font-size:10px;font-weight:700">CONVERTED</span>':p.status==='cancelled'?'<span style="background:#f3f4f6;color:#6b7280;padding:2px 8px;border-radius:20px;font-size:10px;font-weight:700">CANCELLED</span>':isExpired?'<span style="background:#fee2e2;color:#dc2626;padding:2px 8px;border-radius:20px;font-size:10px;font-weight:700">EXPIRED</span>':'<span style="background:#fef3c7;color:#92400e;padding:2px 8px;border-radius:20px;font-size:10px;font-weight:700">PENDING</span>';
-    const btns=`<button onclick="printProformaInvoice('${p._id||p.id}')" style="padding:4px 10px;background:#eff6ff;color:#0369a1;border:1px solid #bae6fd;border-radius:6px;font-size:11px;cursor:pointer">Print</button> `+(p.status==='pending'?`<button onclick="convertProforma('${p._id||p.id}')" style="padding:4px 10px;background:#7c3aed;color:#fff;border:none;border-radius:6px;font-size:11px;cursor:pointer">Convert</button> <button onclick="cancelProforma('${p._id||p.id}')" style="padding:4px 10px;background:#fef2f2;color:#dc2626;border:1px solid #fca5a5;border-radius:6px;font-size:11px;cursor:pointer">Cancel</button>`:'');
+    const btns=`<button onclick="printProformaInvoice('${p._id||p.id}')" style="padding:4px 10px;background:#eff6ff;color:#0369a1;border:1px solid #bae6fd;border-radius:6px;font-size:11px;cursor:pointer">Print</button> `+(p.status==='pending'?`<button onclick="convertProforma('${p._id||p.id}')" style="padding:4px 10px;background:#7c3aed;color:#fff;border:none;border-radius:6px;font-size:11px;cursor:pointer">Convert</button> `+(STATE.user?.role==='admin'?`<button onclick="cancelProforma('${p._id||p.id}')" style="padding:4px 10px;background:#fef2f2;color:#dc2626;border:1px solid #fca5a5;border-radius:6px;font-size:11px;cursor:pointer">Cancel</button>`:''):'');
     return `<tr><td><b>${esc(p.prfNum||p.id)}</b></td><td style="font-size:12px">${p.date||''}</td><td>${esc(p.custName||'Walk-in')}</td><td style="font-size:11px;color:var(--text3)">${items2}</td><td style="text-align:center">${(p.items||[]).length}</td><td class="td-right">${fmt(p.grandTotal||0)}</td><td style="font-size:11px;color:var(--text3)">${validUntil}</td><td>${statusBadge}</td><td style="font-size:11px;color:var(--text3)">${esc(p.by||'')}</td><td style="white-space:nowrap">${btns}</td></tr>`;
   }).join('');
   el.innerHTML=`<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:1.25rem"><div class="kpi-card"><div class="kpi-label">Pending</div><div class="kpi-value" style="color:var(--warning)">${pending.length}</div><div class="kpi-sub">${fmt(pending.reduce((a,p)=>a+(p.grandTotal||0),0))} value</div></div><div class="kpi-card"><div class="kpi-label">Converted</div><div class="kpi-value" style="color:var(--success)">${converted.length}</div><div class="kpi-sub">To invoices</div></div><div class="kpi-card"><div class="kpi-label">Cancelled</div><div class="kpi-value" style="color:var(--text3)">${cancelled.length}</div><div class="kpi-sub">All time</div></div><div class="kpi-card"><div class="kpi-label">Total</div><div class="kpi-value">${proformas.length}</div><div class="kpi-sub">All proformas</div></div></div><div style="display:flex;justify-content:flex-end;margin-bottom:.75rem"><button class="btn btn-primary" onclick="showToast('Use Sales tab to create a new proforma.','info')">+ Create New</button></div>${rows?`<div class="tbl-wrap"><table><thead><tr><th>PRF #</th><th>Date</th><th>Customer</th><th>Items</th><th style="text-align:center">Count</th><th style="text-align:right">Total</th><th>Valid Until</th><th>Status</th><th>By</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`:'<div class="empty-state"><div class="empty-state-icon">📄</div><div>No proforma invoices yet. Create one from the Sales tab.</div></div>'}`;
@@ -6312,7 +6312,7 @@ function renderRecycleBin() {
     else if(item.type==='supplier')detail=(data.phone||'—')+(data.contact?' · '+data.contact:'');
     else if(item.type==='expense')detail=fmt(data.amount||0)+' · '+(data.cat||'—');
     const days=daysLeft(item.expiresAt);
-    return `<tr><td><span style="font-size:11.5px;padding:2px 8px;border-radius:99px;background:${typeBg[item.type]||'#f3f4f6'};font-weight:600">${typeIcon[item.type]||'📄'} ${typeLabel[item.type]||item.type}</span></td><td><b style="font-size:13px">${esc(label)}</b>${detail?`<div style="font-size:11.5px;color:var(--text3);margin-top:2px">${detail}</div>`:''}</td><td style="font-size:12px">${item.deletedAt?new Date(item.deletedAt).toLocaleDateString():'—'}</td><td style="font-size:12px">${esc(item.deletedBy||'—')}</td><td><span style="background:${days<=3?'#fee2e2':days<=7?'#fef3c7':'#d1fae5'};color:${days<=3?'#dc2626':days<=7?'#92400e':'#065f46'};padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700">${days} day${days!==1?'s':''} left</span></td><td><div style="display:flex;gap:6px"><button class="btn btn-sm" onclick="restoreFromBin('${item._id||item.id}')" style="color:var(--success);border-color:#a3cfbb">Restore</button><button class="btn btn-sm" onclick="permanentDelete('${item._id||item.id}')" style="color:var(--danger)">Delete</button></div></td></tr>`;
+    return `<tr><td><span style="font-size:11.5px;padding:2px 8px;border-radius:99px;background:${typeBg[item.type]||'#f3f4f6'};font-weight:600">${typeIcon[item.type]||'📄'} ${typeLabel[item.type]||item.type}</span></td><td><b style="font-size:13px">${esc(label)}</b>${detail?`<div style="font-size:11.5px;color:var(--text3);margin-top:2px">${detail}</div>`:''}</td><td style="font-size:12px">${item.deletedAt?new Date(item.deletedAt).toLocaleDateString():'—'}</td><td style="font-size:12px">${esc(item.deletedBy||'—')}</td><td><span style="background:${days<=3?'#fee2e2':days<=7?'#fef3c7':'#d1fae5'};color:${days<=3?'#dc2626':days<=7?'#92400e':'#065f46'};padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700">${days} day${days!==1?'s':''} left</span></td><td><div style="display:flex;gap:6px"><button class="btn btn-sm" onclick="restoreFromBin('${item._id||item.id}')" style="color:var(--success);border-color:#a3cfbb">Restore</button>${STATE.user?.role==='admin'?`<button class="btn btn-sm" onclick="permanentDelete('${item._id||item.id}')" style="color:var(--danger)">Delete</button>`:''}</div></td></tr>`;
   }).join('');
   el.innerHTML=`
     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:1.25rem">
@@ -6639,7 +6639,7 @@ function renderUsersFull(){
         <div style="width:42px;height:42px;border-radius:50%;background:${avatarColor};color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;flex-shrink:0">${initials}</div>
         <div style="flex:1"><div style="font-size:14px;font-weight:700">${esc(u.name||u.username)}</div><div style="font-size:11.5px;color:var(--text3)">@${esc(u.username||'')} &nbsp;·&nbsp; ${isAdmin?'<span style="color:var(--primary);font-weight:600">Administrator</span>':'Staff'}</div></div>
         ${!isSelf&&STATE.user?.role==='admin'?`<button class="btn btn-sm" onclick="adminResetPassword('${u._id||u.id}')" style="color:#92400e;border-color:#fcd34d">Reset pwd</button>`:''}
-        ${!isSelf?`<button class="btn btn-sm" onclick="deleteUser('${u._id||u.id}')" style="color:var(--danger)">Remove</button>`:''}
+        ${!isSelf&&STATE.user?.role==='admin'?`<button class="btn btn-sm" onclick="deleteUser('${u._id||u.id}')" style="color:var(--danger)">Remove</button>`:''}
       </div>
       ${!isAdmin?`<div><div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Permissions</div><div style="display:grid;grid-template-columns:repeat(3,1fr);gap:0 12px">${permChecks}</div></div>`:'<div style="font-size:12px;color:var(--text3);font-style:italic;padding-top:8px">Administrators have full access to all features.</div>'}
     </div>`;
@@ -6716,7 +6716,7 @@ function renderSettingsFull(){
   const el=document.getElementById('settings-content');if(!el)return;
   const settings=STATE.settings||{};
   const banks=Object.values(STATE.banks||{}).filter(b=>!b._deleted);
-  const bankRows=banks.length?banks.map(b=>`<tr><td><b>${esc(b.name)}</b></td><td>${esc(b.acct||'—')}</td><td><button class="btn btn-sm" onclick="removeBank('${b._id||b.id}')" style="color:var(--danger)">Remove</button></td></tr>`).join(''):'<tr><td colspan="3" style="text-align:center;color:var(--text3)">No banks added.</td></tr>';
+  const bankRows=banks.length?banks.map(b=>`<tr><td><b>${esc(b.name)}</b></td><td>${esc(b.acct||'—')}</td><td>${STATE.user?.role==='admin'?`<button class="btn btn-sm" onclick="removeBank('${b._id||b.id}')" style="color:var(--danger)">Remove</button>`:''}</td></tr>`).join(''):'<tr><td colspan="3" style="text-align:center;color:var(--text3)">No banks added.</td></tr>';
   const inv=Object.values(STATE.inventory||{}).length;
   const sal=Object.values(STATE.sales||{}).length;
   const pur=Object.values(STATE.purchases||{}).length;
