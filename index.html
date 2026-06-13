@@ -391,57 +391,113 @@ select.form-input{cursor:pointer}
 
     <!-- ── INVENTORY ── -->
     <div class="page" id="page-inventory">
-      <div class="page-header">
-        <div>
-          <div class="page-title">Inventory</div>
-          <div class="page-sub" id="inv-subtitle">Loading...</div>
-        </div>
-        <div style="display:flex;gap:8px">
-          <button class="btn" onclick="refreshAllData()" title="Reload all data from Firestore">🔄 Refresh</button>
-          <button class="btn btn-primary" id="inv-add-btn" onclick="showAddItemModal()">+ Add Item</button>
-        </div>
-      </div>
-      <!-- Filters -->
-      <div class="inv-filters">
-        <div class="search-wrap" style="flex:1;min-width:200px">
-          <span class="search-icon">🔍</span>
-          <input type="text" class="form-input" id="inv-search" placeholder="Search items...">
-        </div>
-        <select class="form-input" id="inv-cat-filter" style="width:auto">
-          <option value="">All categories</option>
-        </select>
-        <select class="form-input" id="inv-status-filter" style="width:auto">
-          <option value="">All status</option>
-          <option value="ok">OK</option>
-          <option value="low">Low stock</option>
-          <option value="out">Out of stock</option>
-        </select>
-      </div>
-      <!-- KPIs -->
+      <!-- KPI Cards — top of page like v1 -->
       <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:1rem" id="inv-kpis"></div>
-      <!-- Table -->
-      <div class="tbl-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Item</th>
-              <th>Category</th>
-              <th>Supplier</th>
-              <th class="td-center">Qty</th>
-              <th class="td-center">Min</th>
-              <th class="td-right">Cost (₦)</th>
-              <th class="td-right">Sell (₦)</th>
-              <th class="td-right">Value</th>
-              <th class="td-center">Status</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody id="inv-tbody">
-            <tr><td colspan="10"><div class="empty-state"><div class="empty-state-icon">📦</div><div>Loading inventory...</div></div></td></tr>
-          </tbody>
-        </table>
+
+      <!-- Excel toolbar -->
+      <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--radius-lg);padding:12px 16px;margin-bottom:1rem;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <span style="font-size:13px;font-weight:600;color:var(--text2);display:flex;align-items:center;gap:6px">📊 Excel:</span>
+        <button class="btn" onclick="downloadInvTemplate()" style="color:var(--success);border-color:var(--success)">⬇ Download template</button>
+        <button class="btn btn-primary" onclick="importInvFromExcel()">⬆ Import from Excel / CSV</button>
+        <button class="btn" onclick="exportInventory()" style="color:var(--info);border-color:var(--info)">📋 Export inventory</button>
+        <input type="file" id="inv-import-file" accept=".xlsx,.csv" style="display:none" onchange="handleInvImportFile(this)">
       </div>
-      <div id="inv-pager"></div>
+
+      <!-- ADD SINGLE ITEM inline form -->
+      <div id="inv-add-btn-wrap" style="background:var(--white);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px 16px;margin-bottom:1rem">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--brand);margin-bottom:10px;display:flex;align-items:center;gap:6px">
+          <span style="width:3px;height:14px;background:var(--brand);border-radius:2px;display:inline-block"></span>
+          ADD SINGLE ITEM
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
+          <div style="flex:2;min-width:140px">
+            <div style="font-size:10px;font-weight:600;text-transform:uppercase;color:var(--text3);margin-bottom:4px">ITEM NAME</div>
+            <input class="form-input" id="inv-inline-name" placeholder="e.g. Cable Reel" style="width:100%">
+          </div>
+          <div style="flex:1;min-width:110px">
+            <div style="font-size:10px;font-weight:600;text-transform:uppercase;color:var(--text3);margin-bottom:4px">CATEGORY</div>
+            <select class="form-input" id="inv-inline-cat" style="width:100%">
+              <option value="">-- Category --</option>
+            </select>
+          </div>
+          <div style="flex:1;min-width:110px">
+            <div style="font-size:10px;font-weight:600;text-transform:uppercase;color:var(--text3);margin-bottom:4px">SUPPLIER</div>
+            <select class="form-input" id="inv-inline-sup" style="width:100%">
+              <option value="">None</option>
+            </select>
+          </div>
+          <div style="width:80px">
+            <div style="font-size:10px;font-weight:600;text-transform:uppercase;color:var(--text3);margin-bottom:4px">QTY</div>
+            <input class="form-input" id="inv-inline-qty" type="number" min="0" placeholder="0" style="width:100%">
+          </div>
+          <div style="width:80px">
+            <div style="font-size:10px;font-weight:600;text-transform:uppercase;color:var(--text3);margin-bottom:4px">MIN QTY</div>
+            <input class="form-input" id="inv-inline-min" type="number" min="0" placeholder="5" style="width:100%">
+          </div>
+          <div style="width:100px">
+            <div style="font-size:10px;font-weight:600;text-transform:uppercase;color:var(--text3);margin-bottom:4px">COST (₦)</div>
+            <input class="form-input" id="inv-inline-cost" type="number" min="0" placeholder="0" style="width:100%">
+          </div>
+          <div style="width:100px">
+            <div style="font-size:10px;font-weight:600;text-transform:uppercase;color:var(--text3);margin-bottom:4px">SELL (₦)</div>
+            <input class="form-input" id="inv-inline-sell" type="number" min="0" placeholder="0" style="width:100%">
+          </div>
+          <div>
+            <button class="btn btn-primary" onclick="saveInlineAddItem()" style="padding:8px 22px">Add</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ALL STOCK section -->
+      <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px 16px;margin-bottom:0">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--brand);margin-bottom:12px;display:flex;align-items:center;gap:6px">
+          <span style="width:3px;height:14px;background:var(--brand);border-radius:2px;display:inline-block"></span>
+          ALL STOCK
+        </div>
+        <!-- Search + item count -->
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+          <div class="search-wrap" style="flex:1;max-width:380px">
+            <span class="search-icon">🔍</span>
+            <input type="text" class="form-input" id="inv-search" placeholder="Search by name, category or supplier...">
+          </div>
+          <span id="inv-subtitle" style="font-size:12px;color:var(--text3)">Loading...</span>
+          <div style="margin-left:auto;display:flex;gap:6px">
+            <select class="form-input" id="inv-cat-filter" style="width:auto;font-size:12px">
+              <option value="">All categories</option>
+            </select>
+            <select class="form-input" id="inv-status-filter" style="width:auto;font-size:12px">
+              <option value="">All status</option>
+              <option value="ok">OK</option>
+              <option value="low">Low stock</option>
+              <option value="out">Out of stock</option>
+            </select>
+          </div>
+        </div>
+        <!-- Table -->
+        <div class="tbl-wrap" style="border-radius:var(--radius);border:1px solid var(--border)">
+          <table>
+            <thead>
+              <tr>
+                <th>ITEM</th>
+                <th>CATEGORY</th>
+                <th>SUPPLIER</th>
+                <th class="td-center">QTY</th>
+                <th class="td-center">MIN</th>
+                <th class="td-right">COST (₦)</th>
+                <th class="td-right">SELL (₦)</th>
+                <th class="td-right">MARGIN</th>
+                <th class="td-right">VALUE</th>
+                <th class="td-center">STATUS</th>
+                <th>ACTIONS</th>
+              </tr>
+            </thead>
+            <tbody id="inv-tbody">
+              <tr><td colspan="11"><div class="empty-state"><div class="empty-state-icon">📦</div><div>Loading inventory...</div></div></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div id="inv-pager"></div>
+      </div>
     </div>
 
     <!-- ── SALES ── -->
@@ -1638,16 +1694,31 @@ function renderInventory() {
   const lowCount = items.filter(i => i.qty > 0 && i.qty <= (i.minQty||5)).length;
   const outCount = items.filter(i => i.qty === 0).length;
   document.getElementById('inv-kpis').innerHTML =
-    kpiCard('brand','📦','Total Items',items.length,'') +
-    kpiCard('info','💰','Stock Value',fmt(totalVal),'At cost') +
-    kpiCard('warning','🟡','Low Stock',lowCount,'Need restock',lowCount>0) +
-    kpiCard('danger','🔴','Out of Stock',outCount,'Need restock',outCount>0);
+    kpiCard('brand','📦','ITEMS',items.length,'') +
+    kpiCard('info','💰','STOCK VALUE',fmt(totalVal),'At cost') +
+    kpiCard('warning','⚠️','LOW STOCK',lowCount,'',lowCount>0) +
+    kpiCard('danger','🔴','OUT OF STOCK',outCount,'',outCount>0);
 
-  // Subtitle with search result count
+  // Subtitle
   document.getElementById('inv-subtitle').textContent =
     searchTerm || catFilter || statusFilter
       ? `${filtered.length} results of ${items.length} items`
       : `${items.length} items`;
+
+  // Populate inline add form dropdowns
+  const inlineCatSel = document.getElementById('inv-inline-cat');
+  const inlineSupSel = document.getElementById('inv-inline-sup');
+  if (inlineCatSel) {
+    const curCatVal = inlineCatSel.value;
+    inlineCatSel.innerHTML = '<option value="">-- Category --</option>' +
+      cats.map(c => `<option value="${c}" ${c===curCatVal?'selected':''}>${esc(c)}</option>`).join('');
+  }
+  if (inlineSupSel && !inlineSupSel._wired) {
+    inlineSupSel._wired = true;
+    const sups = Object.values(STATE.suppliers||{}).sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+    inlineSupSel.innerHTML = '<option value="">None</option>' +
+      sups.map(s => `<option value="${s._id}">${esc(s.name)}</option>`).join('');
+  }
 
   // Table rows (current page only)
   const canEdit = hasPerm('inventory_edit') || hasPerm('all');
@@ -1655,27 +1726,29 @@ function renderInventory() {
     const status = itemStatus(i);
     const chipClass = {ok:'chip-ok',low:'chip-low',out:'chip-out'}[status];
     const chipLabel = {ok:'OK',low:'Low',out:'Out'}[status];
+    const margin = i.sell && i.cost ? Math.round(((i.sell-i.cost)/i.sell)*100) : 0;
     return `<tr>
       <td><b>${esc(i.name)}</b></td>
-      <td><span class="badge badge-neutral">${esc(i.cat||'—')}</span></td>
-      <td style="font-size:12px;color:var(--text3)">${esc(i.supplierName||'—')}</td>
+      <td style="font-size:12px;color:var(--text2)">${esc(i.cat||'—')}</td>
+      <td style="font-size:12px;color:var(--text3)">${esc(i.supplierName||'-')}</td>
       <td class="td-center td-mono"><b>${i.qty??0}</b></td>
       <td class="td-center td-mono" style="color:var(--text3)">${i.minQty??5}</td>
-      <td class="td-right td-mono">${fmt(i.cost||0)}</td>
-      <td class="td-right td-mono">${fmt(i.sell||0)}</td>
-      <td class="td-right td-mono">${fmt((i.qty||0)*(i.cost||0))}</td>
+      <td class="td-right td-mono" style="text-decoration:line-through;color:var(--text3)">${fmt(i.cost||0)}</td>
+      <td class="td-right td-mono" style="text-decoration:line-through;color:var(--text3)">${fmt(i.sell||0)}</td>
+      <td class="td-center td-mono" style="color:var(--text3)">${margin}%</td>
+      <td class="td-right td-mono" style="text-decoration:line-through;color:var(--text3)">${fmt((i.qty||0)*(i.cost||0))}</td>
       <td class="td-center"><span class="chip ${chipClass}">${chipLabel}</span></td>
       <td>
-        <div class="inv-table-actions">
-          ${canEdit ? `<button class="btn btn-sm" onclick="showEditItemModal('${i._id}')">✏️</button>` : ''}
-          ${canEdit ? `<button class="btn btn-sm" onclick="showStockAdjModal('${i._id}')">⚖️</button>` : ''}
+        <div style="display:flex;gap:4px;white-space:nowrap">
+          ${canEdit ? `<button class="btn btn-sm" onclick="showEditItemModal('${i._id}')" style="color:var(--brand);border-color:var(--brand);font-size:11px;padding:4px 8px">✏ Edit</button>` : ''}
+          ${canEdit ? `<button class="btn btn-sm" onclick="confirmDelItem('${i._id}')" style="color:var(--danger);border-color:var(--danger);font-size:11px;padding:4px 8px">Del</button>` : ''}
         </div>
       </td>
     </tr>`;
   }).join('');
 
   document.getElementById('inv-tbody').innerHTML = rows ||
-    `<tr><td colspan="10"><div class="empty-state"><div class="empty-state-icon">🔍</div><div class="empty-state-title">No items found</div></div></td></tr>`;
+    `<tr><td colspan="11"><div class="empty-state"><div class="empty-state-icon">🔍</div><div class="empty-state-title">No items found</div></div></td></tr>`;
 
   // Pagination bar
   const pagerEl = document.getElementById('inv-pager');
@@ -1868,6 +1941,128 @@ async function saveEditItem(id) {
     setSyncStatus('error');
     showToast('Failed to save.', 'error');
   }
+}
+
+// ── Inline Add Item (v1-style form) ───────────────────────
+async function saveInlineAddItem() {
+  const name = (document.getElementById('inv-inline-name')?.value||'').trim();
+  const cat  = (document.getElementById('inv-inline-cat')?.value||'').trim();
+  const supId= document.getElementById('inv-inline-sup')?.value||'';
+  const qty  = parseInt(document.getElementById('inv-inline-qty')?.value)||0;
+  const minQty=parseInt(document.getElementById('inv-inline-min')?.value)||5;
+  const cost = parseFloat(document.getElementById('inv-inline-cost')?.value)||0;
+  const sell = parseFloat(document.getElementById('inv-inline-sell')?.value)||0;
+  if (!name) { showToast('Item name is required.','error'); return; }
+  const sup = supId ? STATE.suppliers[supId] : null;
+  const id = uid();
+  const item = {id, name, cat, supplierName:sup?.name||'', supId, qty, minQty,
+    costPrice:cost, sellPrice:sell, cost, sell,
+    createdAt:new Date().toISOString(), createdBy:STATE.user?.name||''};
+  setSyncStatus('saving');
+  try {
+    await fsSave(COLS.INVENTORY, id, item);
+    STATE.inventory[id] = {...item, _id:id};
+    // Clear inline form
+    ['inv-inline-name','inv-inline-qty','inv-inline-min','inv-inline-cost','inv-inline-sell'].forEach(x=>{
+      const el=document.getElementById(x); if(el) el.value='';
+    });
+    const cat2=document.getElementById('inv-inline-cat'); if(cat2) cat2.value='';
+    const sup2=document.getElementById('inv-inline-sup'); if(sup2) sup2.value='';
+    renderInventory(); renderOverviewIfActive(); updateInventoryBadge();
+    setSyncStatus('synced');
+    showToast(`✅ "${name}" added to inventory.`,'success');
+  } catch(e) {
+    setSyncStatus('error');
+    showToast(`❌ Save failed: ${(e.message||'').slice(0,80)}`,'error');
+  }
+}
+
+// ── Delete Item ───────────────────────────────────────────
+function confirmDelItem(id) {
+  const i = STATE.inventory[id];
+  if (!i) return;
+  showModal(`🗑️ Delete "${esc(i.name)}"?`,
+    `<p>This will permanently delete <b>${esc(i.name)}</b> from inventory. This cannot be undone.</p>`,
+    [{label:'Cancel',action:'close',style:''},
+     {label:'🗑️ Delete',action:`delItem('${id}')`,style:'btn-danger'}]);
+}
+async function delItem(id) {
+  const i = STATE.inventory[id];
+  if (!i) return;
+  setSyncStatus('saving');
+  try {
+    await fsDelete(COLS.INVENTORY, id);
+    delete STATE.inventory[id];
+    closeModal();
+    renderInventory(); renderOverviewIfActive(); updateInventoryBadge();
+    setSyncStatus('synced');
+    showToast(`🗑️ "${i.name}" deleted.`,'success');
+  } catch(e) {
+    setSyncStatus('error');
+    showToast('Failed to delete.','error');
+  }
+}
+
+// ── Excel / CSV helpers ──────────────────────────────────
+function downloadInvTemplate() {
+  const csv = 'ITEM NAME,CATEGORY,SUPPLIER,QTY,MIN QTY,COST (N),SELL (N)\n' +
+    'Cable Reel 100m,CABLES,Lekan Cables,10,2,45000,50000\n' +
+    '9W LED Bulb,BULBS,AKT,50,10,930,1100\n';
+  const blob = new Blob([csv], {type:'text/csv'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'gce_inventory_template.csv';
+  a.click();
+}
+function importInvFromExcel() {
+  document.getElementById('inv-import-file')?.click();
+}
+async function handleInvImportFile(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const text = await file.text();
+  const lines = text.split('\n').map(l=>l.trim()).filter(Boolean);
+  if (lines.length < 2) { showToast('File is empty or invalid.','error'); return; }
+  const headers = lines[0].split(',').map(h=>h.toLowerCase().replace(/[^a-z]/g,''));
+  let added = 0;
+  setSyncStatus('saving');
+  for (let r = 1; r < lines.length; r++) {
+    const cols = lines[r].split(',');
+    const get = (keys) => { for(const k of keys){ const idx=headers.findIndex(h=>h.includes(k)); if(idx>=0) return (cols[idx]||'').trim(); } return ''; };
+    const name = get(['item','name']); if (!name) continue;
+    const id = uid();
+    const item = {id, name,
+      cat: get(['cat','category']),
+      supplierName: get(['sup','supplier']),
+      supId: '',
+      qty: parseInt(get(['qty','quantity']))||0,
+      minQty: parseInt(get(['min']))||5,
+      cost: parseFloat(get(['cost']))||0,
+      sell: parseFloat(get(['sell','price']))||0,
+      createdAt: new Date().toISOString(), createdBy: STATE.user?.name||''};
+    item.costPrice = item.cost; item.sellPrice = item.sell;
+    try { await fsSave(COLS.INVENTORY, id, item); STATE.inventory[id]={...item,_id:id}; added++; } catch(e) {}
+  }
+  input.value = '';
+  renderInventory(); renderOverviewIfActive(); updateInventoryBadge();
+  setSyncStatus('synced');
+  showToast(`✅ Imported ${added} items.`,'success');
+}
+function exportInventory() {
+  const items = Object.values(STATE.inventory);
+  const header = 'ITEM NAME,CATEGORY,SUPPLIER,QTY,MIN QTY,COST (N),SELL (N),VALUE,MARGIN,STATUS';
+  const rows = items.map(i => {
+    const margin = i.sell && i.cost ? Math.round(((i.sell-i.cost)/i.sell)*100) : 0;
+    const status = itemStatus(i);
+    return [i.name,i.cat||'',i.supplierName||'',i.qty||0,i.minQty||5,i.cost||0,i.sell||0,(i.qty||0)*(i.cost||0),margin+'%',status].join(',');
+  });
+  const csv = [header, ...rows].join('\n');
+  const blob = new Blob([csv], {type:'text/csv'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `gce_inventory_${new Date().toISOString().slice(0,10)}.csv`;
+  a.click();
+  showToast(`📋 Exported ${items.length} items.`,'success');
 }
 
 // ── Stock Adjust Modal ─────────────────────────────────────
