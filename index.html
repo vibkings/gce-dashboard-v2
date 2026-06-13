@@ -99,7 +99,7 @@ input,select,textarea{font-family:var(--font)}
 .header-role{font-size:10px;color:var(--text3)}
 
 /* ── Sidebar ── */
-.sidebar{background:var(--dark);overflow-y:auto;padding:1rem 0;display:flex;flex-direction:column}
+.sidebar{background:var(--dark);overflow-y:auto;padding:1rem 0;display:flex;flex-direction:column;height:calc(100vh - var(--header-h));position:sticky;top:var(--header-h)}
 .nav-section{padding:0 .75rem;margin-bottom:.5rem}
 .nav-section-label{font-size:10px;font-weight:700;color:rgba(255,255,255,.25);text-transform:uppercase;letter-spacing:.1em;padding:.5rem .5rem .25rem}
 .nav-item{display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:8px;cursor:pointer;color:rgba(255,255,255,.6);font-size:13px;font-weight:500;transition:all .15s;position:relative;text-decoration:none;user-select:none}
@@ -5736,117 +5736,383 @@ function renderClosing() {
   const el = document.getElementById('closing-content');
   if (!el) return;
   const closingDate = window._closingDate || new Date().toLocaleDateString();
+  const pad = n=>String(n).padStart(2,'0');
+  const todayISO = (d=>{return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate());})(new Date());
+  // Convert closingDate (locale string) to ISO for input
   const closingISO = (() => {
-    const d = new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+    if (window._closingISO) return window._closingISO;
+    const d = new Date(); return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate());
   })();
 
+  // ── Data ────────────────────────────────────────────────
   const daySales = Object.values(STATE.sales||{}).filter(s=>s.date===closingDate);
   const invMap = {};
   daySales.forEach(s=>{
     const k=s.invoiceNum||s.id;
-    if(!invMap[k])invMap[k]={invoiceNum:k,custName:s.custName||'Walk-in',total:0,profit:0,payment:s.payment,payMode:s.payMode};
-    invMap[k].total+=s.total||0;invMap[k].profit+=s.profit||0;
+    if(!invMap[k]) invMap[k]={invoiceNum:k,custName:s.custName||'Walk-in',total:0,profit:0,
+      payment:s.payment,payMode:s.payMode,splitPayment:s.splitPayment||null,
+      bankName:s.bankName||'',posName:s.posName||'',seller:s.seller||'',items:[]};
+    invMap[k].total+=s.total||0; invMap[k].profit+=s.profit||0;
+    invMap[k].items.push(s);
   });
-  const invList = Object.values(invMap);
+  const invList = Object.values(invMap).sort((a,b)=>(a.invoiceNum||'').localeCompare(b.invoiceNum||''));
   const totalRev = invList.reduce((a,g)=>a+g.total,0);
   const totalProfit = invList.reduce((a,g)=>a+g.profit,0);
-  const creditOwed = invList.filter(g=>g.payment==='credit').reduce((a,g)=>a+g.total,0);
-  const cashSales = invList.filter(g=>g.payMode==='cash'||g.payment==='cash').reduce((a,g)=>a+g.total,0);
-  const posSales = invList.filter(g=>g.payMode==='pos').reduce((a,g)=>a+g.total,0);
-  const transferSales = invList.filter(g=>g.payMode==='transfer').reduce((a,g)=>a+g.total,0);
   const margin = totalRev>0?Math.round(totalProfit/totalRev*100):0;
+  const creditOwed = invList.filter(g=>g.payment==='credit').reduce((a,g)=>a+g.total,0);
+  const totalPaid  = invList.filter(g=>g.payment!=='credit').reduce((a,g)=>a+g.total,0);
 
-  const dayExp = Object.values(STATE.cashflow||{}).filter(c=>c.type==='out'&&c.date===closingDate&&!['Restock','Supplier Payment','Supplier Deposit','Change'].includes(c.cat));
-  const totalExp = dayExp.reduce((a,e)=>a+e.amount,0);
+  // Payment mode breakdown (split distributed)
+  let cashIncome=0, posIncome=0, transferIncome=0, creditPayIn=0;
+  invList.forEach(g=>{
+    if(g.payMode==='split'&&g.splitPayment){
+      const sp=g.splitPayment;
+      const add=(m,v)=>{if(m==='cash')cashIncome+=v;else if(m==='pos')posIncome+=v;else if(m==='transfer')transferIncome+=v;};
+      add(sp.mode1,sp.amt1||0); add(sp.mode2,sp.amt2||0);
+    } else if(g.payment==='credit') creditOwed; // already counted
+    else if(g.payMode==='pos') posIncome+=g.total;
+    else if(g.payMode==='transfer') transferIncome+=g.total;
+    else cashIncome+=g.total;
+  });
+
+  // Credit payments received today (from cashflow)
+  const creditPayments = Object.values(STATE.cashflow||{}).filter(c=>c.type==='in'&&c.cat==='Credit Payment'&&c.date===closingDate);
+  creditPayIn = creditPayments.reduce((a,c)=>a+(c.amount||0),0);
+
+  // Expenses
+  const EXC=['Restock','Supplier Payment','Supplier Deposit','Change'];
+  const dayExp = Object.values(STATE.cashflow||{}).filter(c=>c.type==='out'&&c.date===closingDate&&!EXC.includes(c.cat));
+  const totalExp = dayExp.reduce((a,e)=>a+(e.amount||0),0);
+  const cashExpenses = dayExp.filter(e=>e.payMode==='cash'||!e.payMode).reduce((a,e)=>a+(e.amount||0),0);
+
+  // Till / Cash in hand
+  const openingFloat = STATE.settings?.openingFloat || 0;
+  const expectedTill = openingFloat + cashIncome - cashExpenses;
+  const actualCount  = window._closingActualCount ?? expectedTill;
+  const tillDiff     = actualCount - expectedTill;
+
+  // By staff
+  const staffMap = {};
+  invList.forEach(g=>{
+    const s = g.seller||'Unknown';
+    if(!staffMap[s]) staffMap[s]={name:s,invoices:0,sales:0,profit:0};
+    staffMap[s].invoices++; staffMap[s].sales+=g.total; staffMap[s].profit+=g.profit;
+  });
+  const staffRows = Object.values(staffMap);
+
+  // Net profit
   const netProfit = totalProfit - totalExp;
 
-  const invRows = invList.map(g=>`<tr>
-    <td><b style="font-family:var(--font-mono)">${esc(g.invoiceNum)}</b></td>
-    <td>${esc(g.custName)}</td>
-    <td class="td-right">${fmt(g.total)}</td>
-    <td class="td-right" style="color:var(--success)">${fmt(g.profit)}</td>
-    <td>${g.payment==='credit'?'<span class="badge badge-danger">Credit</span>':g.payment==='part'?'<span class="badge badge-warning">Part</span>':'<span class="badge badge-success">Paid</span>'}</td>
-  </tr>`).join('');
-
-  const expRows = dayExp.map(e=>`<tr>
-    <td>${esc(e.desc||'')}</td>
-    <td><span class="badge badge-neutral">${esc(e.cat||'')}</span></td>
-    <td class="td-right" style="color:var(--danger)">${fmt(e.amount||0)}</td>
-  </tr>`).join('');
-
+  // ── HTML ────────────────────────────────────────────────
   el.innerHTML = `
+    <!-- Date picker row -->
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:1.5rem;flex-wrap:wrap">
       <label style="font-size:13px;font-weight:600;color:var(--text2)">Date:</label>
-      <input type="date" class="form-input" value="${closingISO}" style="width:auto" onchange="window._closingDate=new Date(this.value).toLocaleDateString();renderClosing()">
-      <button class="btn" onclick="window._closingDate=new Date().toLocaleDateString();renderClosing()">Today</button>
+      <input type="date" class="form-input" value="${closingISO}" style="width:auto"
+        onchange="window._closingISO=this.value;window._closingDate=new Date(this.value+'T00:00:00').toLocaleDateString();window._closingActualCount=null;renderClosing()">
+      <button class="btn" onclick="window._closingISO='${todayISO}';window._closingDate=new Date().toLocaleDateString();window._closingActualCount=null;renderClosing()">Today</button>
       <button class="btn btn-primary" onclick="printClosingReport()">🖨️ Print Report</button>
     </div>
 
-    <!-- Hero summary -->
-    <div style="background:linear-gradient(135deg,#1a56db,#0e2e8a);border-radius:var(--radius-xl);padding:1.5rem 2rem;color:#fff;margin-bottom:1.5rem">
-      <div style="font-size:11px;opacity:.65;text-transform:uppercase;letter-spacing:.1em;margin-bottom:6px">Daily Closing Report — ${closingDate}</div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:1.5rem;margin-top:.75rem">
-        <div><div style="font-size:10px;opacity:.6;text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px">Total Revenue</div><div style="font-size:24px;font-weight:800">${fmt(totalRev)}</div></div>
-        <div style="border-left:1px solid rgba(255,255,255,.2);padding-left:1.5rem"><div style="font-size:10px;opacity:.6;text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px">Gross Profit</div><div style="font-size:24px;font-weight:800">${fmt(totalProfit)}</div><div style="font-size:11px;opacity:.6">${margin}% margin</div></div>
-        <div style="border-left:1px solid rgba(255,255,255,.2);padding-left:1.5rem"><div style="font-size:10px;opacity:.6;text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px">Expenses</div><div style="font-size:24px;font-weight:800">${fmt(totalExp)}</div></div>
-        <div style="border-left:1px solid rgba(255,255,255,.2);padding-left:1.5rem"><div style="font-size:10px;opacity:.6;text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px">Net Profit</div><div style="font-size:24px;font-weight:800">${fmt(netProfit)}</div></div>
+    <!-- Hero banner -->
+    <div style="background:linear-gradient(135deg,#1a56db 0%,#1341b0 60%,#0e2e8a 100%);border-radius:var(--radius-xl);padding:1.5rem 2rem;color:#fff;margin-bottom:1.25rem;position:relative;overflow:hidden">
+      <div style="position:absolute;right:-20px;top:-20px;width:120px;height:120px;border-radius:50%;background:rgba(255,255,255,.05)"></div>
+      <div style="font-size:11px;opacity:.6;text-transform:uppercase;letter-spacing:.12em;margin-bottom:8px">Daily Closing Report — ${closingDate}</div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:1.5rem">
+        <div>
+          <div style="font-size:10px;opacity:.55;text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px">Total Revenue</div>
+          <div style="font-size:26px;font-weight:800">${fmt(totalRev)}</div>
+        </div>
+        <div style="border-left:1px solid rgba(255,255,255,.2);padding-left:1.5rem">
+          <div style="font-size:10px;opacity:.55;text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px">Gross Profit</div>
+          <div style="font-size:26px;font-weight:800">${fmt(totalProfit)}</div>
+          <div style="font-size:11px;opacity:.55">${margin}% margin</div>
+        </div>
+        <div style="border-left:1px solid rgba(255,255,255,.2);padding-left:1.5rem">
+          <div style="font-size:10px;opacity:.55;text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px">Expenses</div>
+          <div style="font-size:26px;font-weight:800">${fmt(totalExp)}</div>
+        </div>
+        <div style="border-left:1px solid rgba(255,255,255,.2);padding-left:1.5rem">
+          <div style="font-size:10px;opacity:.55;text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px">Net Profit</div>
+          <div style="font-size:26px;font-weight:800;color:${netProfit<0?'#fca5a5':'#86efac'}">${fmt(netProfit)}</div>
+        </div>
       </div>
     </div>
 
-    <!-- Payment breakdown -->
-    <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:1.5rem">
-      ${kpiCard('success','💵','Cash',fmt(cashSales),'')}
-      ${kpiCard('info','🏧','POS',fmt(posSales),'')}
-      ${kpiCard('brand','🏦','Transfer',fmt(transferSales),'')}
-      ${kpiCard('danger','💳','Credit',fmt(creditOwed),'',creditOwed>0)}
+    <!-- Till / Cash in Hand -->
+    <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--radius-lg);padding:16px;margin-bottom:1.25rem;border-left:4px solid var(--success)">
+      <div style="font-size:13px;font-weight:700;color:var(--success);margin-bottom:12px;display:flex;align-items:center;gap:6px">💰 Till / Cash in Hand</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+        <div style="background:#f0fdf4;border-radius:var(--radius);padding:12px 16px;text-align:center">
+          <div style="font-size:11px;color:var(--text3);margin-bottom:4px">Opening float</div>
+          <div style="font-size:18px;font-weight:700;color:var(--success)">${openingFloat>0?fmt(openingFloat):'Not set'}</div>
+          ${STATE.user?.role==='admin'?`<button class="btn btn-sm" onclick="setOpeningFloat()" style="margin-top:6px;font-size:11px">Set float</button>`:''}
+        </div>
+        <div style="background:#f0fdf4;border-radius:var(--radius);padding:12px 16px;text-align:center">
+          <div style="font-size:11px;color:var(--text3);margin-bottom:4px">Cash sales today</div>
+          <div style="font-size:18px;font-weight:700;color:var(--success)">${fmt(cashIncome)}</div>
+        </div>
+      </div>
+      <div style="background:#fef2f2;border-radius:var(--radius);padding:12px 16px;text-align:center;margin-bottom:10px">
+        <div style="font-size:11px;color:var(--text3);margin-bottom:4px">Cash out (expenses)</div>
+        <div style="font-size:18px;font-weight:700;color:var(--danger)">-${fmt(cashExpenses)}</div>
+      </div>
+      <div style="background:var(--surface);border-radius:var(--radius);padding:12px 16px;text-align:center;margin-bottom:10px">
+        <div style="font-size:11px;color:var(--text3);margin-bottom:4px">Expected in till</div>
+        <div style="font-size:22px;font-weight:800;color:var(--text1)">${fmt(expectedTill)}</div>
+        <div style="font-size:11px;color:var(--text3)">Float + Sales − Cash out</div>
+      </div>
+      <div style="background:${Math.abs(tillDiff)<1?'#f0fdf4':'#fef2f2'};border-radius:var(--radius);padding:12px 16px;text-align:center">
+        <div style="font-size:11px;color:var(--text3);margin-bottom:4px">Actual count</div>
+        <div style="font-size:22px;font-weight:800;color:${Math.abs(tillDiff)<1?'var(--success)':'var(--danger)'}">${fmt(actualCount)}</div>
+        ${Math.abs(tillDiff)<1
+          ? `<div style="font-size:12px;color:var(--success);font-weight:600">✓ Balanced</div>`
+          : `<div style="font-size:12px;color:var(--danger);font-weight:600">${tillDiff>0?'Surplus':'Shortage'}: ${fmt(Math.abs(tillDiff))}</div>`}
+        <button class="btn btn-sm" onclick="editTillCount()" style="margin-top:8px;font-size:11px">✎ Edit count</button>
+      </div>
     </div>
 
-    <!-- Invoice list -->
-    <div class="sec-title">🧾 Invoices (${invList.length})</div>
-    ${invList.length?`<div class="tbl-wrap" style="margin-bottom:1.5rem"><table>
-      <thead><tr><th>Invoice #</th><th>Customer</th><th class="td-right">Total</th><th class="td-right">Profit</th><th>Pay</th></tr></thead>
-      <tbody>${invRows}</tbody>
-      <tfoot><tr style="background:var(--surface);font-weight:700"><td colspan="2">TOTAL</td><td class="td-right">${fmt(totalRev)}</td><td class="td-right" style="color:var(--success)">${fmt(totalProfit)}</td><td></td></tr></tfoot>
-    </table></div>`:'<div class="empty-state" style="padding:1rem"><div>No sales recorded for this date</div></div>'}
+    <!-- Summary KPI cards -->
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:1.25rem">
+      <div class="kpi-card brand">
+        <div class="kpi-label">INVOICES</div>
+        <div class="kpi-value" style="font-size:28px;font-weight:800">${invList.length}</div>
+        <div class="kpi-sub">Today</div>
+      </div>
+      <div class="kpi-card info">
+        <div class="kpi-label">TOTAL REVENUE</div>
+        <div class="kpi-value" style="font-size:20px;color:var(--info)">${fmt(totalRev)}</div>
+        <div class="kpi-sub">All sales</div>
+      </div>
+      <div class="kpi-card success">
+        <div class="kpi-label">TOTAL PAID</div>
+        <div class="kpi-value" style="font-size:20px;color:var(--success)">${fmt(totalPaid)}</div>
+        <div class="kpi-sub">Cash received</div>
+      </div>
+      <div class="kpi-card danger">
+        <div class="kpi-label">CREDIT OWED</div>
+        <div class="kpi-value" style="font-size:20px;color:${creditOwed>0?'var(--danger)':'var(--text1)'}">${fmt(creditOwed)}</div>
+        <div class="kpi-sub">Unpaid today</div>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:1.25rem">
+      <div class="kpi-card success">
+        <div class="kpi-label">TOTAL PROFIT</div>
+        <div class="kpi-value" style="font-size:22px;color:var(--success)">${fmt(totalProfit)}</div>
+        <div class="kpi-sub">${margin}% margin</div>
+      </div>
+      ${creditPayIn>0?`<div class="kpi-card info">
+        <div class="kpi-label">CREDIT PAYMENTS IN</div>
+        <div class="kpi-value" style="font-size:22px;color:var(--info)">${fmt(creditPayIn)}</div>
+        <div class="kpi-sub">Received from credit customers</div>
+      </div>`:`<div class="kpi-card danger">
+        <div class="kpi-label">TOTAL EXPENSES</div>
+        <div class="kpi-value" style="font-size:22px;color:var(--danger)">${fmt(totalExp)}</div>
+        <div class="kpi-sub">${dayExp.length} transactions</div>
+      </div>`}
+    </div>
 
-    <!-- Expenses list -->
-    <div class="sec-title">💸 Expenses (${dayExp.length})</div>
-    ${dayExp.length?`<div class="tbl-wrap"><table>
-      <thead><tr><th>Description</th><th>Category</th><th class="td-right">Amount</th></tr></thead>
-      <tbody>${expRows}</tbody>
-      <tfoot><tr style="background:var(--surface);font-weight:700"><td colspan="2">TOTAL EXPENSES</td><td class="td-right" style="color:var(--danger)">${fmt(totalExp)}</td></tr></tfoot>
-    </table></div>`:'<div class="empty-state" style="padding:1rem"><div>No expenses recorded for this date</div></div>'}
+    <!-- Payment Breakdown, Expenses & Balance table -->
+    <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px 16px;margin-bottom:1.25rem">
+      <div style="font-size:13px;font-weight:700;color:var(--text1);margin-bottom:12px;display:flex;align-items:center;gap:6px">💳 Payment Breakdown, Expenses &amp; Balance</div>
+      <table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead>
+          <tr style="background:var(--surface)">
+            <th style="padding:8px 12px;text-align:left;font-size:11px;font-weight:700;text-transform:uppercase;color:var(--text3)">MODE</th>
+            <th style="padding:8px 12px;text-align:right;font-size:11px;font-weight:700;text-transform:uppercase;color:var(--success)">INCOME (₦)</th>
+            <th style="padding:8px 12px;text-align:right;font-size:11px;font-weight:700;text-transform:uppercase;color:var(--danger)">EXPENSES (₦)</th>
+            <th style="padding:8px 12px;text-align:right;font-size:11px;font-weight:700;text-transform:uppercase;color:var(--text2)">BALANCE (₦)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr style="border-bottom:1px solid var(--border)">
+            <td style="padding:10px 12px">💵 Cash</td>
+            <td style="padding:10px 12px;text-align:right;color:var(--success);font-weight:600">${fmt(cashIncome)}</td>
+            <td style="padding:10px 12px;text-align:right;color:var(--danger)">${cashExpenses>0?'-'+fmt(cashExpenses):'-'}</td>
+            <td style="padding:10px 12px;text-align:right;font-weight:700">${fmt(cashIncome-cashExpenses)}</td>
+          </tr>
+          <tr style="border-bottom:1px solid var(--border)">
+            <td style="padding:10px 12px">🏧 POS</td>
+            <td style="padding:10px 12px;text-align:right;color:var(--success);font-weight:600">${fmt(posIncome)}</td>
+            <td style="padding:10px 12px;text-align:right;color:var(--text3)">-</td>
+            <td style="padding:10px 12px;text-align:right;font-weight:700">${fmt(posIncome)}</td>
+          </tr>
+          <tr style="border-bottom:1px solid var(--border)">
+            <td style="padding:10px 12px">🏦 Transfer</td>
+            <td style="padding:10px 12px;text-align:right;color:var(--success);font-weight:600">${fmt(transferIncome)}</td>
+            <td style="padding:10px 12px;text-align:right;color:var(--text3)">-</td>
+            <td style="padding:10px 12px;text-align:right;font-weight:700">${fmt(transferIncome)}</td>
+          </tr>
+          ${creditOwed>0?`<tr style="border-bottom:1px solid var(--border);background:#fef2f2">
+            <td style="padding:10px 12px">✉️ Credit Owed</td>
+            <td style="padding:10px 12px;text-align:right;color:var(--danger);font-weight:600">${fmt(creditOwed)}</td>
+            <td style="padding:10px 12px;text-align:right;color:var(--text3)">-</td>
+            <td style="padding:10px 12px;text-align:right;font-weight:700;color:var(--danger)">${fmt(creditOwed)}</td>
+          </tr>`:''}
+          ${creditPayIn>0?`<tr style="border-bottom:1px solid var(--border);background:#f0fdf4">
+            <td style="padding:10px 12px">✅ Credit Payments</td>
+            <td style="padding:10px 12px;text-align:right;color:var(--success);font-weight:600">${fmt(creditPayIn)}</td>
+            <td style="padding:10px 12px;text-align:right;color:var(--text3)">-</td>
+            <td style="padding:10px 12px;text-align:right;font-weight:700;color:var(--success)">${fmt(creditPayIn)}</td>
+          </tr>`:''}
+        </tbody>
+        <tfoot>
+          <tr style="background:#3b1f0e;color:#fff;font-weight:800">
+            <td style="padding:10px 12px;text-transform:uppercase;letter-spacing:.05em">TOTAL</td>
+            <td style="padding:10px 12px;text-align:right;color:#86efac;font-size:15px">${fmt(totalRev+creditPayIn)}</td>
+            <td style="padding:10px 12px;text-align:right;color:#fca5a5;font-size:15px">${totalExp>0?'-'+fmt(totalExp):'-'}</td>
+            <td style="padding:10px 12px;text-align:right;color:#fbbf24;font-size:15px">${fmt(totalRev+creditPayIn-totalExp)}</td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+
+    <!-- Expense detail -->
+    ${dayExp.length?`
+    <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px 16px;margin-bottom:1.25rem">
+      <div style="font-size:13px;font-weight:700;color:var(--danger);margin-bottom:12px;display:flex;align-items:center;gap:6px">💸 Expense Detail</div>
+      <table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead><tr style="background:var(--surface)">
+          <th style="padding:7px 12px;text-align:left;font-size:11px;font-weight:700;text-transform:uppercase;color:var(--text3)">DESCRIPTION</th>
+          <th style="padding:7px 12px;text-align:left;font-size:11px;font-weight:700;text-transform:uppercase;color:var(--text3)">CATEGORY</th>
+          <th style="padding:7px 12px;text-align:left;font-size:11px;font-weight:700;text-transform:uppercase;color:var(--text3)">MODE</th>
+          <th style="padding:7px 12px;text-align:right;font-size:11px;font-weight:700;text-transform:uppercase;color:var(--text3)">AMOUNT</th>
+        </tr></thead>
+        <tbody>${dayExp.map((e,i)=>`<tr style="border-bottom:1px solid var(--border);${i%2?'background:var(--surface)':''}">
+          <td style="padding:8px 12px">${esc(e.desc||'')}</td>
+          <td style="padding:8px 12px"><span class="badge badge-neutral">${esc(e.cat||'Other')}</span></td>
+          <td style="padding:8px 12px;font-size:12px;color:var(--text3)">${e.payMode||'Cash'}${e.bankName?' ('+esc(e.bankName)+')':''}</td>
+          <td style="padding:8px 12px;text-align:right;color:var(--danger);font-weight:600">${fmt(e.amount||0)}</td>
+        </tr>`).join('')}</tbody>
+        <tfoot><tr style="font-weight:700;background:var(--surface)">
+          <td colspan="3" style="padding:8px 12px;text-transform:uppercase">Total Expenses</td>
+          <td style="padding:8px 12px;text-align:right;color:var(--danger)">${fmt(totalExp)}</td>
+        </tr></tfoot>
+      </table>
+    </div>`:''}
+
+    <!-- By staff -->
+    ${staffRows.length?`
+    <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px 16px;margin-bottom:1.25rem">
+      <div style="font-size:13px;font-weight:700;color:var(--text1);margin-bottom:12px;display:flex;align-items:center;gap:6px">👤 By Staff</div>
+      <table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead><tr style="background:var(--surface)">
+          <th style="padding:7px 12px;text-align:left;font-size:11px;font-weight:700;text-transform:uppercase;color:var(--text3)">STAFF</th>
+          <th style="padding:7px 12px;text-align:center;font-size:11px;font-weight:700;text-transform:uppercase;color:var(--text3)">INVOICES</th>
+          <th style="padding:7px 12px;text-align:right;font-size:11px;font-weight:700;text-transform:uppercase;color:var(--text3)">SALES</th>
+          <th style="padding:7px 12px;text-align:right;font-size:11px;font-weight:700;text-transform:uppercase;color:var(--text3)">PROFIT</th>
+        </tr></thead>
+        <tbody>${staffRows.map(s=>`<tr style="border-bottom:1px solid var(--border)">
+          <td style="padding:8px 12px;font-weight:600">${esc(s.name)}</td>
+          <td style="padding:8px 12px;text-align:center;font-weight:700;font-size:16px">${s.invoices}</td>
+          <td style="padding:8px 12px;text-align:right;font-weight:600">${fmt(s.sales)}</td>
+          <td style="padding:8px 12px;text-align:right;color:var(--success);font-weight:600">${fmt(s.profit)}</td>
+        </tr>`).join('')}</tbody>
+      </table>
+    </div>`:''}
+
+    <!-- Invoice list -->
+    <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px 16px;margin-bottom:1.25rem">
+      <div style="font-size:13px;font-weight:700;color:var(--text1);margin-bottom:12px;display:flex;align-items:center;gap:6px">🧾 Invoices (${invList.length})</div>
+      ${invList.length?`<div class="tbl-wrap" style="border-radius:var(--radius);border:1px solid var(--border)"><table>
+        <thead><tr>
+          <th style="width:36px">#</th><th>INVOICE</th><th>CUSTOMER</th>
+          <th>TYPE</th><th class="td-right">TOTAL</th><th class="td-right">PROFIT</th>
+          <th>MODE</th><th>STAFF</th>
+        </tr></thead>
+        <tbody>${invList.map((g,i)=>{
+          const typeBadge = g.payment==='credit'?'<span class="badge badge-danger">Credit</span>':
+            g.payment==='part'?'<span class="badge badge-warning">Part</span>':
+            g.payMode==='pos'?'<span class="badge" style="background:#0891b2;color:#fff">POS</span>':
+            g.payMode==='transfer'?'<span class="badge" style="background:#1a56db;color:#fff">Transfer</span>':
+            '<span class="badge badge-success">Cash</span>';
+          const modeStr = g.payMode==='split'&&g.splitPayment
+            ? `Split (${g.splitPayment.mode1}+${g.splitPayment.mode2})`
+            : g.payMode==='transfer'&&g.bankName ? `Transfer → ${esc(g.bankName)}`
+            : g.payMode==='pos'&&g.posName ? `POS (${esc(g.posName)})`
+            : g.payment==='credit' ? '—'
+            : g.payMode||'Cash';
+          return `<tr style="border-bottom:1px solid var(--border)">
+            <td style="color:var(--text3);font-size:12px">${i+1}</td>
+            <td><b style="font-family:var(--font-mono)">${esc(g.invoiceNum)}</b></td>
+            <td style="font-size:12px">${esc(g.custName)}</td>
+            <td>${typeBadge}</td>
+            <td class="td-right" style="font-weight:600">${fmt(g.total)}</td>
+            <td class="td-right" style="color:var(--success);font-weight:600">${fmt(g.profit)}</td>
+            <td style="font-size:11px;color:var(--text3)">${modeStr}</td>
+            <td style="font-size:12px;color:var(--text3)">${esc(g.seller)}</td>
+          </tr>`;
+        }).join('')}</tbody>
+        <tfoot><tr style="background:var(--surface);font-weight:700">
+          <td colspan="4" style="padding:8px 12px">TOTAL</td>
+          <td class="td-right" style="padding:8px 12px">${fmt(totalRev)}</td>
+          <td class="td-right" style="padding:8px 12px;color:var(--success)">${fmt(totalProfit)}</td>
+          <td colspan="2"></td>
+        </tr></tfoot>
+      </table></div>`
+      :'<div class="empty-state" style="padding:1.5rem"><div class="empty-state-icon">🧾</div><div>No sales recorded for this date</div></div>'}
+    </div>
   `;
 }
 
-function printClosingReport() {
-  const closingDate = window._closingDate || new Date().toLocaleDateString();
-  const daySales = Object.values(STATE.sales||{}).filter(s=>s.date===closingDate);
-  const invMap = {};
-  daySales.forEach(s=>{const k=s.invoiceNum||s.id;if(!invMap[k])invMap[k]={invoiceNum:k,custName:s.custName||'Walk-in',total:0,profit:0,payment:s.payment};invMap[k].total+=s.total||0;invMap[k].profit+=s.profit||0;});
-  const invList = Object.values(invMap);
-  const totalRev = invList.reduce((a,g)=>a+g.total,0);
-  const totalProfit = invList.reduce((a,g)=>a+g.profit,0);
-  const dayExp = Object.values(STATE.cashflow||{}).filter(c=>c.type==='out'&&c.date===closingDate&&!['Restock','Supplier Payment','Supplier Deposit','Change'].includes(c.cat));
-  const totalExp = dayExp.reduce((a,e)=>a+e.amount,0);
-  const rows = invList.map((g,i)=>`<tr><td>${i+1}</td><td>${g.invoiceNum}</td><td>${g.custName}</td><td style="text-align:right">₦${Math.round(g.total).toLocaleString()}</td><td style="text-align:right">₦${Math.round(g.profit).toLocaleString()}</td></tr>`).join('');
-  const expRows = dayExp.map(e=>`<tr><td>${e.desc}</td><td>${e.cat}</td><td style="text-align:right">₦${Math.round(e.amount).toLocaleString()}</td></tr>`).join('');
-  const w = window.open('','_blank');
+function setOpeningFloat(){
+  const val=parseFloat(prompt('Enter opening float (cash at start of day):',STATE.settings?.openingFloat||0))||0;
+  if(isNaN(val))return;
+  const updated={...(STATE.settings||{}),openingFloat:val};
+  fsSave('v2_settings','config',updated).then(()=>{STATE.settings=updated;renderClosing();showToast('Opening float set.','success');}).catch(()=>showToast('Failed.','error'));
+}
+
+function editTillCount(){
+  const val=parseFloat(prompt('Enter actual cash counted in till:',window._closingActualCount??0));
+  if(isNaN(val))return;
+  window._closingActualCount=val;
+  renderClosing();
+}
+
+function printClosingReport(){
+  const closingDate=window._closingDate||new Date().toLocaleDateString();
+  const daySales=Object.values(STATE.sales||{}).filter(s=>s.date===closingDate);
+  const invMap={};
+  daySales.forEach(s=>{const k=s.invoiceNum||s.id;if(!invMap[k])invMap[k]={invoiceNum:k,custName:s.custName||'Walk-in',total:0,profit:0,payment:s.payment,payMode:s.payMode,seller:s.seller||''};invMap[k].total+=s.total||0;invMap[k].profit+=s.profit||0;});
+  const invList=Object.values(invMap);
+  const totalRev=invList.reduce((a,g)=>a+g.total,0);
+  const totalProfit=invList.reduce((a,g)=>a+g.profit,0);
+  const margin=totalRev>0?Math.round(totalProfit/totalRev*100):0;
+  const EXC=['Restock','Supplier Payment','Supplier Deposit','Change'];
+  const dayExp=Object.values(STATE.cashflow||{}).filter(c=>c.type==='out'&&c.date===closingDate&&!EXC.includes(c.cat));
+  const totalExp=dayExp.reduce((a,e)=>a+(e.amount||0),0);
+  const netProfit=totalProfit-totalExp;
+  let cashIncome=0,posIncome=0,transferIncome=0;
+  invList.forEach(g=>{
+    if(g.payMode==='split'&&g.splitPayment){const sp=g.splitPayment;const add=(m,v)=>{if(m==='cash')cashIncome+=v;else if(m==='pos')posIncome+=v;else if(m==='transfer')transferIncome+=v;};add(sp.mode1,sp.amt1||0);add(sp.mode2,sp.amt2||0);}
+    else if(g.payment==='credit'){}else if(g.payMode==='pos')posIncome+=g.total;else if(g.payMode==='transfer')transferIncome+=g.total;else cashIncome+=g.total;
+  });
+  const invRows=invList.map((g,i)=>`<tr><td>${i+1}</td><td><b>${g.invoiceNum}</b></td><td>${g.custName}</td><td>${g.payMode||g.payment||'Cash'}</td><td style="text-align:right">₦${Math.round(g.total).toLocaleString()}</td><td style="text-align:right;color:green">₦${Math.round(g.profit).toLocaleString()}</td><td>${g.seller}</td></tr>`).join('');
+  const expRows=dayExp.map(e=>`<tr><td>${e.desc}</td><td>${e.cat}</td><td>${e.payMode||'Cash'}</td><td style="text-align:right;color:red">₦${Math.round(e.amount||0).toLocaleString()}</td></tr>`).join('');
+  const w=window.open('','_blank');
+  if(!w)return;
   w.document.write(`<!DOCTYPE html><html><head><title>Daily Closing ${closingDate}</title>
-  <style>body{font-family:Arial,sans-serif;padding:20px;max-width:700px;margin:0 auto}h2{color:#1a56db}table{width:100%;border-collapse:collapse;margin-bottom:15px}th{background:#f5f5f5;padding:8px;border:1px solid #ddd;font-size:12px}td{padding:8px;border:1px solid #ddd;font-size:13px}.total{font-weight:700;background:#eff6ff}@media print{button{display:none}}</style>
+  <style>body{font-family:Arial;padding:20px;max-width:750px;margin:0 auto;font-size:13px}h2{color:#1a56db;margin-bottom:4px}h3{color:#1a56db;margin:16px 0 6px}table{width:100%;border-collapse:collapse;margin-bottom:10px}th{background:#f0f4ff;padding:7px 10px;border:1px solid #ddd;font-size:11px;text-transform:uppercase;text-align:left}td{padding:7px 10px;border:1px solid #eee}.summary{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px}.box{background:#f5f7fa;border-radius:6px;padding:10px;text-align:center}.box .lbl{font-size:10px;text-transform:uppercase;color:#666;margin-bottom:4px}.box .val{font-size:18px;font-weight:700}tfoot tr{font-weight:700;background:#f0f4ff}@media print{button{display:none}}</style>
   </head><body>
-  <h2>GREAT CHID ELECTRO — Daily Closing Report</h2>
-  <p><b>Date:</b> ${closingDate} &nbsp;|&nbsp; <b>Generated by:</b> ${STATE.user?.name||'Admin'}</p>
-  <table><thead><tr><th>Summary</th><th style="text-align:right">Amount</th></tr></thead><tbody>
-    <tr><td>Total Revenue</td><td style="text-align:right"><b>₦${Math.round(totalRev).toLocaleString()}</b></td></tr>
-    <tr><td>Gross Profit</td><td style="text-align:right;color:green"><b>₦${Math.round(totalProfit).toLocaleString()}</b></td></tr>
-    <tr><td>Total Expenses</td><td style="text-align:right;color:red">₦${Math.round(totalExp).toLocaleString()}</td></tr>
-    <tr class="total"><td>Net Profit</td><td style="text-align:right">₦${Math.round(totalProfit-totalExp).toLocaleString()}</td></tr>
-  </tbody></table>
+  <h2>GREAT CHID ELECTRO (NIG.) / GLOBAL DOORS LTD</h2>
+  <p style="color:#666;margin:0 0 12px">Daily Closing Report &nbsp;|&nbsp; <b>${closingDate}</b> &nbsp;|&nbsp; Generated by: ${STATE.user?.name||'Admin'}</p>
+  <div class="summary">
+    <div class="box"><div class="lbl">Revenue</div><div class="val">₦${Math.round(totalRev).toLocaleString()}</div></div>
+    <div class="box"><div class="lbl">Gross Profit</div><div class="val" style="color:green">₦${Math.round(totalProfit).toLocaleString()}</div><div style="font-size:11px;color:#888">${margin}% margin</div></div>
+    <div class="box"><div class="lbl">Expenses</div><div class="val" style="color:red">₦${Math.round(totalExp).toLocaleString()}</div></div>
+    <div class="box"><div class="lbl">Net Profit</div><div class="val" style="color:${netProfit>=0?'green':'red'}">₦${Math.round(netProfit).toLocaleString()}</div></div>
+  </div>
+  <table><thead><tr><th>Mode</th><th style="text-align:right">Income</th><th style="text-align:right">Expenses</th><th style="text-align:right">Balance</th></tr></thead>
+  <tbody>
+    <tr><td>💵 Cash</td><td style="text-align:right">₦${Math.round(cashIncome).toLocaleString()}</td><td style="text-align:right;color:red">${totalExp>0?'-₦'+Math.round(totalExp).toLocaleString():'-'}</td><td style="text-align:right;font-weight:700">₦${Math.round(cashIncome-totalExp).toLocaleString()}</td></tr>
+    <tr><td>🏧 POS</td><td style="text-align:right">₦${Math.round(posIncome).toLocaleString()}</td><td style="text-align:right">-</td><td style="text-align:right;font-weight:700">₦${Math.round(posIncome).toLocaleString()}</td></tr>
+    <tr><td>🏦 Transfer</td><td style="text-align:right">₦${Math.round(transferIncome).toLocaleString()}</td><td style="text-align:right">-</td><td style="text-align:right;font-weight:700">₦${Math.round(transferIncome).toLocaleString()}</td></tr>
+  </tbody><tfoot><tr><td>TOTAL</td><td style="text-align:right">₦${Math.round(totalRev).toLocaleString()}</td><td style="text-align:right;color:red">${totalExp>0?'-₦'+Math.round(totalExp).toLocaleString():'-'}</td><td style="text-align:right">₦${Math.round(totalRev-totalExp).toLocaleString()}</td></tr></tfoot></table>
   <h3>Invoices (${invList.length})</h3>
-  <table><thead><tr><th>#</th><th>Invoice</th><th>Customer</th><th style="text-align:right">Total</th><th style="text-align:right">Profit</th></tr></thead><tbody>${rows}</tbody></table>
-  ${expRows?`<h3>Expenses</h3><table><thead><tr><th>Description</th><th>Category</th><th style="text-align:right">Amount</th></tr></thead><tbody>${expRows}</tbody></table>`:''}
-  <button onclick="window.print()">🖨️ Print</button>
+  <table><thead><tr><th>#</th><th>Invoice</th><th>Customer</th><th>Mode</th><th style="text-align:right">Total</th><th style="text-align:right">Profit</th><th>Staff</th></tr></thead><tbody>${invRows}</tbody><tfoot><tr><td colspan="4">TOTAL</td><td style="text-align:right">₦${Math.round(totalRev).toLocaleString()}</td><td style="text-align:right;color:green">₦${Math.round(totalProfit).toLocaleString()}</td><td></td></tr></tfoot></table>
+  ${expRows?`<h3>Expenses (${dayExp.length})</h3><table><thead><tr><th>Description</th><th>Category</th><th>Mode</th><th style="text-align:right">Amount</th></tr></thead><tbody>${expRows}</tbody><tfoot><tr><td colspan="3">TOTAL EXPENSES</td><td style="text-align:right;color:red">₦${Math.round(totalExp).toLocaleString()}</td></tr></tfoot></table>`:''}
+  <p style="margin-top:20px;font-size:11px;color:#999;text-align:center">© GCE Dashboard v2 · Built by Vibkings</p>
+  <button onclick="window.print()" style="padding:8px 20px;background:#1a56db;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px">🖨️ Print</button>
   </body></html>`);
   w.document.close();
 }
