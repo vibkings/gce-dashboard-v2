@@ -623,10 +623,6 @@ select.form-input{cursor:pointer}
 
     <!-- ── EXPENSES ── -->
     <div class="page" id="page-expenses">
-      <div class="page-header">
-        <div><div class="page-title">Expenses</div></div>
-        <button class="btn btn-primary" onclick="showAddExpenseModal()">+ Add Expense</button>
-      </div>
       <div id="expenses-content"><div class="empty-state"><div class="empty-state-icon">💸</div><div>Loading...</div></div></div>
     </div>
 
@@ -4359,108 +4355,286 @@ function renderExpenses() {
   const today = now.toLocaleDateString();
   const curMonth = now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
   const curYear = String(now.getFullYear());
-  const filter = window._expFilter||'today';
-  const customFrom = window._expFrom||'';
-  const customTo   = window._expTo||'';
   const isAdmin = STATE.user?.role==='admin'||STATE.user?.role==='owner';
 
   const allExp = _getExpenses();
 
-  // KPI totals (independent of filter)
-  const todayTotal = allExp.filter(e=>e.date===today).reduce((a,e)=>a+e.amount,0);
-  const monthTotal = allExp.filter(e=>(e.month||'')===curMonth).reduce((a,e)=>a+e.amount,0);
-  const yearTotal  = allExp.filter(e=>(e.month||'').startsWith(curYear)).reduce((a,e)=>a+e.amount,0);
-  const allTotal   = allExp.reduce((a,e)=>a+e.amount,0);
+  // KPI totals
+  const todayTotal = allExp.filter(e=>e.date===today).reduce((a,e)=>a+(e.amount||0),0);
+  const monthTotal = allExp.filter(e=>(e.month||'')===curMonth).reduce((a,e)=>a+(e.amount||0),0);
+  const yearTotal  = allExp.filter(e=>(e.month||'').startsWith(curYear)).reduce((a,e)=>a+(e.amount||0),0);
+  const allTotal   = allExp.reduce((a,e)=>a+(e.amount||0),0);
 
-  // Filtered list
-  const filtered = allExp.filter(_expDateRange(filter,customFrom,customTo))
-    .sort((a,b)=>(b.date||'').localeCompare(a.date||'')||(b.id||'').localeCompare(a.id||''));
-  const filteredTotal = filtered.reduce((a,e)=>a+e.amount,0);
+  // Filter state
+  const customFrom = window._expFrom||'';
+  const customTo   = window._expTo||'';
+  const catFilter  = window._expCat||'';
 
-  // Category breakdown (filtered)
-  const catMap = {};
-  filtered.forEach(e=>{ catMap[e.cat||'Other']=(catMap[e.cat||'Other']||0)+e.amount; });
-  const catEntries = Object.entries(catMap).sort((a,b)=>b[1]-a[1]);
-  const maxCat = catEntries[0]?.[1]||1;
+  // Apply filter
+  const filtered = allExp.filter(e=>{
+    // Date range filter
+    const d = new Date(e.date);
+    const f = customFrom ? new Date(customFrom) : null;
+    const t = customTo   ? (() => { const x=new Date(customTo); x.setHours(23,59,59,999); return x; })() : null;
+    if (f && d < f) return false;
+    if (t && d > t) return false;
+    // Category filter
+    if (catFilter && e.cat !== catFilter) return false;
+    return true;
+  }).sort((a,b)=>(b.date||'').localeCompare(a.date||'')||(b.id||'').localeCompare(a.id||''));
 
-  const catBars = catEntries.map(([cat,amt])=>`
-    <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
-      <div style="width:90px;font-size:12px;color:var(--text2);flex-shrink:0">${esc(cat)}</div>
-      <div style="flex:1;background:var(--border);border-radius:4px;height:10px;overflow:hidden">
-        <div style="height:100%;width:${Math.round(amt/maxCat*100)}%;background:var(--danger);border-radius:4px;transition:width .4s"></div>
-      </div>
-      <div style="width:90px;font-size:12px;font-weight:600;color:var(--danger);text-align:right">${fmt(amt)}</div>
-    </div>`).join('');
+  const filteredTotal = filtered.reduce((a,e)=>a+(e.amount||0),0);
 
-  // Rows
-  const rows = filtered.map(e=>`<tr>
-    <td style="font-size:12px;color:var(--text3);white-space:nowrap">${e.date||''}</td>
-    <td>${esc(e.desc||'')}</td>
-    <td><span class="badge badge-neutral">${esc(e.cat||'Other')}</span></td>
-    <td class="td-right" style="color:var(--danger);font-weight:700">${fmt(e.amount||0)}</td>
-    <td style="font-size:12px;color:var(--text3);text-transform:capitalize">${esc(e.payMode||'cash')}</td>
-    <td style="font-size:11px;color:var(--text3)">${esc(e.by||'')}</td>
-    ${isAdmin?`<td style="text-align:center">
-      <button class="btn btn-sm" title="Edit" style="padding:2px 8px;font-size:11px" onclick="showEditExpenseModal('${e.id}')">✏️</button>
-      ${STATE.user?.role==='admin'?`<button class="btn btn-sm" title="Delete" style="padding:2px 8px;font-size:11px;color:var(--danger)" onclick="deleteExpense('${e.id}')">🗑</button>`:''}
-    </td>`:'<td></td>'}
-  </tr>`).join('');
+  // Category options for manage + filter
+  const customCats = (STATE.settings?.expCats||[]);
+  const allCats = [...new Set([...DEFAULT_EXP_CATS, ...customCats])];
+  const catOpts = allCats.map(c=>`<option value="${c}">${c}</option>`).join('');
+  const catFilterOpts = `<option value="">All categories</option>` +
+    allCats.map(c=>`<option value="${c}" ${c===catFilter?'selected':''}>${c}</option>`).join('');
 
-  const filterBtns = ['today','week','month','year','all','custom'].map(f=>`
-    <button class="btn btn-sm ${filter===f?'btn-primary':''}" onclick="window._expFilter='${f}';renderExpenses()">
-      ${f==='today'?'Today':f==='week'?'Week':f==='month'?'Month':f==='year'?'Year':f==='all'?'All':'Custom'}
-    </button>`).join('');
-
-  const customRow = filter==='custom'?`
-    <div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap">
-      <input type="date" class="form-input" style="width:150px;padding:4px 8px;font-size:13px" value="${customFrom}"
-        onchange="window._expFrom=this.value;renderExpenses()">
-      <span style="color:var(--text3)">to</span>
-      <input type="date" class="form-input" style="width:150px;padding:4px 8px;font-size:13px" value="${customTo}"
-        onchange="window._expTo=this.value;renderExpenses()">
-    </div>`:'';
-
-  const filterLabel = filter==='today'?'Today':filter==='week'?'This Week':filter==='month'?'This Month':filter==='year'?'This Year':filter==='all'?'All Time':'Custom Range';
+  // Table rows
+  const rows = filtered.map(e=>{
+    const modeLabel = {cash:'Cash',transfer:'Transfer',pos:'POS'}[e.payMode]||e.payMode||'Cash';
+    const bankLabel = e.bankName ? ` (${esc(e.bankName)})` : '';
+    return `<tr>
+      <td style="font-size:12px;white-space:nowrap">${e.date||''}</td>
+      <td>${esc(e.desc||'')}</td>
+      <td><span class="badge badge-neutral">${esc(e.cat||'Other')}</span></td>
+      <td class="td-right" style="color:var(--danger);font-weight:700">${fmt(e.amount||0)}</td>
+      <td style="font-size:12px">${modeLabel}${bankLabel}</td>
+      <td style="font-size:11px;color:var(--text3)">${esc(e.by||'')}</td>
+      <td>
+        <div style="display:flex;gap:4px">
+          ${isAdmin?`<button class="btn btn-sm" onclick="showInlineEditExpense('${e.id||e._id}')" style="color:var(--brand);border-color:var(--brand);font-size:11px;padding:3px 8px">✏ Edit</button>`:''}
+          ${STATE.user?.role==='admin'?`<button class="btn btn-sm" onclick="deleteExpense('${e.id||e._id}')" style="color:var(--danger);border-color:var(--danger);font-size:11px;padding:3px 8px">✕</button>`:''}
+        </div>
+      </td>
+    </tr>`;
+  }).join('');
 
   el.innerHTML = `
+    <!-- Page header -->
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+      <div style="font-size:22px;font-weight:800;color:var(--text1)">Expenses</div>
+      <button class="btn btn-primary" onclick="showAddExpenseModal()">+ Add Expense</button>
+    </div>
+
     <!-- 4 KPI cards -->
-    <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:1.25rem">
-      ${kpiCard('danger','☀️','Today',fmt(todayTotal),'Expenses today')}
-      ${kpiCard('warning','📅','This Month',fmt(monthTotal),'Running total')}
-      ${kpiCard('info','📆','This Year',fmt(yearTotal),'Jan–Dec')}
-      ${kpiCard('neutral','📊','All Time',fmt(allTotal),'Lifetime')}
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:1.25rem">
+      <div class="kpi-card danger">
+        <div class="kpi-label">TODAY</div>
+        <div class="kpi-value">${fmt(todayTotal)}</div>
+        <div class="kpi-sub">Expenses today</div>
+      </div>
+      <div class="kpi-card warning">
+        <div class="kpi-label">THIS MONTH</div>
+        <div class="kpi-value">${fmt(monthTotal)}</div>
+        <div class="kpi-sub">Running total</div>
+      </div>
+      <div class="kpi-card info">
+        <div class="kpi-label">THIS YEAR</div>
+        <div class="kpi-value">${fmt(yearTotal)}</div>
+        <div class="kpi-sub">Jan–Dec</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">ALL TIME</div>
+        <div class="kpi-value">${fmt(allTotal)}</div>
+        <div class="kpi-sub">Lifetime</div>
+      </div>
     </div>
 
-    <!-- Category Breakdown -->
-    ${catEntries.length?`
-    <div class="card" style="margin-bottom:1.25rem;padding:1rem 1.25rem">
-      <div class="sec-title" style="margin:0 0 .75rem">📊 Breakdown by Category <span style="font-weight:400;font-size:13px;color:var(--text3)">(${filterLabel})</span></div>
-      ${catBars}
-    </div>`:''}
-
-    <!-- Filter + Header -->
-    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:.75rem;flex-wrap:wrap;gap:8px">
-      <div>
-        <div class="sec-title" style="margin:0 0 4px">Expense History</div>
-        <div style="font-size:13px;color:var(--text3)">${filtered.length} transaction${filtered.length!==1?'s':''} · <b style="color:var(--danger)">${fmt(filteredTotal)}</b></div>
+    <!-- ADD EXPENSE inline form -->
+    <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px 16px;margin-bottom:1rem" id="exp-add-section">
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--brand);margin-bottom:12px;display:flex;align-items:center;gap:6px">
+        <span style="width:3px;height:14px;background:var(--brand);border-radius:2px;display:inline-block"></span>
+        ADD EXPENSE
       </div>
-      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
-        <div style="display:flex;gap:6px;flex-wrap:wrap">
-          ${filterBtns}
-          <button class="btn btn-sm" onclick="exportExpensesCSV()" title="Export CSV" style="color:var(--primary)">⬇️ CSV</button>
+      <!-- Row 1: description + amount -->
+      <div style="display:grid;grid-template-columns:1fr auto;gap:10px;margin-bottom:8px">
+        <div>
+          <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);margin-bottom:3px">DESCRIPTION</div>
+          <input class="form-input" id="exp-desc" placeholder="e.g. Staff salary, Transport..." style="width:100%">
         </div>
-        ${customRow}
+        <div style="width:160px">
+          <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);margin-bottom:3px">AMOUNT (₦)</div>
+          <input class="form-input" id="exp-amt" type="number" min="0" placeholder="0" style="width:100%">
+        </div>
+      </div>
+      <!-- Row 2: category, mode, bank, date, submit -->
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
+        <div style="flex:1;min-width:130px">
+          <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);margin-bottom:3px">CATEGORY</div>
+          <select class="form-input" id="exp-cat" style="width:100%">
+            ${catOpts}
+          </select>
+        </div>
+        <div style="flex:1;min-width:130px">
+          <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);margin-bottom:3px">PAYMENT MODE</div>
+          <select class="form-input" id="exp-mode" style="width:100%" onchange="toggleInlineExpBank()">
+            <option value="cash">Cash</option>
+            <option value="transfer">Transfer</option>
+            <option value="pos">POS</option>
+          </select>
+        </div>
+        <div style="flex:1;min-width:130px;display:none" id="exp-bank-wrap">
+          <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);margin-bottom:3px" id="exp-bank-label">BANK ACCOUNT</div>
+          <select class="form-input" id="exp-bank" style="width:100%">${bankSelectOpts('transfer')}</select>
+        </div>
+        <div style="width:170px">
+          <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);margin-bottom:3px">EXPENSE DATE (BLANK = TODAY)</div>
+          <input class="form-input" id="exp-date" type="date" style="width:100%">
+        </div>
+        <div>
+          <button class="btn btn-primary" onclick="saveInlineExpense()" style="white-space:nowrap;font-weight:700">+ Add expense</button>
+        </div>
+      </div>
+      <!-- Row 3: manage categories -->
+      <div style="display:flex;align-items:center;gap:8px;margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">
+        <span style="font-size:12px;color:var(--text3);font-weight:600">Manage categories:</span>
+        <input class="form-input" id="exp-new-cat" placeholder="New category" style="width:160px;font-size:12px;padding:5px 10px">
+        <button class="btn btn-sm" onclick="addExpenseCategory()" style="white-space:nowrap">+ Add</button>
+        ${customCats.length ? customCats.map(c=>`<span style="background:var(--surface);border:1px solid var(--border);border-radius:99px;padding:2px 8px;font-size:11px;display:inline-flex;align-items:center;gap:4px">${esc(c)} <span onclick="removeExpenseCategory('${esc(c)}')" style="cursor:pointer;color:var(--danger);font-weight:700;font-size:13px">×</span></span>`).join('') : ''}
       </div>
     </div>
 
-    <!-- Table -->
-    <div class="tbl-wrap">
-      <table>
-        <thead><tr><th>Date</th><th>Description</th><th>Category</th><th class="td-right">Amount</th><th>Mode</th><th>By</th><th style="width:80px"></th></tr></thead>
-        <tbody>${rows||'<tr><td colspan="7"><div class="empty-state"><div class="empty-state-icon">💸</div><div>No expenses in this range</div></div></td></tr>'}</tbody>
-        ${filtered.length?`<tfoot><tr style="font-weight:700;background:var(--surface)"><td colspan="3">TOTAL</td><td class="td-right" style="color:var(--danger)">${fmt(filteredTotal)}</td><td colspan="3"></td></tr></tfoot>`:''}
-      </table>
+    <!-- EXPENSE HISTORY -->
+    <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px 16px">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:12px">
+        <div>
+          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--brand);display:flex;align-items:center;gap:6px">
+            <span style="width:3px;height:14px;background:var(--brand);border-radius:2px;display:inline-block"></span>
+            EXPENSE HISTORY
+          </div>
+          <div style="font-size:12px;color:var(--text3);margin-top:3px">${filtered.length} transaction${filtered.length!==1?'s':''} · <b style="color:var(--danger)">${fmt(filteredTotal)}</b></div>
+        </div>
+        <!-- Filter controls -->
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <div style="display:flex;gap:6px">
+            ${['today','week','month','year','all'].map(f=>`<button class="btn btn-sm ${window._expQuickFilter===f?'btn-primary':''}" onclick="window._expQuickFilter='${f}';applyExpQuickFilter('${f}');renderExpenses()">
+              ${f==='today'?'Today':f==='week'?'Week':f==='month'?'Month':f==='year'?'Year':'All'}
+            </button>`).join('')}
+          </div>
+          <button class="btn btn-sm" onclick="exportExpensesCSV()" style="color:var(--info);border-color:var(--info)">📊 CSV</button>
+        </div>
+      </div>
+      <!-- Date range + category filter -->
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+        <div style="display:flex;align-items:center;gap:6px">
+          <input type="date" class="form-input" style="width:145px;padding:5px 8px;font-size:12px" value="${customFrom}"
+            onchange="window._expFrom=this.value;window._expQuickFilter='';renderExpenses()">
+          <span style="color:var(--text3);font-size:12px">to</span>
+          <input type="date" class="form-input" style="width:145px;padding:5px 8px;font-size:12px" value="${customTo}"
+            onchange="window._expTo=this.value;window._expQuickFilter='';renderExpenses()">
+        </div>
+        <select class="form-input" style="width:160px;font-size:12px;padding:5px 8px" onchange="window._expCat=this.value;renderExpenses()">
+          ${catFilterOpts}
+        </select>
+        <button class="btn btn-sm" onclick="window._expFrom='';window._expTo='';window._expCat='';window._expQuickFilter='today';renderExpenses()" style="color:var(--text3)">Clear</button>
+      </div>
+
+      <!-- Table -->
+      <div class="tbl-wrap" style="border-radius:var(--radius);border:1px solid var(--border)">
+        <table>
+          <thead>
+            <tr>
+              <th>DATE</th><th>DESCRIPTION</th><th>CATEGORY</th>
+              <th class="td-right">AMOUNT</th><th>MODE</th><th>BY</th><th></th>
+            </tr>
+          </thead>
+          <tbody>${rows||'<tr><td colspan="7"><div class="empty-state"><div class="empty-state-icon">💸</div><div>No expenses in this range</div></div></td></tr>'}</tbody>
+          ${filtered.length?`<tfoot><tr style="font-weight:700;background:var(--surface)">
+            <td colspan="3" style="padding:8px 14px">TOTAL</td>
+            <td class="td-right" style="color:var(--danger);padding:8px 14px">${fmt(filteredTotal)}</td>
+            <td colspan="3"></td>
+          </tr></tfoot>`:''}
+        </table>
+      </div>
     </div>`;
+}
+
+// ── Quick filter date applier ─────────────────────────────
+function applyExpQuickFilter(f) {
+  const now = new Date();
+  const pad = n => String(n).padStart(2,'0');
+  const toISO = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+  if (f==='today') { const t=toISO(now); window._expFrom=t; window._expTo=t; }
+  else if (f==='week') { const s=new Date(now); s.setDate(now.getDate()-now.getDay()); window._expFrom=toISO(s); window._expTo=toISO(now); }
+  else if (f==='month') { window._expFrom=`${now.getFullYear()}-${pad(now.getMonth()+1)}-01`; window._expTo=toISO(now); }
+  else if (f==='year')  { window._expFrom=`${now.getFullYear()}-01-01`; window._expTo=toISO(now); }
+  else { window._expFrom=''; window._expTo=''; }
+}
+
+// ── Inline expense bank toggle ────────────────────────────
+function toggleInlineExpBank() {
+  const mode = document.getElementById('exp-mode')?.value;
+  const wrap = document.getElementById('exp-bank-wrap');
+  const label = document.getElementById('exp-bank-label');
+  const sel = document.getElementById('exp-bank');
+  if (!wrap) return;
+  // Pay-out: transfer shows bank, POS does not
+  const show = mode==='transfer';
+  wrap.style.display = show ? '' : 'none';
+  if (show && sel) sel.innerHTML = bankSelectOpts('transfer');
+}
+
+// ── Save inline expense ───────────────────────────────────
+async function saveInlineExpense() {
+  const desc = (document.getElementById('exp-desc')?.value||'').trim();
+  const amt  = parseFloat(document.getElementById('exp-amt')?.value)||0;
+  if (!desc) { showToast('Description required.','error'); return; }
+  if (amt<=0) { showToast('Enter a valid amount.','error'); return; }
+  const cat    = document.getElementById('exp-cat')?.value||'Other';
+  const mode   = document.getElementById('exp-mode')?.value||'cash';
+  const bankName = mode==='transfer' ? (document.getElementById('exp-bank')?.value||'') : '';
+  const dateVal= document.getElementById('exp-date')?.value;
+  const dateObj= dateVal?(()=>{const d=dateVal.split('-');return new Date(+d[0],+d[1]-1,+d[2]);})():new Date();
+  const date   = dateObj.toLocaleDateString();
+  const month  = dateObj.getFullYear()+'-'+String(dateObj.getMonth()+1).padStart(2,'0');
+  const id = uid();
+  const exp = {id,desc,amount:amt,type:'out',cat,payMode:mode,bankName,date,month,by:STATE.user?.name};
+  setSyncStatus('saving');
+  try {
+    await fsSave(COLS.CASHFLOW,id,exp);
+    if(!STATE.cashflow)STATE.cashflow={};
+    STATE.cashflow[id]={...exp,_id:id};
+    // Clear form
+    ['exp-desc','exp-amt','exp-date'].forEach(x=>{const el=document.getElementById(x);if(el)el.value='';});
+    const mEl=document.getElementById('exp-mode');if(mEl)mEl.value='cash';
+    const bw=document.getElementById('exp-bank-wrap');if(bw)bw.style.display='none';
+    renderExpenses();
+    setSyncStatus('synced');
+    showToast(`✅ Expense recorded: ${fmt(amt)}`,'success');
+  } catch(e){setSyncStatus('error');showToast('Failed to save.','error');}
+}
+
+// ── Inline edit expense ───────────────────────────────────
+function showInlineEditExpense(id) { showEditExpenseModal(id); }
+
+// ── Manage categories (inline) ────────────────────────────
+async function addExpenseCategory() {
+  const inp = document.getElementById('exp-new-cat');
+  const name = (inp?.value||'').trim();
+  if (!name) { showToast('Enter category name.','error'); return; }
+  const cats = STATE.settings?.expCats||[];
+  if (cats.includes(name)) { showToast('Category already exists.','info'); return; }
+  const updated = {...(STATE.settings||{}), expCats:[...cats,name]};
+  try {
+    await fsSave('v2_settings','config',updated);
+    STATE.settings = updated;
+    if (inp) inp.value='';
+    renderExpenses();
+    showToast(`Category "${name}" added.`,'success');
+  } catch(e){ showToast('Failed to save.','error'); }
+}
+
+async function removeExpenseCategory(name) {
+  const cats = (STATE.settings?.expCats||[]).filter(c=>c!==name);
+  const updated = {...(STATE.settings||{}),expCats:cats};
+  try {
+    await fsSave('v2_settings','config',updated);
+    STATE.settings = updated;
+    renderExpenses();
+  } catch(e){ showToast('Failed.','error'); }
 }
 
 function showAddExpenseModal(prefill) {
@@ -4616,9 +4790,17 @@ async function saveExpense() {
 }
 
 function exportExpensesCSV() {
-  const filter = window._expFilter||'today';
-  const filtered = _getExpenses().filter(_expDateRange(filter, window._expFrom||'', window._expTo||''))
-    .sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+  const customFrom = window._expFrom||'';
+  const customTo   = window._expTo||'';
+  const catFilter  = window._expCat||'';
+  const filtered = _getExpenses().filter(e=>{
+    const d=new Date(e.date);
+    const f=customFrom?new Date(customFrom):null;
+    const t=customTo?(()=>{const x=new Date(customTo);x.setHours(23,59,59,999);return x;})():null;
+    if(f&&d<f)return false; if(t&&d>t)return false;
+    if(catFilter&&e.cat!==catFilter)return false;
+    return true;
+  }).sort((a,b)=>(b.date||'').localeCompare(a.date||''));
   const header = ['Date','Description','Category','Amount','Payment Mode','Recorded By'];
   const rows = filtered.map(e=>[e.date,e.desc,e.cat,e.amount,e.payMode,e.by].map(v=>`"${String(v||'').replace(/"/g,'""')}"`).join(','));
   const csv = [header.join(','),...rows].join('\n');
