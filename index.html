@@ -513,10 +513,6 @@ select.form-input{cursor:pointer}
 
     <!-- ── PURCHASES ── -->
     <div class="page" id="page-purchases">
-      <div class="page-header">
-        <div><div class="page-title">Purchases</div><div class="page-sub">Stock purchases & supplier deliveries</div></div>
-        <button class="btn btn-primary" onclick="showNewPurchaseModal()">+ New Purchase</button>
-      </div>
       <div id="purchases-content"></div>
     </div>
 
@@ -3227,7 +3223,36 @@ function renderPurchases() {
   const purchases = Object.values(STATE.purchases||{});
   const pending   = Object.values(STATE.pendingDeliveries||{});
 
-  // Group pending by purchaseInvoiceNum
+  // KPI calculations matching v1
+  const totalPurchases = purchases.reduce((a,p)=>a+(p.totalCost||0),0);
+  const invoiceNums    = [...new Set(purchases.map(p=>p.purchaseInvoiceNum).filter(Boolean))];
+  const invoiceCount   = invoiceNums.length;
+
+  // Paid = purchases where mode != credit, grouped by invoice
+  const paidInvoices   = new Set(purchases.filter(p=>p.payMode!=='credit').map(p=>p.purchaseInvoiceNum));
+  const totalPaid      = purchases.filter(p=>p.payMode!=='credit').reduce((a,p)=>a+(p.totalCost||0),0);
+  const paidFull       = paidInvoices.size;
+
+  // Outstanding = credit purchases not yet paid
+  const creditPurchases= purchases.filter(p=>p.payMode==='credit');
+  const creditTotal    = creditPurchases.reduce((a,p)=>a+(p.totalCost||0),0);
+  const creditInvoices = [...new Set(creditPurchases.map(p=>p.purchaseInvoiceNum))];
+  const creditCount    = creditInvoices.length;
+
+  // Part payment invoices
+  const partInvoices   = [...new Set(purchases.filter(p=>p.payMode==='part').map(p=>p.purchaseInvoiceNum))];
+
+  // Outstanding debt
+  const outstanding    = creditTotal;
+
+  // Pending goods
+  const pendingCount   = pending.length;
+  const pendingItems   = pending.reduce((a,p)=>a+(p.orderedQty||0),0);
+
+  // Active suppliers this period
+  const activeSups     = [...new Set(purchases.map(p=>p.supplier).filter(Boolean))].length;
+
+  // Pending deliveries grouped
   const pendingGroups = {};
   pending.forEach(p => {
     const k = p.purchaseInvoiceNum||p.id;
@@ -3236,26 +3261,28 @@ function renderPurchases() {
   });
   const pendingList = Object.values(pendingGroups).sort((a,b)=>(b.date||'').localeCompare(a.date||''));
 
-  // KPIs
-  const totalSpent  = purchases.reduce((a,p)=>a+(p.totalCost||0),0);
-  const totalItems  = purchases.length;
-  const pendingCount = pending.length;
-  const thisMonth   = new Date().getFullYear()+'-'+String(new Date().getMonth()+1).padStart(2,'0');
-  const monthSpent  = purchases.filter(p=>(p.month||'')===thisMonth).reduce((a,p)=>a+(p.totalCost||0),0);
+  // Purchase history rows
+  const searchVal = document.getElementById('purch-history-search')?.value?.toLowerCase()||'';
+  const histItems = purchases
+    .filter(p=>!searchVal || (p.itemName||'').toLowerCase().includes(searchVal) || (p.supplier||'').toLowerCase().includes(searchVal) || (p.purchaseInvoiceNum||'').toLowerCase().includes(searchVal))
+    .sort((a,b)=>(b.date||'').localeCompare(a.date||''))
+    .slice(0,150);
 
-  // Purchase history (received)
-  const received = purchases.sort((a,b)=>(b.date||'').localeCompare(a.date||'')).slice(0,100);
-  const histRows = received.map(p=>`<tr>
-    <td style="font-size:12px;color:var(--text3)">${p.date||''}</td>
-    <td><b>${esc(p.itemName||p.name||'')}</b></td>
-    <td style="font-size:12px;color:var(--text3)">${esc(p.supplier||'—')}</td>
-    <td style="text-align:center">${p.qty||0}</td>
-    <td style="text-align:right">₦${(p.costPrice||0).toLocaleString()}</td>
-    <td style="text-align:right;font-weight:700;color:var(--danger)">₦${(p.totalCost||0).toLocaleString()}</td>
-    <td style="font-size:11px;color:var(--text3);text-transform:capitalize">${p.payMode||'cash'}</td>
-  </tr>`).join('');
+  const histRows = histItems.map(p=>{
+    const modeLabel = {cash:'Cash',transfer:'Transfer',pos:'POS',credit:'Credit',part:'Part Pay'}[p.payMode]||p.payMode||'Cash';
+    const modeBadge = p.payMode==='credit' ? 'badge-danger' : p.payMode==='part' ? 'badge-warning' : 'badge-neutral';
+    return `<tr>
+      <td style="font-size:12px;color:var(--text3)">${p.date||''}</td>
+      <td><b>${esc(p.itemName||p.name||'')}</b>${p.purchaseInvoiceNum?`<br><span style="font-size:10px;color:var(--text3)">${esc(p.purchaseInvoiceNum)}</span>`:''}</td>
+      <td style="font-size:12px;color:var(--text3)">${esc(p.supplier||'—')}</td>
+      <td style="text-align:center;font-weight:700">${p.qty||0}</td>
+      <td style="text-align:right">${fmt(p.costPrice||0)}</td>
+      <td style="text-align:right;font-weight:700;color:var(--danger)">${fmt(p.totalCost||0)}</td>
+      <td><span class="badge ${modeBadge}" style="font-size:10px">${modeLabel}</span></td>
+    </tr>`;
+  }).join('');
 
-  // Pending deliveries
+  // Pending deliveries HTML
   const pendingHTML = pendingList.length ? pendingList.map(grp => {
     const totalOrdered  = grp.items.reduce((a,i)=>a+(i.orderedQty||0),0);
     const totalReceived = grp.items.reduce((a,i)=>a+(i.receivedQty||0),0);
@@ -3268,201 +3295,496 @@ function renderPurchases() {
         <button class="btn btn-sm" style="padding:2px 8px;font-size:11px;color:var(--danger)" onclick="cancelPendingItem('${item.id}')">✕</button>
       </div>`).join('');
     return `
-      <div class="card" style="margin-bottom:10px;padding:12px 14px">
+      <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--radius-lg);margin-bottom:10px;padding:12px 14px">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-          <div>
-            <b style="font-size:14px">PO #${esc(grp.invoiceNum)}</b>
-            <span style="font-size:12px;color:var(--text3);margin-left:8px">${esc(grp.supplier)}</span>
-          </div>
+          <div><b style="font-size:14px">PO #${esc(grp.invoiceNum)}</b>
+            <span style="font-size:12px;color:var(--text3);margin-left:8px">${esc(grp.supplier)}</span></div>
           <div style="font-size:12px;color:var(--text3)">${grp.date}</div>
         </div>
         <div style="background:var(--border);border-radius:4px;height:6px;margin-bottom:8px;overflow:hidden">
-          <div style="height:100%;width:${pct}%;background:${pct===100?'var(--success)':'var(--primary)'};border-radius:4px;transition:width .4s"></div>
+          <div style="height:100%;width:${pct}%;background:${pct===100?'var(--success)':'var(--brand)'};border-radius:4px"></div>
         </div>
         <div style="font-size:11px;color:var(--text3);margin-bottom:8px">${pct}% received (${totalReceived}/${totalOrdered} items)</div>
         ${itemRows}
       </div>`;
-  }).join('') : '<div class="empty-state"><div class="empty-state-icon">📦</div><div>No pending deliveries</div></div>';
+  }).join('') : '';
+
+  // Supplier search options
+  const supOpts = Object.values(STATE.suppliers||{}).sort((a,b)=>(a.name||'').localeCompare(b.name||''))
+    .map(s=>`<option value="${esc(s.name)}">${esc(s.name)}</option>`).join('');
 
   el.innerHTML = `
-    <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:1.25rem">
-      ${kpiCard('danger','💸','This Month',fmt(monthSpent),'Purchases')}
-      ${kpiCard('info','📊','All Time',fmt(totalSpent),'Total spent')}
-      ${kpiCard('warning','⏳','Pending',pendingCount,'Items awaiting')}
-      ${kpiCard('neutral','📋','Records',totalItems,'All purchases')}
+    <!-- 6 KPI Cards matching v1 -->
+    <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:1rem">
+      <div class="kpi-card brand">
+        <div class="kpi-label">TOTAL PURCHASES</div>
+        <div class="kpi-value" style="font-size:18px;color:var(--brand)">${fmt(totalPurchases)}</div>
+        <div class="kpi-sub">${invoiceCount} invoice${invoiceCount!==1?'s':''}</div>
+      </div>
+      <div class="kpi-card success">
+        <div class="kpi-label">TOTAL PAID</div>
+        <div class="kpi-value" style="font-size:18px;color:var(--success)">${fmt(totalPaid)}</div>
+        <div class="kpi-sub" style="display:flex;align-items:center;gap:4px">
+          <span style="color:var(--success);font-weight:700">●</span>
+          <span>${paidFull} fully paid</span>
+        </div>
+      </div>
+      <div class="kpi-card danger">
+        <div class="kpi-label">OUTSTANDING</div>
+        <div class="kpi-value" style="font-size:18px;color:var(--danger)">${fmt(outstanding)}</div>
+        <div class="kpi-sub" style="display:flex;align-items:center;gap:4px">
+          <span style="color:var(--danger);font-weight:700">●</span>
+          <span>${creditCount} credit${partInvoices.length?' + '+partInvoices.length+' part':''}</span>
+        </div>
+      </div>
+      <div class="kpi-card warning">
+        <div class="kpi-label">PENDING GOODS</div>
+        <div class="kpi-value" style="font-size:18px;color:${pendingCount?'var(--warning)':'var(--text3)'}">${pendingCount?'N°'+pendingCount:'No'}</div>
+        <div class="kpi-sub">${pendingItems} pending item${pendingItems!==1?'s':''}</div>
+      </div>
+      <div class="kpi-card info">
+        <div class="kpi-label">SUPPLIERS</div>
+        <div class="kpi-value" style="font-size:18px;color:var(--info)">${activeSups}</div>
+        <div class="kpi-sub">Active this period</div>
+      </div>
+      <div class="kpi-card" style="border-left:3px solid #7c3aed">
+        <div class="kpi-label" style="color:#7c3aed">CREDIT PURCHASES</div>
+        <div class="kpi-value" style="font-size:18px;color:#7c3aed">${fmt(creditTotal)}</div>
+        <div class="kpi-sub">${creditCount} invoice${creditCount!==1?'s':''}</div>
+      </div>
     </div>
 
-    ${pendingList.length ? `
-    <div class="sec-title" style="margin-bottom:.75rem">⏳ Pending Deliveries (${pendingList.length})</div>
-    ${pendingHTML}
-    <div class="sec-title" style="margin:.75rem 0">📋 Purchase History</div>` : ''}
+    <!-- RECORD NEW PURCHASE inline form -->
+    <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--radius-lg);padding:16px;margin-bottom:1rem">
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--brand);margin-bottom:14px;display:flex;align-items:center;gap:6px">
+        <span style="width:3px;height:14px;background:var(--brand);border-radius:2px;display:inline-block"></span>
+        RECORD NEW PURCHASE
+      </div>
 
-    <div class="tbl-wrap">
-      <table>
-        <thead><tr><th>Date</th><th>Item</th><th>Supplier</th><th style="text-align:center">Qty</th><th style="text-align:right">Cost/Unit</th><th style="text-align:right">Total Cost</th><th>Mode</th></tr></thead>
-        <tbody>${histRows||'<tr><td colspan="7"><div class="empty-state"><div class="empty-state-icon">🛒</div><div>No purchases yet. Click + New Purchase to begin.</div></div></td></tr>'}</tbody>
-      </table>
+      <!-- Row 1: Supplier / Invoice # / Date -->
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:10px">
+        <div>
+          <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);margin-bottom:4px">SUPPLIER <span style="color:var(--danger)">*</span></div>
+          <div style="position:relative">
+            <input class="form-input" id="pnp-sup-input" placeholder="Type to search supplier..." autocomplete="off"
+              oninput="searchSupplierForPurchase(this.value)" style="width:100%">
+            <div id="pnp-sup-dd" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:50;background:var(--white);border:1px solid var(--border);border-radius:var(--radius);max-height:150px;overflow-y:auto;box-shadow:var(--shadow)"></div>
+            <input type="hidden" id="pnp-sup-val">
+          </div>
+        </div>
+        <div>
+          <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);margin-bottom:4px">SUPPLIER INVOICE # <span style="color:var(--danger)">*</span></div>
+          <input class="form-input" id="pnp-inv-num" placeholder="e.g. SUP-2024-001" style="width:100%">
+        </div>
+        <div>
+          <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);margin-bottom:4px">PURCHASE DATE (BLANK = TODAY)</div>
+          <input class="form-input" id="pnp-date" type="date" style="width:100%">
+        </div>
+      </div>
+
+      <!-- Row 2: Add Items -->
+      <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);margin-bottom:6px">ADD ITEMS RECEIVED</div>
+      <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin-bottom:8px">
+        <div style="flex:3;min-width:180px">
+          <div style="font-size:10px;color:var(--text3);margin-bottom:3px">ITEM</div>
+          <div style="position:relative">
+            <input class="form-input" id="pnp-item" placeholder="Search items..." autocomplete="off"
+              oninput="searchInvForPurch(this.value)" style="width:100%">
+            <div id="pnp-item-dd" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:50;background:var(--white);border:1px solid var(--border);border-radius:var(--radius);max-height:150px;overflow-y:auto;box-shadow:var(--shadow)"></div>
+            <input type="hidden" id="pnp-item-id">
+          </div>
+        </div>
+        <div style="width:80px">
+          <div style="font-size:10px;color:var(--text3);margin-bottom:3px">ORDERED</div>
+          <input class="form-input" id="pnp-ordered" type="number" min="0" placeholder="0" style="width:100%">
+        </div>
+        <div style="width:80px">
+          <div style="font-size:10px;color:var(--text3);margin-bottom:3px">RECEIVED</div>
+          <input class="form-input" id="pnp-received" type="number" min="0" placeholder="0" style="width:100%">
+        </div>
+        <div style="width:110px">
+          <div style="font-size:10px;color:var(--text3);margin-bottom:3px">COST (₦)</div>
+          <input class="form-input" id="pnp-cost" type="number" min="0" placeholder="0" style="width:100%">
+        </div>
+        <div style="width:90px">
+          <div style="font-size:10px;color:var(--text3);margin-bottom:3px">DISCOUNT</div>
+          <div style="display:flex;gap:4px">
+            <select class="form-input" id="pnp-disc-type" style="width:64px;padding:6px 4px;font-size:12px">
+              <option value="none">None</option>
+              <option value="pct">%</option>
+              <option value="fixed">₦</option>
+            </select>
+            <input class="form-input" id="pnp-disc-val" type="number" min="0" placeholder="0" style="width:58px">
+          </div>
+        </div>
+        <div>
+          <button class="btn btn-primary" onclick="addPurchaseCartItem()" style="white-space:nowrap">+ Add</button>
+        </div>
+      </div>
+
+      <!-- Cart items table -->
+      <div id="pnp-cart-wrap" style="margin-bottom:12px;display:none">
+        <table style="width:100%;border-collapse:collapse;font-size:12px">
+          <thead>
+            <tr style="background:var(--surface)">
+              <th style="padding:6px 10px;text-align:left;font-size:10px;color:var(--text3);font-weight:700;text-transform:uppercase">Item</th>
+              <th style="padding:6px 10px;text-align:center;font-size:10px;color:var(--text3);font-weight:700;text-transform:uppercase">Ordered</th>
+              <th style="padding:6px 10px;text-align:center;font-size:10px;color:var(--text3);font-weight:700;text-transform:uppercase">Received</th>
+              <th style="padding:6px 10px;text-align:right;font-size:10px;color:var(--text3);font-weight:700;text-transform:uppercase">Cost/Unit</th>
+              <th style="padding:6px 10px;text-align:right;font-size:10px;color:var(--text3);font-weight:700;text-transform:uppercase">Discount</th>
+              <th style="padding:6px 10px;text-align:right;font-size:10px;color:var(--text3);font-weight:700;text-transform:uppercase">Line Total</th>
+              <th style="padding:6px 10px"></th>
+            </tr>
+          </thead>
+          <tbody id="pnp-cart-body"></tbody>
+          <tfoot id="pnp-cart-foot"></tfoot>
+        </table>
+        <div style="font-size:11px;color:var(--text3);margin-top:4px;text-align:center" id="pnp-cart-empty" style="display:none">No items added yet.</div>
+      </div>
+      <div id="pnp-cart-empty-msg" style="color:var(--text3);font-size:13px;text-align:center;padding:16px 0;border:1px dashed var(--border);border-radius:var(--radius);margin-bottom:12px">No items added yet.</div>
+
+      <!-- Payment section -->
+      <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);margin-bottom:6px">PAYMENT</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;max-width:560px;margin-bottom:14px">
+        <div>
+          <div style="font-size:10px;color:var(--text3);margin-bottom:3px">PAYMENT TYPE</div>
+          <select class="form-input" id="pnp-pay-type" style="width:100%">
+            <option value="cash">Cash (fully paid)</option>
+            <option value="transfer">Bank Transfer (fully paid)</option>
+            <option value="pos">POS (fully paid)</option>
+            <option value="part">Part Payment</option>
+            <option value="credit">Credit (owe supplier)</option>
+          </select>
+        </div>
+        <div>
+          <div style="font-size:10px;color:var(--text3);margin-bottom:3px">PAYMENT MODE</div>
+          <select class="form-input" id="pnp-pay-mode" style="width:100%">
+            <option value="cash">Cash</option>
+            <option value="transfer">Bank Transfer</option>
+            <option value="pos">POS</option>
+            <option value="split">Split</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Action buttons -->
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        <button class="btn btn-primary" onclick="savePurchaseRecord()" style="font-weight:700">✓ Record purchase</button>
+        <button class="btn" onclick="generatePurchaseQuotation()" style="color:var(--text2)">📄 Generate Quotation</button>
+        <button class="btn" onclick="clearPurchaseForm()" style="color:var(--danger);border-color:var(--danger)">✕ Clear</button>
+      </div>
+    </div>
+
+    <!-- PURCHASE HISTORY -->
+    <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px 16px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--brand);display:flex;align-items:center;gap:6px">
+          <span style="width:3px;height:14px;background:var(--brand);border-radius:2px;display:inline-block"></span>
+          PURCHASE HISTORY
+        </div>
+        <div class="search-wrap" style="width:240px">
+          <span class="search-icon">🔍</span>
+          <input type="text" class="form-input" id="purch-history-search" placeholder="Search purchases..." oninput="renderPurchases()">
+        </div>
+      </div>
+
+      ${pendingList.length ? `
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--warning);margin-bottom:8px">⏳ Pending Deliveries (${pendingList.length})</div>
+      ${pendingHTML}
+      <div style="height:1px;background:var(--border);margin:12px 0"></div>` : ''}
+
+      <div class="tbl-wrap" style="border-radius:var(--radius);border:1px solid var(--border)">
+        <table>
+          <thead>
+            <tr>
+              <th>DATE</th><th>ITEM</th><th>SUPPLIER</th>
+              <th style="text-align:center">QTY</th>
+              <th style="text-align:right">COST/UNIT</th>
+              <th style="text-align:right">TOTAL COST</th>
+              <th>MODE</th>
+            </tr>
+          </thead>
+          <tbody>${histRows||'<tr><td colspan="7"><div class="empty-state"><div class="empty-state-icon">🛒</div><div>No purchases recorded yet.</div></div></td></tr>'}</tbody>
+        </table>
+      </div>
     </div>`;
+
+  // Wire up purchase type → mode sync
+  const payType = document.getElementById('pnp-pay-type');
+  const payMode = document.getElementById('pnp-pay-mode');
+  if (payType && !payType._wired) {
+    payType._wired = true;
+    payType.onchange = () => {
+      const v = payType.value;
+      if (v==='cash') payMode.value='cash';
+      else if (v==='transfer') payMode.value='transfer';
+      else if (v==='pos') payMode.value='pos';
+    };
+  }
+
+  // Restore cart display
+  renderPurchaseCart();
 }
 
-function showNewPurchaseModal() {
-  const suppliers = Object.values(STATE.suppliers||{}).sort((a,b)=>(a.name||'').localeCompare(b.name||''));
-  const supOpts = `<option value="">-- Select Supplier --</option>` +
-    suppliers.map(s=>`<option value="${esc(s.name)}">${esc(s.name)}</option>`).join('');
+// ── Purchase cart state ────────────────────────────────────
+if (!window._purchCart) window._purchCart = [];
 
-  showModal('🛒 New Purchase', `
-    <div class="form-grid c2">
-      <div class="form-group" style="grid-column:1/-1">
-        <label>Supplier</label>
-        <select class="form-input" id="np-supplier">${supOpts}</select>
-      </div>
-      <div class="form-group" style="grid-column:1/-1">
-        <label>Item Name <span class="req">*</span></label>
-        <input class="form-input" id="np-item" placeholder="Start typing to search inventory..." oninput="searchInventoryForPurchase(this.value)">
-        <div id="np-item-suggestions" style="background:var(--surface);border:1px solid var(--border);border-radius:6px;max-height:160px;overflow-y:auto;display:none;position:relative;z-index:10"></div>
-        <input type="hidden" id="np-item-id">
-      </div>
-      <div class="form-group">
-        <label>Qty Ordered <span class="req">*</span></label>
-        <input class="form-input" id="np-qty-ordered" type="number" min="1" placeholder="0">
-      </div>
-      <div class="form-group">
-        <label>Cost Price / Unit (₦) <span class="req">*</span></label>
-        <input class="form-input" id="np-cost" type="number" min="0" placeholder="0">
-      </div>
-      <div class="form-group">
-        <label>Payment Mode</label>
-        <select class="form-input" id="np-mode">
-          <option value="cash">Cash</option>
-          <option value="transfer">Bank Transfer</option>
-          <option value="pos">POS</option>
-          <option value="credit">Credit (Owe Supplier)</option>
-        </select>
-      </div>
-      <div class="form-group">
-        <label>Date (blank = today)</label>
-        <input class="form-input" id="np-date" type="date">
-      </div>
-      <div class="form-group" style="grid-column:1/-1;display:flex;align-items:center;gap:8px">
-        <input type="checkbox" id="np-pending" onchange="togglePendingFields()">
-        <label for="np-pending" style="margin:0;font-weight:500">Items not yet delivered (Pending)</label>
-      </div>
-    </div>
-  `, [
-    {label:'Cancel', action:'close', style:''},
-    {label:'💾 Save Purchase', action:'saveNewPurchase()', style:'btn-primary'}
-  ]);
+function renderPurchaseCart() {
+  const cart = window._purchCart;
+  const wrap = document.getElementById('pnp-cart-wrap');
+  const emptyMsg = document.getElementById('pnp-cart-empty-msg');
+  const body = document.getElementById('pnp-cart-body');
+  const foot = document.getElementById('pnp-cart-foot');
+  if (!wrap) return;
+  if (!cart.length) {
+    wrap.style.display = 'none';
+    if (emptyMsg) emptyMsg.style.display = 'block';
+    return;
+  }
+  wrap.style.display = 'block';
+  if (emptyMsg) emptyMsg.style.display = 'none';
+  let grandTotal = 0;
+  body.innerHTML = cart.map((item, idx) => {
+    const lineTotal = (item.received||item.ordered||0) * item.cost - (item.discAmt||0);
+    grandTotal += lineTotal;
+    const discStr = item.discType==='pct' ? `${item.discVal}%` : item.discType==='fixed' ? fmt(item.discAmt) : '—';
+    return `<tr style="border-bottom:1px solid var(--border)">
+      <td style="padding:6px 10px"><b>${esc(item.name)}</b></td>
+      <td style="padding:6px 10px;text-align:center">${item.ordered}</td>
+      <td style="padding:6px 10px;text-align:center">${item.received}</td>
+      <td style="padding:6px 10px;text-align:right">${fmt(item.cost)}</td>
+      <td style="padding:6px 10px;text-align:right;color:var(--warning)">${discStr}</td>
+      <td style="padding:6px 10px;text-align:right;font-weight:700;color:var(--danger)">${fmt(lineTotal)}</td>
+      <td style="padding:6px 10px"><button class="btn btn-sm" onclick="removePurchaseCartItem(${idx})" style="color:var(--danger);padding:2px 8px;font-size:11px">✕</button></td>
+    </tr>`;
+  }).join('');
+  foot.innerHTML = `<tr style="background:var(--surface);font-weight:700">
+    <td colspan="5" style="padding:8px 10px;text-align:right;font-size:12px">GRAND TOTAL</td>
+    <td style="padding:8px 10px;text-align:right;color:var(--danger);font-size:15px">${fmt(grandTotal)}</td>
+    <td></td>
+  </tr>`;
 }
 
-function searchInventoryForPurchase(term) {
-  const box = document.getElementById('np-item-suggestions');
-  if (!box) return;
-  if (!term || term.length < 2) { box.style.display='none'; return; }
+function addPurchaseCartItem() {
+  const name    = (document.getElementById('pnp-item')?.value||'').trim();
+  const itemId  = document.getElementById('pnp-item-id')?.value||'';
+  const ordered = parseInt(document.getElementById('pnp-ordered')?.value)||0;
+  const received= parseInt(document.getElementById('pnp-received')?.value)||0;
+  const cost    = parseFloat(document.getElementById('pnp-cost')?.value)||0;
+  const discType= document.getElementById('pnp-disc-type')?.value||'none';
+  const discVal = parseFloat(document.getElementById('pnp-disc-val')?.value)||0;
+  if (!name) { showToast('Enter item name.','error'); return; }
+  if (ordered < 1 && received < 1) { showToast('Enter ordered or received quantity.','error'); return; }
+  if (cost <= 0) { showToast('Enter cost price.','error'); return; }
+  const qty = received || ordered;
+  let discAmt = 0;
+  if (discType==='pct') discAmt = qty * cost * discVal/100;
+  else if (discType==='fixed') discAmt = discVal;
+  window._purchCart.push({name, itemId, ordered, received, cost, discType, discVal, discAmt});
+  // Clear item fields
+  ['pnp-item','pnp-ordered','pnp-received','pnp-cost','pnp-disc-val'].forEach(id=>{
+    const el=document.getElementById(id); if(el) el.value='';
+  });
+  const dd=document.getElementById('pnp-disc-type'); if(dd) dd.value='none';
+  const hidId=document.getElementById('pnp-item-id'); if(hidId) hidId.value='';
+  renderPurchaseCart();
+}
+
+function removePurchaseCartItem(idx) {
+  window._purchCart.splice(idx,1);
+  renderPurchaseCart();
+}
+
+function searchSupplierForPurchase(term) {
+  const dd = document.getElementById('pnp-sup-dd');
+  if (!dd) return;
+  if (!term) { dd.style.display='none'; return; }
+  const matches = Object.values(STATE.suppliers||{})
+    .filter(s=>(s.name||'').toLowerCase().includes(term.toLowerCase())).slice(0,8);
+  // Also include typed text as free-form option
+  const freeOpt = `<div style="padding:8px 10px;cursor:pointer;font-size:12px;color:var(--text3);border-bottom:1px solid var(--border)"
+    onmousedown="pickSupplierForPurchase('${esc(term).replace(/'/g,"\\'")}')">Use "${esc(term)}"</div>`;
+  if (!matches.length) { dd.style.display='block'; dd.innerHTML=freeOpt; return; }
+  dd.style.display='block';
+  dd.innerHTML = matches.map(s=>`<div style="padding:8px 10px;cursor:pointer;border-bottom:1px solid var(--border);font-size:13px"
+    onmousedown="pickSupplierForPurchase('${esc(s.name).replace(/'/g,"\\'")}')"><b>${esc(s.name)}</b></div>`).join('')+freeOpt;
+}
+
+function pickSupplierForPurchase(name) {
+  const inp = document.getElementById('pnp-sup-input');
+  const hid = document.getElementById('pnp-sup-val');
+  const dd  = document.getElementById('pnp-sup-dd');
+  if (inp) inp.value = name;
+  if (hid) hid.value = name;
+  if (dd)  dd.style.display='none';
+}
+
+function searchInvForPurch(term) {
+  const dd = document.getElementById('pnp-item-dd');
+  if (!dd) return;
+  if (!term || term.length < 1) { dd.style.display='none'; return; }
   const matches = Object.values(STATE.inventory||{})
-    .filter(i=>(i.name||'').toLowerCase().includes(term.toLowerCase()))
-    .slice(0,10);
-  if (!matches.length) { box.style.display='none'; return; }
-  box.style.display='block';
-  box.innerHTML = matches.map(i=>`
-    <div style="padding:8px 10px;cursor:pointer;border-bottom:1px solid var(--border);font-size:13px"
-      onmousedown="selectInventoryItemForPurchase('${i._id||i.id}','${esc(i.name).replace(/'/g,"\\'")}')">
-      <b>${esc(i.name)}</b>
-      <span style="float:right;font-size:11px;color:var(--text3)">Cost: ${fmt(i.costPrice||0)} · Stock: ${i.qty||0}</span>
-    </div>`).join('');
+    .filter(i=>(i.name||'').toLowerCase().includes(term.toLowerCase())).slice(0,10);
+  if (!matches.length) { dd.style.display='none'; return; }
+  dd.style.display='block';
+  dd.innerHTML = matches.map(i=>`<div style="padding:8px 10px;cursor:pointer;border-bottom:1px solid var(--border);font-size:13px"
+    onmousedown="pickInvForPurch('${i._id||i.id}','${esc(i.name).replace(/'/g,"\\'")}',${i.costPrice||i.cost||0})">
+    <b>${esc(i.name)}</b>
+    <span style="float:right;font-size:11px;color:var(--text3)">Cost: ${fmt(i.costPrice||i.cost||0)} · Stock: ${i.qty||0}</span>
+  </div>`).join('');
 }
 
-function selectInventoryItemForPurchase(id, name) {
-  const inp = document.getElementById('np-item');
-  const hid = document.getElementById('np-item-id');
-  const box = document.getElementById('np-item-suggestions');
-  const costInp = document.getElementById('np-cost');
+function pickInvForPurch(id, name, cost) {
+  const inp  = document.getElementById('pnp-item');
+  const hid  = document.getElementById('pnp-item-id');
+  const costF= document.getElementById('pnp-cost');
+  const dd   = document.getElementById('pnp-item-dd');
   if (inp) inp.value = name;
   if (hid) hid.value = id;
-  if (box) box.style.display='none';
-  // Auto-fill last cost price
-  const item = STATE.inventory?.[id];
-  if (item && costInp && !costInp.value) costInp.value = item.costPrice||'';
+  if (dd)  dd.style.display='none';
+  if (costF && !costF.value) costF.value = cost;
 }
 
-function togglePendingFields() {
-  // placeholder — no extra fields needed for pending
+function clearPurchaseForm() {
+  ['pnp-sup-input','pnp-sup-val','pnp-inv-num','pnp-date','pnp-item','pnp-item-id',
+   'pnp-ordered','pnp-received','pnp-cost','pnp-disc-val'].forEach(id=>{
+    const el=document.getElementById(id); if(el) el.value='';
+  });
+  const pt=document.getElementById('pnp-pay-type'); if(pt) pt.value='cash';
+  const pm=document.getElementById('pnp-pay-mode'); if(pm) pm.value='cash';
+  const dt=document.getElementById('pnp-disc-type'); if(dt) dt.value='none';
+  window._purchCart=[];
+  renderPurchaseCart();
+  showToast('Form cleared.','info');
 }
 
-async function saveNewPurchase() {
-  const itemName = document.getElementById('np-item')?.value.trim();
-  const itemId   = document.getElementById('np-item-id')?.value.trim();
-  const qtyOrd   = parseInt(document.getElementById('np-qty-ordered')?.value)||0;
-  const cost     = parseFloat(document.getElementById('np-cost')?.value)||0;
-  const supplier = document.getElementById('np-supplier')?.value||'';
-  const mode     = document.getElementById('np-mode')?.value||'cash';
-  const isPending= document.getElementById('np-pending')?.checked||false;
-  const dateVal  = document.getElementById('np-date')?.value;
+async function savePurchaseRecord() {
+  const supplier  = (document.getElementById('pnp-sup-input')?.value||'').trim();
+  const invNum    = (document.getElementById('pnp-inv-num')?.value||'').trim();
+  const dateVal   = document.getElementById('pnp-date')?.value;
+  const payType   = document.getElementById('pnp-pay-type')?.value||'cash';
+  const payMode   = document.getElementById('pnp-pay-mode')?.value||'cash';
+  const cart      = window._purchCart;
+
+  if (!supplier) { showToast('Enter supplier name.','error'); return; }
+  if (!invNum)   { showToast('Enter supplier invoice number.','error'); return; }
+  if (!cart.length) { showToast('Add at least one item.','error'); return; }
+
   const dateObj  = dateVal?(()=>{const d=dateVal.split('-');return new Date(+d[0],+d[1]-1,+d[2]);})():new Date();
   const date     = dateObj.toLocaleDateString();
   const month    = dateObj.getFullYear()+'-'+String(dateObj.getMonth()+1).padStart(2,'0');
+  const purchaseInvoiceNum = invNum;
+  const mode     = payType==='cash'||payType==='transfer'||payType==='pos' ? payType : payMode;
 
-  if (!itemName) { showToast('Enter item name.','error'); return; }
-  if (qtyOrd < 1) { showToast('Enter quantity.','error'); return; }
-  if (cost <= 0)  { showToast('Enter cost price.','error'); return; }
-
-  const purchaseInvoiceNum = 'PO-'+Date.now();
   setSyncStatus('saving');
-
   try {
-    if (isPending) {
-      // Save as pending delivery
-      const pendId = uid();
-      const pend = {id:pendId, purchaseInvoiceNum, itemName, itemId:itemId||null,
-        supplier, orderedQty:qtyOrd, receivedQty:0, costPrice:cost,
-        payMode:mode, date, month, by:STATE.user?.name};
-      await fsSave('v2_pendingDeliveries', pendId, pend);
-      if (!STATE.pendingDeliveries) STATE.pendingDeliveries = {};
-      STATE.pendingDeliveries[pendId] = {...pend, _id:pendId};
-      showToast(`📦 Pending delivery recorded for ${itemName}`,'info');
-    } else {
-      // Save as received purchase — update inventory
-      const purchId = uid();
-      const purch = {id:purchId, purchaseInvoiceNum, itemName, itemId:itemId||null,
-        supplier, qty:qtyOrd, costPrice:cost, totalCost:qtyOrd*cost,
-        payMode:mode, date, month, by:STATE.user?.name};
-      await fsSave('v2_purchases', purchId, purch);
-      if (!STATE.purchases) STATE.purchases = {};
-      STATE.purchases[purchId] = {...purch, _id:purchId};
+    for (const item of cart) {
+      const isPending = item.received < item.ordered;
+      const receivedQty = item.received || 0;
+      const orderedQty  = item.ordered  || 0;
 
-      // Update inventory stock & cost
-      if (itemId && STATE.inventory?.[itemId]) {
-        const inv = STATE.inventory[itemId];
-        const updated = {...inv, qty:(inv.qty||0)+qtyOrd, costPrice:cost};
-        await fsSave('v2_inventory', itemId, updated);
-        STATE.inventory[itemId] = {...updated, _id:itemId};
-      } else if (itemId) {
-        // Item exists by ID but not in local state — skip gracefully
-      }
+      // Save received portion as purchase
+      if (receivedQty > 0) {
+        const purchId = uid();
+        const purch = {id:purchId, purchaseInvoiceNum, itemName:item.name, itemId:item.itemId||null,
+          supplier, qty:receivedQty, costPrice:item.cost, totalCost:receivedQty*item.cost-(item.discAmt||0),
+          payMode:mode, date, month, by:STATE.user?.name};
+        await fsSave(COLS.PURCHASES, purchId, purch);
+        if (!STATE.purchases) STATE.purchases={};
+        STATE.purchases[purchId]={...purch,_id:purchId};
 
-      // Record cashflow if not credit
-      if (mode !== 'credit') {
-        const cfId = uid();
-        const cf = {id:cfId, type:'out', cat:'Restock', desc:`Purchase: ${itemName} (${qtyOrd} units)`,
-          amount:qtyOrd*cost, payMode:mode, date, month, supplier, by:STATE.user?.name};
-        await fsSave('v2_cashflow', cfId, cf);
-        if (!STATE.cashflow) STATE.cashflow = {};
-        STATE.cashflow[cfId] = {...cf, _id:cfId};
-      } else {
-        // Credit purchase — add to supplier owed
-        const sup = Object.values(STATE.suppliers||{}).find(s=>s.name===supplier);
-        if (sup) {
-          const updSup = {...sup, owedToSupplier:(sup.owedToSupplier||0)+(qtyOrd*cost),
-            totalPurchased:(sup.totalPurchased||0)+(qtyOrd*cost)};
-          await fsSave('v2_suppliers', sup._id||sup.id, updSup);
-          STATE.suppliers[sup._id||sup.id] = updSup;
+        // Update inventory
+        if (item.itemId && STATE.inventory?.[item.itemId]) {
+          const inv = STATE.inventory[item.itemId];
+          const upd = {...inv, qty:(inv.qty||0)+receivedQty, cost:item.cost, costPrice:item.cost};
+          await fsSave(COLS.INVENTORY, item.itemId, upd);
+          STATE.inventory[item.itemId]={...upd,_id:item.itemId};
+        }
+        // Cashflow (non-credit)
+        if (payType!=='credit') {
+          const cfId=uid();
+          const cf={id:cfId,type:'out',cat:'Restock',desc:`Purchase: ${item.name} (${receivedQty} units)`,
+            amount:receivedQty*item.cost-(item.discAmt||0),payMode:mode,date,month,supplier,by:STATE.user?.name};
+          await fsSave(COLS.CASHFLOW, cfId, cf);
+          if(!STATE.cashflow)STATE.cashflow={};
+          STATE.cashflow[cfId]={...cf,_id:cfId};
+        } else {
+          // Credit — add to supplier owed
+          const sup=Object.values(STATE.suppliers||{}).find(s=>s.name===supplier);
+          if(sup){const updSup={...sup,owedToSupplier:(sup.owedToSupplier||0)+(receivedQty*item.cost-(item.discAmt||0))};
+            await fsSave(COLS.SUPPLIERS||'v2_suppliers',sup._id||sup.id,updSup);
+            STATE.suppliers[sup._id||sup.id]=updSup;}
         }
       }
-      showToast(`✅ Purchase saved: ${qtyOrd}× ${itemName}`,'success');
+
+      // Save pending portion
+      if (isPending && orderedQty > receivedQty) {
+        const pendId=uid();
+        const pend={id:pendId,purchaseInvoiceNum,itemName:item.name,itemId:item.itemId||null,
+          supplier,orderedQty,receivedQty,costPrice:item.cost,payMode:mode,date,month,by:STATE.user?.name};
+        await fsSave('v2_pendingDeliveries',pendId,pend);
+        if(!STATE.pendingDeliveries)STATE.pendingDeliveries={};
+        STATE.pendingDeliveries[pendId]={...pend,_id:pendId};
+      }
     }
 
-    closeModal(); setSyncStatus('synced'); renderPurchases();
-  } catch(e) { setSyncStatus('error'); showToast('Failed to save purchase.','error'); console.error(e); }
+    window._purchCart=[];
+    clearPurchaseForm();
+    setSyncStatus('synced');
+    renderPurchases();
+    renderOverviewIfActive();
+    updateInventoryBadge();
+    showToast(`✅ Purchase recorded — ${cart.length} item${cart.length!==1?'s':''}`, 'success');
+  } catch(e) {
+    setSyncStatus('error');
+    showToast('Failed to save purchase.','error');
+    console.error(e);
+  }
 }
+
+function generatePurchaseQuotation() {
+  const supplier = (document.getElementById('pnp-sup-input')?.value||'').trim() || 'Supplier';
+  const invNum   = (document.getElementById('pnp-inv-num')?.value||'').trim() || '—';
+  const cart     = window._purchCart;
+  if (!cart.length) { showToast('Add items first to generate a quotation.','info'); return; }
+  const rows = cart.map((item,idx)=>`<tr>
+    <td style="padding:7px 10px">${idx+1}</td>
+    <td style="padding:7px 10px"><b>${esc(item.name)}</b></td>
+    <td style="padding:7px 10px;text-align:center">${item.ordered}</td>
+    <td style="padding:7px 10px;text-align:center">${item.received}</td>
+    <td style="padding:7px 10px;text-align:right">₦${item.cost.toLocaleString()}</td>
+    <td style="padding:7px 10px;text-align:right"><b>₦${((item.received||item.ordered)*item.cost-(item.discAmt||0)).toLocaleString()}</b></td>
+  </tr>`).join('');
+  const grand = cart.reduce((a,i)=>(a+(i.received||i.ordered)*i.cost-(i.discAmt||0)),0);
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Purchase Quotation ${invNum}</title>
+  <style>body{font-family:Arial;max-width:700px;margin:20px auto;padding:20px}table{width:100%;border-collapse:collapse}
+  thead tr{background:#1a237e;color:#fff}thead th{padding:8px;font-size:11px;text-align:left}
+  td{border-bottom:1px solid #eee}@media print{body{padding:4px}}</style></head><body>
+  <div style="text-align:center;border-bottom:3px solid #c0392b;padding-bottom:12px;margin-bottom:14px">
+    <div style="font-size:20px;font-weight:900;color:#c0392b">GREAT CHID ELECTRO (NIG.)</div>
+    <div style="font-size:18px;font-weight:900;color:#1a237e">GLOBAL DOORS LTD</div>
+    <div style="font-size:10px;margin-top:4px">Ile-Bara Oke-Ado, Sabo Ilorin Rd, Ogbomoso — 08035158594</div>
+    <div style="display:inline-block;background:#1a237e;color:#fff;padding:4px 30px;border-radius:4px;font-weight:800;letter-spacing:2px;margin-top:10px">PURCHASE ORDER</div>
+  </div>
+  <div style="display:flex;justify-content:space-between;margin-bottom:14px;font-size:13px">
+    <div><b>Supplier:</b> ${esc(supplier)}</div>
+    <div style="text-align:right"><b>Invoice #:</b> ${esc(invNum)}<br><b>Date:</b> ${new Date().toLocaleDateString()}</div>
+  </div>
+  <table><thead><tr><th>#</th><th>Item</th><th style="text-align:center">Ordered</th><th style="text-align:center">Received</th><th style="text-align:right">Cost/Unit</th><th style="text-align:right">Total</th></tr></thead>
+  <tbody>${rows}</tbody>
+  <tfoot><tr style="font-weight:800;border-top:2px solid #1a237e">
+    <td colspan="5" style="padding:8px;text-align:right">GRAND TOTAL</td>
+    <td style="padding:8px;text-align:right;color:#c0392b;font-size:16px">₦${grand.toLocaleString()}</td>
+  </tr></tfoot></table>
+  <script>setTimeout(()=>window.print(),400)<\/script></body></html>`;
+  const w=window.open('','_blank','width=700,height=900');
+  if(w){w.document.write(html);w.document.close();}
+}
+
+function showNewPurchaseModal() { /* Legacy — replaced by inline form, kept for compat */ }
+function searchInventoryForPurchase(term) { searchInvForPurch(term); }
+function selectInventoryItemForPurchase(id,name) { pickInvForPurch(id,name,0); }
+function togglePendingFields() {}
 
 async function receivePendingItem(pendId) {
   const pend = STATE.pendingDeliveries?.[pendId];
