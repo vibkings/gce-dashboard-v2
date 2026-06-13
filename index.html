@@ -5765,14 +5765,14 @@ function renderClosing() {
   // Payment mode breakdown (split distributed)
   let cashIncome=0, posIncome=0, transferIncome=0, creditPayIn=0;
   invList.forEach(g=>{
+    if(g.payment==='credit') return; // credit — not collected yet, skip
     if(g.payMode==='split'&&g.splitPayment){
       const sp=g.splitPayment;
       const add=(m,v)=>{if(m==='cash')cashIncome+=v;else if(m==='pos')posIncome+=v;else if(m==='transfer')transferIncome+=v;};
       add(sp.mode1,sp.amt1||0); add(sp.mode2,sp.amt2||0);
-    } else if(g.payment==='credit') creditOwed; // already counted
-    else if(g.payMode==='pos') posIncome+=g.total;
+    } else if(g.payMode==='pos') posIncome+=g.total;
     else if(g.payMode==='transfer') transferIncome+=g.total;
-    else cashIncome+=g.total;
+    else cashIncome+=g.total; // cash, part-cash, walk-in default
   });
 
   // Credit payments received today (from cashflow)
@@ -6027,7 +6027,7 @@ function renderClosing() {
             g.payMode==='transfer'?'<span class="badge" style="background:#1a56db;color:#fff">Transfer</span>':
             '<span class="badge badge-success">Cash</span>';
           const modeStr = g.payMode==='split'&&g.splitPayment
-            ? `Split (${g.splitPayment.mode1}+${g.splitPayment.mode2})`
+            ? `${g.splitPayment.mode1}: ${fmt(g.splitPayment.amt1||0)} + ${g.splitPayment.mode2}: ${fmt(g.splitPayment.amt2||0)}`
             : g.payMode==='transfer'&&g.bankName ? `Transfer → ${esc(g.bankName)}`
             : g.payMode==='pos'&&g.posName ? `POS (${esc(g.posName)})`
             : g.payment==='credit' ? '—'
