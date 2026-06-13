@@ -6711,47 +6711,106 @@ function renderSupplierOverview() {
   const sups=Object.values(STATE.suppliers||{});
   const purchases=Object.values(STATE.purchases||{});
   const pending=Object.values(STATE.pendingDeliveries||{}).filter(p=>p.status!=='complete');
+
   const supMap={};
-  sups.forEach(s=>{supMap[s._id||s.id]={id:s._id||s.id,name:s.name,phone:s.phone||s.contact||'—',owedToSupplier:s.owedToSupplier||0,totalPurchased:0,totalPaid:0,invoiceCount:0,lastPurchase:null,pendingCount:0};});
-  purchases.forEach(p=>{const sid=p.supplierId||sups.find(s=>s.name===p.supplier)?._id;if(sid&&supMap[sid]){supMap[sid].totalPurchased+=p.totalCost||0;supMap[sid].invoiceCount++;const d=new Date(p.date);if(!supMap[sid].lastPurchase||d>supMap[sid].lastPurchase)supMap[sid].lastPurchase=d;}});
-  pending.forEach(p=>{const sid=p.supplierId||sups.find(s=>s.name===p.supplier)?._id;if(sid&&supMap[sid])supMap[sid].pendingCount++;});
+  sups.forEach(s=>{
+    supMap[s._id||s.id]={
+      id:s._id||s.id,name:s.name,phone:s.phone||s.contact||'—',
+      owedToSupplier:s.owedToSupplier||0,
+      totalPurchased:s.totalPurchased||0,totalPaid:0,
+      invoiceCount:0,lastPurchase:null,pendingCount:0,monthlySpend:{}
+    };
+  });
+  purchases.forEach(p=>{
+    const sid=p.supplierId||sups.find(s=>s.name===p.supplier)?._id||sups.find(s=>s.name===p.supplier)?.id;
+    if(sid&&supMap[sid]){
+      supMap[sid].totalPurchased+=p.totalCost||0;
+      supMap[sid].invoiceCount++;
+      const d=new Date(p.date);
+      if(!supMap[sid].lastPurchase||d>supMap[sid].lastPurchase)supMap[sid].lastPurchase=d;
+      const m=p.month||(d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'));
+      supMap[sid].monthlySpend[m]=(supMap[sid].monthlySpend[m]||0)+(p.totalCost||0);
+      if(p.payMode!=='credit')supMap[sid].totalPaid+=p.totalCost||0;
+    }
+  });
+  pending.forEach(p=>{
+    const sid=sups.find(s=>s.name===p.supplier)?._id||sups.find(s=>s.name===p.supplier)?.id;
+    if(sid&&supMap[sid])supMap[sid].pendingCount++;
+  });
+
   const supData=Object.values(supMap);
-  const totalOwed=supData.reduce((a,s)=>a+s.owedToSupplier,0);
+  const totalOwed=sups.reduce((a,s)=>a+(s.owedToSupplier||0),0);
   const totalPurchased=supData.reduce((a,s)=>a+s.totalPurchased,0);
+  const totalPaid=supData.reduce((a,s)=>a+s.totalPaid,0);
+  const activeSups=supData.filter(s=>s.invoiceCount>0).length;
+
   const search=(window._supOvSearch||'').toLowerCase();
   const filter=window._supOvFilter||'all';
   const filtered=supData.filter(s=>{
-    if(search&&!s.name.toLowerCase().includes(search)&&!s.phone.toLowerCase().includes(search))return false;
+    if(search&&!(s.name||'').toLowerCase().includes(search)&&!(s.phone||'').toLowerCase().includes(search))return false;
     if(filter==='balance')return s.owedToSupplier>0;
-    if(filter==='cleared')return s.owedToSupplier<=0;
+    if(filter==='cleared')return s.owedToSupplier<=0&&s.invoiceCount>0;
     if(filter==='active')return s.invoiceCount>0;
     return true;
-  });
+  }).sort((a,b)=>b.totalPurchased-a.totalPurchased);
+
   const top5=supData.slice().sort((a,b)=>b.totalPurchased-a.totalPurchased).slice(0,5);
   const maxP=top5[0]?.totalPurchased||1;
-  const colors=['#6366f1','#8b5cf6','#06b6d4','#10b981','#f59e0b'];
-  const bars=top5.map((s,i)=>{const pct=Math.round(s.totalPurchased/maxP*100);return`<div style="margin-bottom:10px"><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px"><span style="font-weight:600">${esc(s.name)}</span><span style="color:#6b7280">${fmt(s.totalPurchased)}</span></div><div style="background:var(--surface);border-radius:6px;height:10px;overflow:hidden"><div style="width:${pct}%;height:100%;background:${colors[i]};border-radius:6px"></div></div></div>`;}).join('');
-  const rows=filtered.map(s=>{
-    const statusBadge=s.owedToSupplier>0?'<span style="background:#fef3c7;color:#92400e;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:700">HAS BALANCE</span>':'<span style="background:#d1fae5;color:#065f46;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:700">CLEARED</span>';
-    const lastDate=s.lastPurchase?s.lastPurchase.toLocaleDateString():'—';
-    const payBtn=s.owedToSupplier>0?`<button class="btn btn-sm" onclick="showSupplierPayModal('${s.id}')" style="color:#15803d;border-color:#86efac;font-size:11px">Pay</button>`:'';
-    return `<tr><td><b>${esc(s.name)}</b></td><td>${s.phone}</td><td class="td-right">${fmt(s.totalPurchased)}</td><td class="td-right" style="color:var(--success)">${fmt(s.totalPaid)}</td><td class="td-right" style="color:${s.owedToSupplier>0?'var(--danger)':'inherit'}"><b>${fmt(s.owedToSupplier)}</b></td><td style="font-size:12px">${lastDate}</td><td style="text-align:center">${s.invoiceCount}</td><td style="text-align:center">${s.pendingCount}</td><td>${statusBadge}</td><td>${payBtn}</td></tr>`;
+  const clrs=['#6366f1','#8b5cf6','#06b6d4','#10b981','#f59e0b'];
+  const top5Bars=top5.map((s,i)=>{
+    const pct=Math.round(s.totalPurchased/maxP*100);
+    return `<div style="margin-bottom:12px"><div style="display:flex;justify-content:space-between;font-size:12px;font-weight:700;margin-bottom:4px;text-transform:uppercase;letter-spacing:.03em"><span>${esc(s.name)}</span><span style="color:${clrs[i]}">${fmt(s.totalPurchased)}</span></div><div style="background:var(--border);border-radius:6px;height:10px;overflow:hidden"><div style="width:${pct}%;height:100%;background:${clrs[i]};border-radius:6px"></div></div></div>`;
   }).join('');
-  el.innerHTML=`
-    <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:1.25rem">
-      ${kpiCard('info','Total Suppliers',sups.length,'')}
-      ${kpiCard('brand','Total Purchased',fmt(totalPurchased),'All time')}
-      ${kpiCard('danger','Owed to Suppliers',fmt(totalOwed),'Outstanding')}
-      ${kpiCard('warning','Pending Deliveries',pending.length,'Awaiting')}
-    </div>
-    ${top5.length?`<div class="card" style="padding:1rem;margin-bottom:1.25rem"><div class="sec-title" style="margin-bottom:.75rem">Top Suppliers by Purchase Volume</div>${bars}</div>`:''}
-    <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap">
-      <div style="position:relative;flex:1;max-width:300px"><span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--text3)">🔍</span><input class="form-input" style="padding-left:32px" placeholder="Search..." value="${window._supOvSearch||''}" oninput="window._supOvSearch=this.value;renderSupplierOverview()"></div>
-      ${['all','balance','cleared','active'].map(f=>`<button class="btn btn-sm ${filter===f?'btn-primary':''}" onclick="window._supOvFilter='${f}';renderSupplierOverview()">${f==='all'?'All':f==='balance'?'Has Balance':f==='cleared'?'Cleared':'Active'}</button>`).join('')}
-    </div>
-    ${rows?`<div class="tbl-wrap"><table><thead><tr><th>Supplier</th><th>Phone</th><th class="td-right">Total Purchased</th><th class="td-right">Total Paid</th><th class="td-right">Balance Owed</th><th>Last Purchase</th><th style="text-align:center">Orders</th><th style="text-align:center">Pending</th><th>Status</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`:'<div class="empty-state"><div class="empty-state-icon">🚛</div><div>No suppliers match filter.</div></div>'}`;
-}
 
+  const now=new Date();
+  const last6=Array.from({length:6},(_,i)=>{
+    const d=new Date(now.getFullYear(),now.getMonth()-5+i,1);
+    const key=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
+    const label=d.toLocaleString('en',{month:'short',year:'2-digit'});
+    const total=supData.reduce((a,s)=>a+(s.monthlySpend[key]||0),0);
+    return{key,label,total};
+  });
+  const maxBar=Math.max(...last6.map(m=>m.total),1);
+  const monthBars=last6.map(m=>{
+    const h=Math.max(4,Math.round(m.total/maxBar*100));
+    return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:4px"><div style="font-size:10px;color:var(--text3);font-weight:600;text-align:center">${m.total>0?fmt(m.total):'₦0'}</div><div style="width:100%;display:flex;align-items:flex-end;height:80px"><div style="width:100%;background:${m.total>0?'#6366f1':'var(--border)'};border-radius:4px 4px 0 0;height:${h}%;min-height:4px"></div></div><div style="font-size:10px;color:var(--text3)">${m.label}</div></div>`;
+  }).join('');
+
+  const rows=filtered.map(s=>{
+    const statusBadge=s.owedToSupplier>0?'<span style="background:#fef3c7;color:#92400e;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700">HAS BALANCE</span>':s.invoiceCount>0?'<span style="background:#d1fae5;color:#065f46;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700">CLEARED</span>':'<span style="background:var(--surface);color:var(--text3);padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700">NEW</span>';
+    const lastDate=s.lastPurchase?s.lastPurchase.toLocaleDateString():'—';
+    const payBtn=s.owedToSupplier>0?`<button class="btn btn-sm" onclick="showSupplierPayModal('${s.id}')" style="color:#15803d;border-color:#86efac;font-size:11px;padding:3px 8px">Pay</button>`:'';
+    return `<tr><td><b>${esc(s.name)}</b></td><td style="font-size:12px;color:var(--text3)">${esc(s.phone)}</td><td class="td-right" style="font-weight:600">${fmt(s.totalPurchased)}</td><td class="td-right" style="color:var(--success)">${fmt(s.totalPaid)}</td><td class="td-right" style="color:${s.owedToSupplier>0?'var(--danger)':'inherit'};font-weight:${s.owedToSupplier>0?700:400}">${fmt(s.owedToSupplier)}</td><td style="font-size:12px;color:var(--text3)">${lastDate}</td><td style="text-align:center">${s.invoiceCount}</td><td style="text-align:center;color:${s.pendingCount>0?'var(--warning)':'var(--text3)'}">${s.pendingCount}</td><td>${statusBadge}</td><td>${payBtn}</td></tr>`;
+  }).join('');
+
+  el.innerHTML=`
+    <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:1.25rem">
+      <div class="kpi-card" style="border-left:3px solid #8b5cf6"><div class="kpi-label" style="color:#8b5cf6">🚛 TOTAL SUPPLIERS</div><div class="kpi-value" style="font-size:26px;font-weight:800">${sups.length}</div><div class="kpi-sub">${activeSups} active</div></div>
+      <div class="kpi-card" style="border-left:3px solid var(--brand)"><div class="kpi-label" style="color:var(--brand)">💰 TOTAL PURCHASE VALUE</div><div class="kpi-value" style="font-size:18px;font-weight:800;color:var(--brand)">${fmt(totalPurchased)}</div><div class="kpi-sub">All time</div></div>
+      <div class="kpi-card" style="border-left:3px solid var(--success)"><div class="kpi-label" style="color:var(--success)">✅ TOTAL PAID</div><div class="kpi-value" style="font-size:18px;font-weight:800;color:var(--success)">${fmt(totalPaid)}</div><div class="kpi-sub">Confirmed payments</div></div>
+      <div class="kpi-card" style="border-left:3px solid var(--warning)"><div class="kpi-label" style="color:var(--warning)">⚠️ TOTAL OUTSTANDING</div><div class="kpi-value" style="font-size:18px;font-weight:800;color:${totalOwed>0?'var(--warning)':'var(--text1)'}">${fmt(totalOwed)}</div><div class="kpi-sub">${supData.filter(s=>s.owedToSupplier>0).length} with balance</div></div>
+      <div class="kpi-card" style="border-left:3px solid #7c3aed"><div class="kpi-label" style="color:#7c3aed">🔥 ACTIVE SUPPLIERS</div><div class="kpi-value" style="font-size:26px;font-weight:800;color:#7c3aed">${activeSups}</div><div class="kpi-sub">Have purchases</div></div>
+      <div class="kpi-card" style="border-left:3px solid var(--danger)"><div class="kpi-label" style="color:var(--danger)">📦 PENDING DELIVERIES</div><div class="kpi-value" style="font-size:26px;font-weight:800;color:${pending.length>0?'var(--danger)':'var(--text1)'}">${pending.length}</div><div class="kpi-sub">Awaiting receipt</div></div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:1.25rem">
+      <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px 16px">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--brand);margin-bottom:14px;display:flex;align-items:center;gap:6px"><span style="width:3px;height:14px;background:var(--brand);border-radius:2px;display:inline-block"></span>🏆 TOP 5 SUPPLIERS BY PURCHASE VALUE</div>
+        ${top5Bars||'<div style="color:var(--text3);text-align:center;padding:20px">No purchase data yet</div>'}
+      </div>
+      <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px 16px">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--brand);margin-bottom:14px;display:flex;align-items:center;gap:6px"><span style="width:3px;height:14px;background:var(--brand);border-radius:2px;display:inline-block"></span>📅 MONTHLY SUPPLIER PAYMENTS (LAST 6 MONTHS)</div>
+        <div style="display:flex;gap:4px;align-items:flex-end;height:120px;padding:0 4px">${monthBars}</div>
+      </div>
+    </div>
+    <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px 16px">
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--brand);margin-bottom:12px;display:flex;align-items:center;gap:6px"><span style="width:3px;height:14px;background:var(--brand);border-radius:2px;display:inline-block"></span>📋 SUPPLIER PERFORMANCE</div>
+      <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
+        <div class="search-wrap" style="flex:1;max-width:280px"><span class="search-icon">🔍</span><input class="form-input" placeholder="Search suppliers..." value="${window._supOvSearch||''}" oninput="window._supOvSearch=this.value;renderSupplierOverview()"></div>
+        ${['all','balance','cleared','active'].map(f=>`<button class="btn btn-sm ${filter===f?'btn-primary':''}" onclick="window._supOvFilter='${f}';renderSupplierOverview()">${f==='all'?'All':f==='balance'?'Has Balance':f==='cleared'?'Cleared':'Active'}</button>`).join('')}
+      </div>
+      ${rows?`<div class="tbl-wrap" style="border-radius:var(--radius);border:1px solid var(--border)"><table><thead><tr><th>SUPPLIER</th><th>PHONE</th><th class="td-right">TOTAL PURCHASES</th><th class="td-right">TOTAL PAID</th><th class="td-right">OUTSTANDING</th><th>LAST PURCHASE</th><th style="text-align:center">INVOICES</th><th style="text-align:center">PENDING</th><th>STATUS</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`:'<div class="empty-state"><div class="empty-state-icon">🚛</div><div>No suppliers match filter.</div></div>'}
+    </div>`;
+}
 // ── CUSTOMER OVERVIEW ────────────────────────────────────
 function renderCustomerOverview() {
   const el=document.getElementById('customeroverview-content'); if(!el)return;
