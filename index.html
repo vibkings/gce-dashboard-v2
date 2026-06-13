@@ -2646,15 +2646,19 @@ function _buildInvoiceHTML(invNum) {
   const s0 = items[0];
   const gt = items.reduce((a,s)=>a+(s.total||0),0);
 
-  // ── SVG Shield Logo ─────────────────────────────────────
-  const shieldSVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 95" width="70" height="82">
+  // ── SVG Shield Logo ──────────────────────────────────────
+  const shield = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 95" width="72" height="85">
     <defs>
-      <linearGradient id="sg" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" style="stop-color:#c0392b"/><stop offset="100%" style="stop-color:#7b241c"/></linearGradient>
-      <linearGradient id="gg" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" style="stop-color:#f9d835"/><stop offset="100%" style="stop-color:#c9a227"/></linearGradient>
+      <linearGradient id="sg" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" style="stop-color:#c0392b"/><stop offset="100%" style="stop-color:#7b241c"/>
+      </linearGradient>
+      <linearGradient id="gg" x1="0%" y1="0%" x2="0%" y2="100%">
+        <stop offset="0%" style="stop-color:#f9d835"/><stop offset="100%" style="stop-color:#c9a227"/>
+      </linearGradient>
     </defs>
     <path d="M40 2 L76 17 L76 50 C76 70 40 90 40 90 C40 90 4 70 4 50 L4 17 Z" fill="url(#sg)" stroke="url(#gg)" stroke-width="3.5"/>
     <path d="M40 11 L68 24 L68 50 C68 66 40 82 40 82 C40 82 12 66 12 50 L12 24 Z" fill="none" stroke="url(#gg)" stroke-width="1.5" opacity="0.5"/>
-    <text x="40" y="36" text-anchor="middle" font-family="Arial Black,sans-serif" font-size="13" font-weight="900" fill="#f9d835" letter-spacing="2">GCE</text>
+    <text x="40" y="35" text-anchor="middle" font-family="Arial Black,sans-serif" font-size="13" font-weight="900" fill="#f9d835" letter-spacing="2">GCE</text>
     <line x1="14" y1="41" x2="66" y2="41" stroke="#f9d835" stroke-width="1.2" opacity="0.6"/>
     <rect x="29" y="46" width="22" height="26" rx="2" fill="none" stroke="#f9d835" stroke-width="1.8"/>
     <rect x="35" y="57" width="10" height="15" rx="1" fill="#f9d835"/>
@@ -2662,202 +2666,228 @@ function _buildInvoiceHTML(invNum) {
     <text x="40" y="80" text-anchor="middle" font-family="Arial,sans-serif" font-size="7" font-weight="700" fill="#f9d835" letter-spacing="1.5">ELECTRO</text>
   </svg>`;
 
-  // ── Date breakdown ───────────────────────────────────────
-  let day='', month='', year='';
+  // ── Date parse ───────────────────────────────────────────
+  let day='', mon='', yr='';
   try {
-    const dateStr = s0.date||'';
-    const parts = dateStr.split('/');
-    if(parts.length===3){ month=parts[0]; day=parts[1]; year=parts[2]; }
+    const d = new Date(s0.date);
+    if(!isNaN(d)) { day=String(d.getDate()).padStart(2,'0'); mon=String(d.getMonth()+1).padStart(2,'0'); yr=d.getFullYear(); }
     else {
-      const d=new Date(dateStr); if(!isNaN(d)){
-        day=String(d.getDate()).padStart(2,'0');
-        month=String(d.getMonth()+1).padStart(2,'0');
-        year=d.getFullYear();
-      }
+      const p = (s0.date||'').split('/');
+      if(p.length===3){ mon=p[0]; day=p[1]; yr=p[2]; }
     }
-  } catch(_){}
+  } catch(e){}
 
   // ── Payment labels ───────────────────────────────────────
   const payMode = s0.payMode||'cash';
   const payment = s0.payment||'paid';
   let payTypeLabel = 'CASH SALE';
-  if(payment==='credit') payTypeLabel='CREDIT SALE';
-  else if(payment==='part') payTypeLabel='PART PAYMENT';
-  else if(payMode==='pos') payTypeLabel='POS SALE';
-  else if(payMode==='transfer') payTypeLabel='CASH SALE';
-  else if(payMode==='split') payTypeLabel='SPLIT PAYMENT';
+  if(payment==='credit')       payTypeLabel = 'CREDIT SALE';
+  else if(payment==='part')    payTypeLabel = 'PART PAYMENT';
+  else if(payMode==='pos')     payTypeLabel = 'POS SALE';
+  else if(payMode==='transfer')payTypeLabel = 'CASH SALE';
+  else if(payMode==='split')   payTypeLabel = 'SPLIT PAYMENT';
 
-  let payModeLabel = '';
-  if(payMode==='transfer') payModeLabel = s0.bankName||'Bank Transfer';
+  let payModeLabel = 'Cash';
+  if(payMode==='transfer') payModeLabel = s0.bankName||'Bank transfer';
   else if(payMode==='pos') payModeLabel = s0.posName||'POS Terminal';
-  else if(payMode==='split' && s0.splitPayment) {
+  else if(payMode==='split'&&s0.splitPayment) {
     const sp=s0.splitPayment;
-    payModeLabel=`${sp.mode1||'Cash'}: ₦${(sp.amt1||0).toLocaleString()} + ${sp.mode2||'Transfer'}: ₦${(sp.amt2||0).toLocaleString()}`;
-  } else payModeLabel = 'Cash';
+    payModeLabel=`${sp.mode1||'Cash'}: &#8358;${(sp.amt1||0).toLocaleString()} + ${sp.mode2||'Transfer'}: &#8358;${(sp.amt2||0).toLocaleString()}`;
+  }
 
   // ── Amount paid ──────────────────────────────────────────
   let amountPaid = gt;
-  if(payment==='credit') amountPaid=0;
-  else if(payment==='part') amountPaid=s0.partPayment||0;
+  if(payment==='credit') amountPaid = 0;
+  else if(payment==='part') amountPaid = s0.partPayment||0;
 
-  // ── Item rows (with empty rows to fill page) ─────────────
-  const TOTAL_ROWS = 15;
+  // ── Item rows (15 total rows) ────────────────────────────
+  const ROWS = 15;
   const itemRows = items.map((s,i)=>`
     <tr>
-      <td style="padding:5px 8px;border-right:1px solid #ddd;border-bottom:1px solid #f5f5f5;font-size:12px;color:#666;text-align:center">${i+1}</td>
-      <td style="padding:5px 10px;border-right:1px solid #ddd;border-bottom:1px solid #f5f5f5;font-size:13px">${esc(s.name)}</td>
-      <td style="padding:5px 8px;border-right:1px solid #ddd;border-bottom:1px solid #f5f5f5;text-align:center;font-size:13px">${s.qty}</td>
-      <td style="padding:5px 8px;border-right:1px solid #ddd;border-bottom:1px solid #f5f5f5;text-align:right;font-size:13px">&#8358;${(s.salePrice||0).toLocaleString()}</td>
-      <td style="padding:5px 8px;border-right:1px solid #ddd;border-bottom:1px solid #f5f5f5;text-align:center;font-size:12px;color:#999">—</td>
-      <td style="padding:5px 8px;border-bottom:1px solid #f5f5f5;text-align:right;font-size:13px;font-weight:600">&#8358;${(s.total||0).toLocaleString()}</td>
+      <td style="padding:5px 8px;border-right:1px solid #ddd;font-size:12px;color:#555;text-align:center">${i+1}</td>
+      <td style="padding:5px 10px;border-right:1px solid #ddd;font-size:13px">${esc(s.name)}</td>
+      <td style="padding:5px 8px;border-right:1px solid #ddd;text-align:center;font-size:13px">${s.qty}</td>
+      <td style="padding:5px 8px;border-right:1px solid #ddd;text-align:right;font-size:13px">&#8358;${(s.salePrice||0).toLocaleString()}</td>
+      <td style="padding:5px 8px;border-right:1px solid #ddd;text-align:center;font-size:12px;color:#aaa">—</td>
+      <td style="padding:5px 8px;text-align:right;font-size:13px;font-weight:600">&#8358;${(s.total||0).toLocaleString()}</td>
     </tr>`).join('');
 
-  const emptyRows = Array(Math.max(0, TOTAL_ROWS-items.length)).fill(`
-    <tr style="height:28px">
-      <td style="border-right:1px solid #ddd;border-bottom:1px solid #f5f5f5"></td>
-      <td style="border-right:1px solid #ddd;border-bottom:1px solid #f5f5f5"></td>
-      <td style="border-right:1px solid #ddd;border-bottom:1px solid #f5f5f5"></td>
-      <td style="border-right:1px solid #ddd;border-bottom:1px solid #f5f5f5"></td>
-      <td style="border-right:1px solid #ddd;border-bottom:1px solid #f5f5f5"></td>
-      <td style="border-bottom:1px solid #f5f5f5"></td>
+  const emptyRows = Array(Math.max(0,ROWS-items.length)).fill(`
+    <tr style="height:26px">
+      <td style="border-right:1px solid #ddd"></td>
+      <td style="border-right:1px solid #ddd"></td>
+      <td style="border-right:1px solid #ddd"></td>
+      <td style="border-right:1px solid #ddd"></td>
+      <td style="border-right:1px solid #ddd"></td>
+      <td></td>
     </tr>`).join('');
 
-  const custName = s0.custName||s0.printName||'Walk-in customer';
+  const custName = s0.printName||s0.custName||'Walk-in customer';
   const address  = s0.deliveryAddr||s0.address||'';
+  const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=80x80&data=https://greatchidelectro.com`;
+
+  // ── Extra rows for part payment ──────────────────────────
+  let extraRows = '';
+  if(payment==='part') {
+    const bal = Math.max(0,gt-amountPaid);
+    extraRows += `
+      <tr style="background:#fffbeb">
+        <td colspan="5" style="padding:6px 10px;text-align:right;font-size:12px;color:#92400e;font-weight:600">AMOUNT PAID</td>
+        <td style="padding:6px 10px;text-align:right;font-size:13px;color:#92400e;font-weight:700">&#8358;${amountPaid.toLocaleString()}</td>
+      </tr>
+      <tr style="background:#fef2f2">
+        <td colspan="5" style="padding:6px 10px;text-align:right;font-size:12px;color:#c0392b;font-weight:700">BALANCE DUE</td>
+        <td style="padding:6px 10px;text-align:right;font-size:14px;color:#c0392b;font-weight:900">&#8358;${bal.toLocaleString()}</td>
+      </tr>`;
+  }
 
   return `<!DOCTYPE html><html><head><meta charset="UTF-8">
   <title>Invoice #${invNum}</title>
   <style>
     *{margin:0;padding:0;box-sizing:border-box}
-    body{font-family:'Arial',sans-serif;background:#fff;color:#111;padding:20px;max-width:780px;margin:0 auto;font-size:13px}
-    .watermark{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%) rotate(-35deg);font-size:80px;font-weight:900;color:rgba(192,57,43,.08);white-space:nowrap;pointer-events:none;z-index:0;letter-spacing:4px;line-height:1.1;text-align:center}
-    @media print{body{padding:6px}button{display:none!important}.watermark{position:fixed}}
+    body{font-family:'Arial',sans-serif;background:#fff;color:#111;padding:20px 24px;max-width:780px;margin:0 auto}
+    .watermark{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%) rotate(-32deg);font-size:90px;font-weight:900;color:rgba(192,57,43,.065);white-space:nowrap;pointer-events:none;z-index:0;letter-spacing:4px;line-height:1.15;text-align:center;user-select:none}
+    table{width:100%;border-collapse:collapse}
+    @media print{body{padding:6px 10px}button{display:none!important}.watermark,.supplied-section *{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
   </style></head><body>
 
-  <!-- Watermark -->
   <div class="watermark">GCE<br>ORIGINAL<br>INVOICE</div>
 
   <div style="position:relative;z-index:1">
-  <!-- HEADER -->
-  <div style="display:flex;align-items:flex-start;gap:16px;border-bottom:3px solid #c0392b;padding-bottom:12px;margin-bottom:14px">
-    <div style="flex-shrink:0">${shieldSVG}</div>
+
+  <!-- Invoice number top center -->
+  <div style="text-align:center;font-size:11px;color:#666;margin-bottom:6px">Invoice #${invNum}</div>
+
+  <!-- Header -->
+  <div style="display:flex;align-items:flex-start;gap:14px;border-bottom:3px solid #c0392b;padding-bottom:12px;margin-bottom:12px">
+    <div style="flex-shrink:0">${shield}</div>
     <div style="flex:1;text-align:center">
       <div style="font-size:22px;font-weight:900;color:#c0392b;letter-spacing:.5px;line-height:1.1">GREAT CHID ELECTRO (NIG.)</div>
       <div style="font-size:20px;font-weight:900;color:#1a237e;letter-spacing:.5px;margin:2px 0">GLOBAL DOORS LTD</div>
-      <div style="font-size:10px;font-weight:700;color:#1a237e;text-transform:uppercase;letter-spacing:.5px">A Subsidiary of De-Chdex Electrics International</div>
-      <div style="font-size:10px;color:#555;margin-top:4px;line-height:1.6">Multi-Stockist of all Electrical Materials, Fancy Wall Brackets, Chandeliers and Home Furnitures</div>
-      <div style="font-size:10px;color:#c0392b;font-weight:600;margin-top:3px"><b>OGBOMOSO OFFICE:</b> Ile-Bara Oke-Ado, Sabo Ilorin Rd, Ogbomoso, Oyo State. Tel: 08035158594, 08100170802</div>
-      <div style="font-size:10px;color:#1a237e;font-weight:600"><b>ILORIN HEAD OFFICE:</b> 189, Ibrahim Taiwo Rd, beside UBA Bank, Ilorin, Kwara State. Tel: 08033617798, 08060960040</div>
+      <div style="font-size:9.5px;font-weight:700;color:#1a237e;text-transform:uppercase;letter-spacing:.5px">A Subsidiary of De-Chdex Electrics International</div>
+      <div style="font-size:9.5px;color:#555;margin-top:3px">Multi-Stockist of all Electrical Materials, Fancy Wall Brackets, Chandeliers and Home Furnitures</div>
+      <div style="font-size:9.5px;color:#c0392b;font-weight:600;margin-top:2px"><b>OGBOMOSO OFFICE:</b> Ile-Bara Oke-Ado, Sabo Ilorin Rd, Ogbomoso, Oyo State. Tel: 08035158594, 08100170802</div>
+      <div style="font-size:9.5px;color:#333;font-weight:600"><b>ILORIN HEAD OFFICE:</b> 189, Ibrahim Taiwo Rd, beside UBA Bank, Ilorin, Kwara State. Tel: 08033617798, 08060960040</div>
     </div>
-    <div style="flex-shrink:0">${shieldSVG}</div>
+    <div style="flex-shrink:0">${shield}</div>
   </div>
 
-  <!-- SALES INVOICE BADGE -->
+  <!-- SALES INVOICE badge -->
   <div style="text-align:center;margin-bottom:14px">
-    <div style="display:inline-block;background:#c0392b;color:#fff;font-size:14px;font-weight:800;padding:6px 40px;border-radius:4px;letter-spacing:2px;text-transform:uppercase">SALES INVOICE</div>
+    <span style="display:inline-block;background:#c0392b;color:#fff;font-size:13px;font-weight:800;padding:5px 38px;border-radius:4px;letter-spacing:2px">SALES INVOICE</span>
   </div>
 
-  <!-- CUSTOMER + DATE GRID -->
-  <div style="display:grid;grid-template-columns:1fr auto;gap:0;border:1px solid #ddd;margin-bottom:14px">
-    <div style="padding:10px 12px;border-right:1px solid #ddd">
-      <div style="font-size:10px;color:#999;text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px">Name:</div>
-      <div style="font-size:14px;font-weight:700">${esc(custName)}</div>
-      <div style="font-size:10px;color:#999;text-transform:uppercase;letter-spacing:.05em;margin-top:8px;margin-bottom:3px">Address:</div>
-      <div style="font-size:13px;min-height:18px">${esc(address)}</div>
+  <!-- Customer + Date grid -->
+  <div style="display:grid;grid-template-columns:1fr auto;border:1px solid #ccc;margin-bottom:14px">
+    <div style="padding:10px 12px;border-right:1px solid #ccc">
+      <div style="font-size:9.5px;color:#888;margin-bottom:2px">Name:</div>
+      <div style="font-size:14px;font-weight:700;margin-bottom:8px">${esc(custName)}</div>
+      <div style="font-size:9.5px;color:#888;margin-bottom:2px">Address:</div>
+      <div style="font-size:13px;min-height:18px;border-bottom:1px solid #ddd;padding-bottom:4px">${esc(address)}</div>
     </div>
-    <div style="flex-shrink:0;padding:10px 12px;min-width:200px">
-      <div style="display:flex;justify-content:flex-end;align-items:center;gap:4px;margin-bottom:8px">
-        <span style="font-size:12px;color:#999">No:</span>
-        <span style="font-size:15px;font-weight:800;color:#c0392b">${esc(invNum)}</span>
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;border:1px solid #ddd;border-radius:4px;overflow:hidden;text-align:center">
-        <div style="padding:4px;background:#c0392b;color:#fff;font-size:10px;font-weight:700">DAY</div>
-        <div style="padding:4px;background:#c0392b;color:#fff;font-size:10px;font-weight:700;border-left:1px solid rgba(255,255,255,.3)">MONTH</div>
-        <div style="padding:4px;background:#c0392b;color:#fff;font-size:10px;font-weight:700;border-left:1px solid rgba(255,255,255,.3)">YEAR</div>
-        <div style="padding:6px 4px;font-size:16px;font-weight:800;border-right:1px solid #ddd;border-top:1px solid #ddd">${day}</div>
-        <div style="padding:6px 4px;font-size:16px;font-weight:800;border-right:1px solid #ddd;border-top:1px solid #ddd">${month}</div>
-        <div style="padding:6px 4px;font-size:16px;font-weight:800;border-top:1px solid #ddd">${year}</div>
+    <div style="padding:10px 12px;text-align:right;min-width:200px">
+      <div style="font-size:13px;margin-bottom:8px"><span style="color:#888">No:</span> <b style="font-size:16px;color:#c0392b">${invNum}</b></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;border:1px solid #ccc;border-radius:4px;overflow:hidden;text-align:center;width:160px;margin-left:auto">
+        <div style="background:#c0392b;color:#fff;font-size:9px;font-weight:700;padding:3px">DAY</div>
+        <div style="background:#c0392b;color:#fff;font-size:9px;font-weight:700;padding:3px;border-left:1px solid rgba(255,255,255,.3)">MONTH</div>
+        <div style="background:#c0392b;color:#fff;font-size:9px;font-weight:700;padding:3px;border-left:1px solid rgba(255,255,255,.3)">YEAR</div>
+        <div style="font-size:17px;font-weight:800;padding:5px 4px;border-right:1px solid #ccc;border-top:1px solid #ccc">${day}</div>
+        <div style="font-size:17px;font-weight:800;padding:5px 4px;border-right:1px solid #ccc;border-top:1px solid #ccc">${mon}</div>
+        <div style="font-size:17px;font-weight:800;padding:5px 4px;border-top:1px solid #ccc">${yr}</div>
       </div>
     </div>
   </div>
 
-  <!-- ITEMS TABLE -->
-  <table style="width:100%;border-collapse:collapse;border:1px solid #ddd;margin-bottom:0">
+  <!-- Items table -->
+  <table style="border:1px solid #ccc;margin-bottom:0">
     <thead>
       <tr style="background:#c0392b;color:#fff">
-        <th style="padding:8px;width:36px;text-align:center;font-size:11px;font-weight:800;border-right:1px solid rgba(255,255,255,.3)">#</th>
-        <th style="padding:8px;text-align:left;font-size:11px;font-weight:800;border-right:1px solid rgba(255,255,255,.3)">DESCRIPTION OF GOODS</th>
-        <th style="padding:8px;width:60px;text-align:center;font-size:11px;font-weight:800;border-right:1px solid rgba(255,255,255,.3)">QTY.</th>
-        <th style="padding:8px;width:110px;text-align:right;font-size:11px;font-weight:800;border-right:1px solid rgba(255,255,255,.3)">RATE</th>
-        <th style="padding:8px;width:70px;text-align:center;font-size:11px;font-weight:800;border-right:1px solid rgba(255,255,255,.3)">DISC.</th>
-        <th style="padding:8px;width:120px;text-align:right;font-size:11px;font-weight:800">AMOUNT</th>
+        <th style="padding:7px 8px;width:32px;text-align:center;font-size:10.5px;font-weight:800;border-right:1px solid rgba(255,255,255,.25)">#</th>
+        <th style="padding:7px 10px;text-align:left;font-size:10.5px;font-weight:800;border-right:1px solid rgba(255,255,255,.25)">DESCRIPTION OF GOODS</th>
+        <th style="padding:7px 8px;width:56px;text-align:center;font-size:10.5px;font-weight:800;border-right:1px solid rgba(255,255,255,.25)">QTY.</th>
+        <th style="padding:7px 8px;width:110px;text-align:right;font-size:10.5px;font-weight:800;border-right:1px solid rgba(255,255,255,.25)">RATE</th>
+        <th style="padding:7px 8px;width:66px;text-align:center;font-size:10.5px;font-weight:800;border-right:1px solid rgba(255,255,255,.25)">DISC.</th>
+        <th style="padding:7px 8px;width:120px;text-align:right;font-size:10.5px;font-weight:800">AMOUNT</th>
       </tr>
     </thead>
-    <tbody>
+    <tbody style="border-bottom:2px solid #c0392b">
       ${itemRows}
       ${emptyRows}
     </tbody>
     <tfoot>
-      <tr style="border-top:2px solid #ddd">
-        <td colspan="5" style="padding:8px 10px;text-align:right;font-size:13px;font-weight:700;color:#555">TOTAL</td>
-        <td style="padding:8px 10px;text-align:right;font-size:14px;font-weight:800;color:#c0392b">&#8358;${gt.toLocaleString()}</td>
+      <tr style="border-top:2px solid #c0392b">
+        <td colspan="5" style="padding:7px 10px;text-align:right;font-size:13px;font-weight:700;color:#555">TOTAL</td>
+        <td style="padding:7px 10px;text-align:right;font-size:14px;font-weight:800">&#8358;${gt.toLocaleString()}</td>
       </tr>
-      <tr style="background:#f0fdf4">
-        <td colspan="5" style="padding:8px 10px;text-align:right;font-size:13px;font-weight:700;color:#166534">AMOUNT PAID</td>
-        <td style="padding:8px 10px;text-align:right;font-size:14px;font-weight:800;color:#166534">&#8358;${amountPaid.toLocaleString()}</td>
+      <tr>
+        <td colspan="5" style="padding:6px 10px;text-align:right;font-size:12px;font-weight:600;color:#555">AMOUNT PAID</td>
+        <td style="padding:6px 10px;text-align:right;font-size:13px;font-weight:700">&#8358;${amountPaid.toLocaleString()}</td>
       </tr>
-      ${payment==='part'?`<tr style="background:#fef2f2">
-        <td colspan="5" style="padding:8px 10px;text-align:right;font-size:13px;font-weight:700;color:#dc2626">BALANCE DUE</td>
-        <td style="padding:8px 10px;text-align:right;font-size:14px;font-weight:800;color:#dc2626">&#8358;${Math.max(0,gt-amountPaid).toLocaleString()}</td>
-      </tr>`:''}
+      ${extraRows}
     </tfoot>
   </table>
 
-  <!-- PAYMENT FOOTER -->
-  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-top:14px;margin-bottom:14px">
+  <!-- Payment footer -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;margin-top:14px;margin-bottom:8px;gap:8px">
     <div>
-      <div style="font-size:9px;font-weight:700;color:#999;text-transform:uppercase;letter-spacing:.08em;margin-bottom:3px">Payment Type</div>
+      <div style="font-size:9px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:.06em;margin-bottom:3px">Payment Type</div>
       <div style="font-size:16px;font-weight:900;color:#1a237e">${payTypeLabel}</div>
     </div>
     <div>
-      <div style="font-size:9px;font-weight:700;color:#999;text-transform:uppercase;letter-spacing:.08em;margin-bottom:3px">Payment Mode</div>
-      <div style="font-size:14px;font-weight:700;color:#374151">${esc(payModeLabel)}</div>
-    </div>
-    <div>
-      <div style="font-size:9px;font-weight:700;color:#999;text-transform:uppercase;letter-spacing:.08em;margin-bottom:3px">Served By</div>
-      <div style="font-size:14px;font-weight:700;color:#374151">${esc(s0.seller||'')}</div>
+      <div style="font-size:9px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:.06em;margin-bottom:3px">Payment Mode</div>
+      <div style="font-size:13px;font-weight:700">${esc(payModeLabel)}</div>
     </div>
   </div>
-
-  <!-- DISCLAIMER -->
-  <div style="font-size:11px;color:#555;margin-bottom:6px">
-    <span style="font-style:italic">Examine well and receive the above goods in good condition. No refund of money or exchange after payment.</span><br>
-    <span style="color:#c0392b;font-style:italic">...thanks for your patronage</span>
+  <div style="margin-bottom:14px">
+    <div style="font-size:9px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:.06em;margin-bottom:3px">Served By</div>
+    <div style="font-size:14px;font-weight:900">${esc(s0.seller||'')}</div>
   </div>
 
-  <!-- THANK YOU -->
-  <div style="text-align:center;font-size:11px;color:#555;border-top:1px dashed #ddd;padding-top:8px;margin-bottom:20px">
-    Thank you for patronizing Great Chid Electro (Nig.) &nbsp;|&nbsp; Come again!
+  <!-- Disclaimer box -->
+  <div style="border:1px solid #ddd;padding:8px 12px;margin-bottom:10px">
+    <div style="font-size:11px"><b style="color:#c0392b;font-style:italic">Examine well and receive the above goods in good condition.</b> <span style="color:#555">No refund of money or exchange after payment.</span></div>
+    <div style="font-size:10.5px;color:#c0392b;font-style:italic;margin-top:3px">...thanks for your patronage</div>
   </div>
 
-  <!-- SIGNATURE LINE -->
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:40px;margin-top:20px">
+  <!-- Thank you -->
+  <div style="text-align:center;font-size:11px;color:#555;font-style:italic;margin-bottom:22px">
+    Thank you for patronizing <b>Great Chid Electro (Nig.)</b> | Come again!
+  </div>
+
+  <!-- Signatures -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:40px;margin-bottom:20px">
     <div style="text-align:center">
-      <div style="border-top:1px solid #333;padding-top:4px;font-size:11px;color:#555">Customer Signature</div>
+      <div style="border-top:1px solid #333;padding-top:5px;font-size:11px;color:#555">Customer Signature</div>
     </div>
     <div style="text-align:center">
-      <div style="font-size:28px;color:#666;margin-bottom:4px;font-family:serif;opacity:.6">&#x2133;</div>
-      <div style="border-top:1px solid #333;padding-top:4px;font-size:11px;color:#555">Authorized Signature</div>
+      <div style="font-size:34px;color:#555;margin-bottom:2px;font-family:serif;opacity:.65;line-height:1">&#x2133;</div>
+      <div style="border-top:1px solid #333;padding-top:5px;font-size:11px;color:#555">Authorized Signature</div>
     </div>
   </div>
+
+  <!-- SUPPLIED box + QR -->
+  <div style="display:flex;align-items:stretch;gap:0;border:2px solid #16a34a;border-radius:4px;overflow:hidden;margin-top:8px">
+    <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:12px;background:#f0fdf4">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+        <span style="display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;background:#16a34a;border-radius:4px;color:#fff;font-size:14px">✓</span>
+        <span style="font-size:18px;font-weight:900;color:#16a34a;letter-spacing:2px">SUPPLIED</span>
+      </div>
+      <div style="font-size:11px;color:#16a34a;font-style:italic">Goods collected by customer.</div>
+    </div>
+    <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;padding:10px 14px;border-left:2px solid #16a34a;background:#fff">
+      <img id="qrimg" src="${qrUrl}" width="80" height="80" alt="QR" style="display:block;margin-bottom:4px">
+      <div style="font-size:8.5px;color:#555;text-align:center;font-weight:600">SCAN ME</div>
+      <div style="font-size:7.5px;color:#888;text-align:center">greatchidelectro.com</div>
+    </div>
   </div>
+
+  </div><!-- end z-index wrapper -->
 
   <script>
-    const img = new Image();
-    img.onload = ()=>setTimeout(()=>window.print(),400);
-    img.onerror = ()=>setTimeout(()=>window.print(),400);
-    img.src = 'data:image/gif;base64,R0lGOD';
-    setTimeout(()=>window.print(),600);
+    const img = document.getElementById('qrimg');
+    function doPrint(){window.print();}
+    if(img.complete){setTimeout(doPrint,500);}
+    else{img.onload=()=>setTimeout(doPrint,500);img.onerror=()=>setTimeout(doPrint,500);}
   <\/script>
   </body></html>`;
 }
@@ -4050,7 +4080,7 @@ function renderWarehouse() {
       <td class="td-center">${statusChip}</td>
       <td>
         <div style="display:flex;gap:4px">
-          <button class="btn btn-sm btn-primary" onclick="showTransferModal('${w._id}','toShop')">→ Shop</button>
+          <button class="btn btn-sm btn-primary" onclick="showTransferModal('${w._id}','toShop')" style="font-size:11px">🏭→🏬 To Shop</button>
           <button class="btn btn-sm" onclick="showWhStockAdjModal('${w._id}')">⚖️</button>
         </div>
       </td>
@@ -4071,8 +4101,8 @@ function renderWarehouse() {
     </div>`:''}
 
     <div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:1rem">
+      <button class="btn btn-primary" onclick="showTransferFromShopModal()" style="background:#1a237e;border-color:#1a237e">🏬 → 🏭 Shop to Warehouse</button>
       <button class="btn btn-primary" onclick="showAddWhItemModal()">+ Add to Warehouse</button>
-      <button class="btn" onclick="showTransferFromShopModal()">Shop → Warehouse</button>
     </div>
 
     <div class="tbl-wrap">
