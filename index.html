@@ -1221,37 +1221,30 @@ async function initApp() {
   const av = document.getElementById('user-avatar');
   av.textContent = (STATE.user.name || STATE.user.username)[0].toUpperCase();
   av.style.background = (ROLES[STATE.user.role] || {}).color || '#6b7280';
-  // Build nav
+  // Build nav & show UI immediately
   buildNav();
-  // Show overview immediately with whatever data is in STATE
-  switchPage('overview');
-  // Mobile menu
   document.getElementById('mob-menu-btn').style.display = '';
   document.getElementById('mob-menu-btn').onclick = () => {
     document.getElementById('sidebar').classList.toggle('open');
   };
   document.getElementById('signout-btn').onclick = doSignout;
+  // Render overview immediately (shows zeros until data loads)
+  switchPage('overview');
   setSyncStatus('connecting');
-  // Load data AFTER UI is shown — never block the user
+  // Load data in background — re-render when done
   initDataLayer().then(() => {
-    renderOverviewIfActive();
     updateInventoryBadge();
-    // Refresh whichever page is active
     const page = document.querySelector('.page.active')?.id?.replace('page-','');
-    if (page && page !== 'overview') switchPage(page);
+    if (page) switchPage(page); // re-render active page with real data
     startListeners();
     startExtraListeners();
   }).catch(e => {
     console.error('Data layer init failed:', e);
-    setSyncStatus('error');
+    setSyncStatus('offline');
+    // Still re-render with whatever is in STATE
+    const page = document.querySelector('.page.active')?.id?.replace('page-','');
+    if (page) switchPage(page);
   });
-  // Mobile menu
-  document.getElementById('mob-menu-btn').style.display = '';
-  document.getElementById('mob-menu-btn').onclick = () => {
-    document.getElementById('sidebar').classList.toggle('open');
-  };
-  document.getElementById('signout-btn').onclick = doSignout;
-  setSyncStatus('connecting');
 }
 
 function buildNav() {
@@ -3478,6 +3471,22 @@ function showToast(msg, type='info') {
     item.classList.remove('show');
     setTimeout(() => item.remove(), 300);
   }, 3500);
+}
+
+function setSyncStatus(status) {
+  STATE.syncStatus = status;
+  const el = document.getElementById('sync-status');
+  if (!el) return;
+  const map = {
+    synced:     {text:'● Synced',     color:'#22c55e'},
+    saving:     {text:'↑ Saving...',  color:'#f59e0b'},
+    connecting: {text:'● Connecting…',color:'#f59e0b'},
+    error:      {text:'✕ Sync error', color:'#ef4444'},
+    offline:    {text:'◌ Offline',    color:'#9ca3af'},
+  };
+  const s = map[status] || map.connecting;
+  el.textContent = s.text;
+  el.style.color = s.color;
 }
 
 // ════════════════════════════════════════════════════════════
