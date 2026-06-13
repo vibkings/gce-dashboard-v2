@@ -4059,59 +4059,224 @@ function renderWarehouse() {
   const el = document.getElementById('warehouse-content');
   if (!el) return;
   const whItems = Object.values(STATE.warehouse||{}).sort((a,b)=>(a.name||'').localeCompare(b.name||''));
-  const whValue = whItems.reduce((a,i)=>a+(i.qty||0)*(i.cost||0),0);
-  const readyToTransfer = whItems.filter(w=>{
-    const shopItem = Object.values(STATE.inventory).find(i=>i._id===w.itemId||i.name?.toLowerCase()===w.name?.toLowerCase());
-    return w.qty>0 && (!shopItem||(shopItem.qty||0)===0);
-  });
+  const transferLog = Object.values(STATE.transferLog||{});
+  const search = (window._whSearch||'').toLowerCase();
 
-  const rows = whItems.map(w => {
-    const shopItem = Object.values(STATE.inventory).find(i=>i._id===w.itemId||i.name?.toLowerCase()===w.name?.toLowerCase());
-    const shopQty = shopItem?.qty||0;
-    const statusChip = w.qty===0?'<span class="chip chip-out">Out</span>':w.qty<=(w.minQty||5)?'<span class="chip chip-low">Low</span>':'<span class="chip chip-ok">OK</span>';
+  // KPIs
+  const stockValue = whItems.reduce((a,i)=>a+(i.qty||0)*(i.cost||0),0);
+  const totalIn  = transferLog.filter(t=>t.direction==='to_warehouse').reduce((a,t)=>a+(t.qty||0),0);
+  const totalOut = transferLog.filter(t=>t.direction==='to_shop').reduce((a,t)=>a+(t.qty||0),0);
+
+  // Filter
+  const filtered = search
+    ? whItems.filter(i=>(i.name||'').toLowerCase().includes(search)||(i.cat||'').toLowerCase().includes(search))
+    : whItems;
+
+  // Stock rows
+  const rows = filtered.map(w => {
+    const statusBadge = w.qty<=0
+      ? '<span style="padding:2px 9px;border-radius:10px;font-size:11px;font-weight:700;background:#fee2e2;color:#dc2626">Out</span>'
+      : w.qty<=(w.minQty||5)
+        ? '<span style="padding:2px 9px;border-radius:10px;font-size:11px;font-weight:700;background:#fef3c7;color:#92400e">Low</span>'
+        : '<span style="padding:2px 9px;border-radius:10px;font-size:11px;font-weight:700;background:#d1fae5;color:#065f46">OK</span>';
     return `<tr>
       <td><b>${esc(w.name)}</b></td>
-      <td><span class="badge badge-neutral">${esc(w.cat||'—')}</span></td>
-      <td class="td-center td-mono"><b>${w.qty||0}</b></td>
-      <td class="td-center td-mono" style="color:var(--text3)">${w.minQty||5}</td>
-      <td class="td-right td-mono">${fmt(w.cost||0)}</td>
-      <td class="td-right td-mono">${fmt((w.qty||0)*(w.cost||0))}</td>
-      <td class="td-center"><span class="td-mono" style="color:${shopQty===0?'var(--danger)':'var(--success)'}">${shopQty}</span></td>
-      <td class="td-center">${statusChip}</td>
-      <td>
-        <div style="display:flex;gap:4px">
-          <button class="btn btn-sm btn-primary" onclick="showTransferModal('${w._id}','toShop')" style="font-size:11px">🏭→🏬 To Shop</button>
-          <button class="btn btn-sm" onclick="showWhStockAdjModal('${w._id}')">⚖️</button>
+      <td style="color:var(--text3)">${esc(w.cat||'—')}</td>
+      <td style="text-align:center;font-weight:700;font-size:15px">${w.qty||0}</td>
+      <td style="text-align:center">
+        <div style="display:flex;align-items:center;justify-content:center;gap:4px">
+          ${w.minQty||5}
+          <button onclick="editWhMinQty('${w._id||w.id}')" style="background:none;border:none;cursor:pointer;font-size:11px;color:#6c757d;padding:1px 4px" title="Edit min qty">✏️</button>
         </div>
+      </td>
+      <td style="text-align:right">${fmt(w.cost||0)}</td>
+      <td style="text-align:right">${fmt((w.qty||0)*(w.cost||0))}</td>
+      <td>${statusBadge}</td>
+      <td>
+        <button onclick="showWhStockAdjModal('${w._id||w.id}')" style="background:#f0fdf4;border:1px solid #86efac;color:#15803d;border-radius:6px;padding:3px 9px;font-size:11px;cursor:pointer;font-weight:600;white-space:nowrap">⚖️ Adjust</button>
       </td>
     </tr>`;
   }).join('');
 
+  const emptyRow = filtered.length ? '' : search
+    ? `<tr><td colspan="8" style="text-align:center;padding:20px;color:var(--text3)">No items match "${search}".</td></tr>`
+    : `<tr><td colspan="8"><div class="empty-state"><div class="empty-state-icon">🏭</div><div class="empty-state-title">Warehouse is empty</div><div class="empty-state-sub">Transfer goods from the Shop to get started.</div></div></td></tr>`;
+
+  // Transfer log
+  const dirFilter = window._whDirFilter||'all';
+  const filteredLog = transferLog.filter(t=>
+    dirFilter==='all' ||
+    (dirFilter==='in' && t.direction==='to_warehouse') ||
+    (dirFilter==='out' && t.direction==='to_shop')
+  );
+  // Group by waybill
+  const waybillMap = {};
+  filteredLog.slice().reverse().forEach(t => {
+    const wb = t.waybill||t.id;
+    if(!waybillMap[wb]) waybillMap[wb]={waybill:wb,date:t.date,direction:t.direction,items:[],by:t.by,note:t.note||''};
+    waybillMap[wb].items.push(t);
+  });
+  const waybills = Object.values(waybillMap);
+  const logRows = waybills.length ? waybills.map(g => {
+    const isIn = g.direction==='to_warehouse';
+    const isSpecial = g.waybill==='OPENING-STOCK'||g.waybill==='NEW-GOODS';
+    const dirBadge = isSpecial
+      ? '<span style="font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px;background:#eff6ff;color:#1a56db">📦 Existing Stock</span>'
+      : `<span style="font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px;background:${isIn?'#ecfdf5':'#fef2f2'};color:${isIn?'#059669':'#dc2626'}">${isIn?'⬇ Shop → WH':'⬆ WH → Shop'}</span>`;
+    const totalQty = g.items.reduce((a,t)=>a+(t.qty||0),0);
+    const itemPreview = g.items.slice(0,2).map(t=>esc(t.itemName||t.name||'')+'×'+t.qty).join(', ')+(g.items.length>2?` +${g.items.length-2} more`:'');
+    return `<tr>
+      <td style="font-size:12px">${g.date||''}</td>
+      <td><b>${esc(g.waybill||'—')}</b></td>
+      <td style="font-size:12px;color:var(--text3)">${itemPreview}</td>
+      <td style="text-align:center;font-weight:700">${g.items.length} items / ${totalQty} units</td>
+      <td>${dirBadge}</td>
+      <td style="font-size:12px">${esc(g.by||'—')}</td>
+      <td><button onclick="viewWaybillDetail('${g.waybill}')" class="btn btn-sm" style="font-size:11px">👁 View</button></td>
+    </tr>`;
+  }).join('') : `<tr><td colspan="7" style="text-align:center;padding:20px;color:var(--text3)">No transfers${dirFilter!=='all'?' for this filter.':'.'}</td></tr>`;
+
+  const dirBtn = (id,label,active) => `<button class="btn btn-sm" onclick="window._whDirFilter='${id}';renderWarehouse()" style="${active?'background:var(--primary);color:#fff;border-color:var(--primary)':''}">${label}</button>`;
+
   el.innerHTML = `
+    <!-- KPIs matching v1 -->
     <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:1.25rem">
-      ${kpiCard('info','🏭','Warehouse Items',whItems.length,'')}
-      ${kpiCard('brand','💰','Warehouse Value',fmt(whValue),'At cost')}
-      ${kpiCard('warning','🔄','Ready to Transfer',readyToTransfer.length,'In wh, zero shop stock',readyToTransfer.length>0)}
-      ${kpiCard('success','📦','Shop Items',Object.keys(STATE.inventory).length,'Current shop stock')}
+      <div class="kpi-card" style="border-top:3px solid #1a56db">
+        <div class="kpi-label">Warehouse Items</div>
+        <div class="kpi-value">${filtered.length}${search?' / '+whItems.length:''}</div>
+      </div>
+      <div class="kpi-card" style="border-top:3px solid #1a56db">
+        <div class="kpi-label">Stock Value</div>
+        <div class="kpi-value">${fmt(stockValue)}</div>
+        <div class="kpi-sub">At cost</div>
+      </div>
+      <div class="kpi-card" style="border-top:3px solid var(--success)">
+        <div class="kpi-label">Total In</div>
+        <div class="kpi-value" style="color:var(--success)">${totalIn.toLocaleString()}</div>
+        <div class="kpi-sub">Units transferred in</div>
+      </div>
+      <div class="kpi-card" style="border-top:3px solid var(--warning)">
+        <div class="kpi-label">Total Out</div>
+        <div class="kpi-value" style="color:${totalOut>0?'var(--warning)':'var(--text1)'}">${totalOut.toLocaleString()}</div>
+        <div class="kpi-sub">Units transferred out</div>
+      </div>
     </div>
 
-    ${readyToTransfer.length?`
-    <div class="alert alert-warning" style="margin-bottom:1rem">
-      🏭 <b>${readyToTransfer.length} item(s)</b> in warehouse with zero shop stock — ready to transfer
-    </div>`:''}
-
-    <div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:1rem">
-      <button class="btn btn-primary" onclick="showTransferFromShopModal()" style="background:#1a237e;border-color:#1a237e">🏬 → 🏭 Shop to Warehouse</button>
-      <button class="btn btn-primary" onclick="showAddWhItemModal()">+ Add to Warehouse</button>
+    <!-- 4 action buttons matching v1 -->
+    <div style="display:flex;gap:10px;margin-bottom:1.25rem;flex-wrap:wrap">
+      <button class="btn btn-primary" onclick="showTransferModal(null,'to_warehouse')" style="font-size:13px;padding:10px 20px">📦 → 🏭 &nbsp;Shop to Warehouse</button>
+      <button class="btn" onclick="showTransferModal(null,'to_shop')" style="font-size:13px;padding:10px 20px;color:var(--primary);border-color:#b6d4fe">🏭 → 📦 &nbsp;Warehouse to Shop</button>
+      <button class="btn" onclick="showAddWarehouseStockModal()" style="font-size:13px;padding:10px 20px;color:#15803d;border-color:#86efac;font-weight:700">➕ Add Existing Stock</button>
+      <button class="btn" onclick="showAddWhItemModal()" style="font-size:13px;padding:10px 20px;color:#7c3aed;border-color:#c4b5fd;font-weight:700">📦 Add New Goods</button>
     </div>
 
-    <div class="tbl-wrap">
+    <!-- Warehouse Stock table -->
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px">
+      <p class="sec-title" style="margin:0">Warehouse Stock</p>
+      <div style="display:flex;gap:8px;align-items:center">
+        <div style="position:relative;max-width:300px">
+          <span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--text3)">🔍</span>
+          <input type="text" placeholder="Search warehouse items..." value="${window._whSearch||''}"
+            oninput="window._whSearch=this.value;renderWarehouse()"
+            style="padding:8px 12px 8px 32px;border:1px solid var(--border);border-radius:var(--radius);font-size:13px;width:260px">
+        </div>
+        ${search?`<button class="btn btn-sm" onclick="window._whSearch='';renderWarehouse()" style="color:var(--danger);border-color:#f5c2c7">✕ Clear</button>`:''}
+      </div>
+    </div>
+    <div class="tbl-wrap" style="margin-bottom:2rem">
       <table>
-        <thead><tr><th>Item</th><th>Category</th><th class="td-center">Wh Qty</th><th class="td-center">Min</th><th class="td-right">Cost</th><th class="td-right">Value</th><th class="td-center">Shop Qty</th><th class="td-center">Status</th><th>Actions</th></tr></thead>
-        <tbody>${rows||'<tr><td colspan="9"><div class="empty-state"><div class="empty-state-icon">🏭</div><div class="empty-state-title">Warehouse is empty</div><div class="empty-state-sub">Add goods or transfer from shop</div></div></td></tr>'}</tbody>
+        <thead><tr><th>Item</th><th>Category</th><th style="text-align:center">Qty</th><th style="text-align:center">Min Qty</th><th style="text-align:right">Cost</th><th style="text-align:right">Value</th><th>Status</th><th>Actions</th></tr></thead>
+        <tbody>${rows||emptyRow}</tbody>
       </table>
     </div>
-  `;
+
+    <!-- Transfer History -->
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px">
+      <p class="sec-title" style="margin:0">Transfer History (${transferLog.length} records)</p>
+      <div style="display:flex;gap:6px">
+        ${dirBtn('all','All',dirFilter==='all')}
+        ${dirBtn('in','⬇ In',dirFilter==='in')}
+        ${dirBtn('out','⬆ Out',dirFilter==='out')}
+      </div>
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Date</th><th>Waybill No.</th><th>Items</th><th style="text-align:center">Qty</th><th>Direction</th><th>By</th><th></th></tr></thead>
+        <tbody>${logRows}</tbody>
+      </table>
+    </div>`;
+}
+
+function editWhMinQty(id) {
+  const w = STATE.warehouse?.[id]; if(!w) return;
+  const val = prompt(`Edit min quantity for "${w.name}":\nCurrent: ${w.minQty||5}`, w.minQty||5);
+  if(val===null) return;
+  const newMin = parseInt(val)||0;
+  fsSave('v2_warehouse', id, {...w, minQty:newMin}).then(()=>{
+    STATE.warehouse[id]={...w,minQty:newMin,_id:id};
+    renderWarehouse();
+    showToast(`Min qty updated: ${w.name} → ${newMin}`,'success');
+  }).catch(()=>showToast('Failed.','error'));
+}
+
+function showAddWarehouseStockModal() {
+  // Add existing shop item to warehouse (opening stock)
+  const invItems = Object.values(STATE.inventory||{}).sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+  const opts = invItems.map(i=>`<option value="${i._id||i.id}">${esc(i.name)} (shop qty: ${i.qty||0})</option>`).join('');
+  showModal('➕ Add Existing Stock to Warehouse', `
+    <div class="form-grid c2">
+      <div class="form-group" style="grid-column:1/-1">
+        <label>Item *</label>
+        <select class="form-input" id="was-item"><option value="">Select item...</option>${opts}</select>
+      </div>
+      <div class="form-group"><label>Qty in Warehouse *</label><input class="form-input" id="was-qty" type="number" min="0" placeholder="0"></div>
+      <div class="form-group"><label>Min Qty</label><input class="form-input" id="was-min" type="number" min="0" placeholder="5"></div>
+    </div>
+  `,[{label:'Cancel',action:'close',style:''},{label:'➕ Add Stock',action:'saveAddWarehouseStock()',style:'btn-primary'}]);
+}
+
+async function saveAddWarehouseStock() {
+  const itemId = document.getElementById('was-item')?.value;
+  const qty = parseInt(document.getElementById('was-qty')?.value)||0;
+  const minQty = parseInt(document.getElementById('was-min')?.value)||5;
+  if(!itemId){showToast('Select an item.','error');return;}
+  const inv = STATE.inventory?.[itemId]; if(!inv){showToast('Item not found.','error');return;}
+  const existing = Object.values(STATE.warehouse||{}).find(w=>w.name?.toLowerCase()===inv.name?.toLowerCase());
+  const now=new Date(); const date=now.toLocaleDateString();
+  setSyncStatus('saving');
+  try{
+    if(existing){
+      const upd={...existing,qty:(existing.qty||0)+qty,minQty};
+      await fsSave('v2_warehouse',existing._id,upd);STATE.warehouse[existing._id]={...upd,_id:existing._id};
+    } else {
+      const wid=uid();const wItem={id:wid,name:inv.name,cat:inv.cat||'',qty,minQty,cost:inv.costPrice||inv.cost||0,itemId};
+      await fsSave('v2_warehouse',wid,wItem);if(!STATE.warehouse)STATE.warehouse={};STATE.warehouse[wid]={...wItem,_id:wid};
+    }
+    // Log
+    const logId=uid();
+    const logEntry={id:logId,waybill:'OPENING-STOCK',itemName:inv.name,itemId,qty,direction:'to_warehouse',date,by:STATE.user?.name};
+    await fsSave('v2_transferLog',logId,logEntry);
+    if(!STATE.transferLog)STATE.transferLog={};STATE.transferLog[logId]={...logEntry,_id:logId};
+    closeModal();setSyncStatus('synced');showToast(`✅ ${qty} × ${inv.name} added to warehouse.`,'success');renderWarehouse();
+  }catch(e){setSyncStatus('error');showToast('Failed.','error');}
+}
+
+async function viewWaybillDetail(waybill) {
+  const log = Object.values(STATE.transferLog||{}).filter(t=>t.waybill===waybill);
+  if(!log.length){showToast('No records found.','info');return;}
+  const isIn = log[0]?.direction==='to_warehouse';
+  const rows = log.map((t,i)=>`<tr><td>${i+1}</td><td>${esc(t.itemName||'')}</td><td style="text-align:center">${t.qty||0}</td></tr>`).join('');
+  showModal(`📋 Waybill: ${waybill}`,`
+    <div style="font-size:13px;margin-bottom:1rem">
+      <b>Direction:</b> ${isIn?'Shop → Warehouse':'Warehouse → Shop'} &nbsp;|&nbsp;
+      <b>Date:</b> ${log[0]?.date||'—'} &nbsp;|&nbsp;
+      <b>By:</b> ${esc(log[0]?.by||'—')}
+    </div>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>#</th><th>Item</th><th style="text-align:center">Qty</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+  `,[{label:'Close',action:'close',style:''}]);
 }
 
 function showAddWhItemModal() {
@@ -4169,32 +4334,81 @@ async function saveAddWhItem() {
 }
 
 function showTransferModal(whId, direction) {
-  const wh = (STATE.warehouse||{})[whId];
-  if (!wh) return;
-  const shopItem = Object.values(STATE.inventory).find(i=>i._id===wh._id||i.name?.toLowerCase()===wh.name?.toLowerCase());
-  showModal(`🔄 Transfer to Shop — ${esc(wh.name)}`, `
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:1rem">
-      <div style="background:var(--surface);border-radius:var(--radius);padding:10px 14px;text-align:center">
-        <div style="font-size:11px;color:var(--text3);margin-bottom:4px">WAREHOUSE QTY</div>
-        <div style="font-size:22px;font-weight:700;color:var(--brand)">${wh.qty||0}</div>
+  // direction: 'to_shop' or 'to_warehouse'
+  const dir = direction || (whId ? 'to_shop' : 'to_warehouse');
+
+  if (dir === 'to_shop') {
+    // Warehouse → Shop: pick from warehouse items
+    const wh = whId ? (STATE.warehouse||{})[whId] : null;
+    const whItems = Object.values(STATE.warehouse||{}).sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+    const opts = whItems.map(i=>`<option value="${i._id||i.id}" ${(wh&&(i._id||i.id)===(wh._id||wh.id))?'selected':''}>${esc(i.name)} (wh: ${i.qty||0})</option>`).join('');
+    showModal('🏭 → 📦 Warehouse to Shop', `
+      <div class="form-grid c2">
+        <div class="form-group" style="grid-column:1/-1">
+          <label>Item *</label>
+          <select class="form-input" id="tr-item">${opts}</select>
+        </div>
+        <div class="form-group"><label>Qty to Transfer *</label><input class="form-input" id="tr-qty" type="number" min="1" placeholder="0"></div>
+        <div class="form-group"><label>Note</label><input class="form-input" id="tr-note" placeholder="Optional"></div>
       </div>
-      <div style="background:var(--surface);border-radius:var(--radius);padding:10px 14px;text-align:center">
-        <div style="font-size:11px;color:var(--text3);margin-bottom:4px">SHOP QTY</div>
-        <div style="font-size:22px;font-weight:700;color:var(--success)">${shopItem?.qty||0}</div>
+    `,[{label:'Cancel',action:'close',style:''},{label:'🏭→📦 Transfer to Shop',action:"saveTransfer('to_shop')",style:'btn-primary'}]);
+
+  } else {
+    // Shop → Warehouse: pick from shop items
+    const invItems = Object.values(STATE.inventory||{}).sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+    const opts = invItems.map(i=>`<option value="${i._id||i.id}">${esc(i.name)} (shop: ${i.qty||0})</option>`).join('');
+    showModal('📦 → 🏭 Shop to Warehouse', `
+      <div class="form-grid c2">
+        <div class="form-group" style="grid-column:1/-1">
+          <label>Item *</label>
+          <select class="form-input" id="tr-item">${opts}</select>
+        </div>
+        <div class="form-group"><label>Qty to Transfer *</label><input class="form-input" id="tr-qty" type="number" min="1" placeholder="0"></div>
+        <div class="form-group"><label>Note</label><input class="form-input" id="tr-note" placeholder="Optional"></div>
       </div>
-    </div>
-    <div class="form-group">
-      <label>Qty to Transfer to Shop <span class="req">*</span></label>
-      <input class="form-input" id="tr-qty" type="number" min="1" max="${wh.qty||0}" placeholder="0">
-    </div>
-    <div class="form-group" style="margin-top:10px">
-      <label>Note (optional)</label>
-      <input class="form-input" id="tr-note" placeholder="e.g. Weekly restock">
-    </div>
-  `, [
-    {label:'Cancel', action:'close', style:''},
-    {label:'🔄 Transfer', action:`saveTransferToShop('${whId}')`, style:'btn-primary'}
-  ]);
+    `,[{label:'Cancel',action:'close',style:''},{label:'📦→🏭 Transfer to Warehouse',action:"saveTransfer('to_warehouse')",style:'btn-primary'}]);
+  }
+}
+
+async function saveTransfer(direction) {
+  const selId = document.getElementById('tr-item')?.value;
+  const qty   = parseInt(document.getElementById('tr-qty')?.value)||0;
+  const note  = document.getElementById('tr-note')?.value.trim()||'';
+  if(!selId||qty<1){showToast('Select item and quantity.','error');return;}
+  const now=new Date(); const date=now.toLocaleDateString();
+  const waybill='WB-'+Date.now().toString().slice(-8);
+  setSyncStatus('saving');
+  try{
+    if(direction==='to_shop'){
+      // Warehouse → Shop
+      const wh=STATE.warehouse?.[selId]; if(!wh){showToast('Warehouse item not found.','error');return;}
+      if(qty>(wh.qty||0)){showToast(`Only ${wh.qty||0} in warehouse.`,'error');return;}
+      const updWh={...wh,qty:(wh.qty||0)-qty};
+      await fsSave('v2_warehouse',selId,updWh);STATE.warehouse[selId]={...updWh,_id:selId};
+      // Add to shop
+      const shopItem=Object.values(STATE.inventory||{}).find(i=>i.name?.toLowerCase()===wh.name?.toLowerCase());
+      if(shopItem){const updSh={...shopItem,qty:(shopItem.qty||0)+qty};await fsSave(COLS.INVENTORY,shopItem._id,updSh);STATE.inventory[shopItem._id]={...updSh};}
+      // Log
+      const logId=uid();const entry={id:logId,waybill,itemId:selId,itemName:wh.name,qty,direction,note,date,by:STATE.user?.name};
+      await fsSave('v2_transferLog',logId,entry);if(!STATE.transferLog)STATE.transferLog={};STATE.transferLog[logId]={...entry,_id:logId};
+      showToast(`✅ ${qty} × ${wh.name} transferred to shop.`,'success');
+    } else {
+      // Shop → Warehouse
+      const inv=STATE.inventory?.[selId]; if(!inv){showToast('Shop item not found.','error');return;}
+      if(qty>(inv.qty||0)){showToast(`Only ${inv.qty||0} in shop.`,'error');return;}
+      const updInv={...inv,qty:(inv.qty||0)-qty};
+      await fsSave(COLS.INVENTORY,selId,updInv);STATE.inventory[selId]={...updInv};
+      // Add to warehouse
+      const whItem=Object.values(STATE.warehouse||{}).find(w=>w.name?.toLowerCase()===inv.name?.toLowerCase());
+      if(whItem){const updWh={...whItem,qty:(whItem.qty||0)+qty};await fsSave('v2_warehouse',whItem._id,updWh);STATE.warehouse[whItem._id]={...updWh};}
+      else{const wid=uid();const newWh={id:wid,name:inv.name,cat:inv.cat||'',qty,minQty:inv.minQty||5,cost:inv.costPrice||inv.cost||0,itemId:selId};await fsSave('v2_warehouse',wid,newWh);if(!STATE.warehouse)STATE.warehouse={};STATE.warehouse[wid]={...newWh,_id:wid};}
+      // Log
+      const logId=uid();const entry={id:logId,waybill,itemId:selId,itemName:inv.name,qty,direction,note,date,by:STATE.user?.name};
+      await fsSave('v2_transferLog',logId,entry);if(!STATE.transferLog)STATE.transferLog={};STATE.transferLog[logId]={...entry,_id:logId};
+      showToast(`✅ ${qty} × ${inv.name} transferred to warehouse.`,'success');
+    }
+    closeModal();setSyncStatus('synced');renderWarehouse();renderInventory();updateInventoryBadge();
+  }catch(e){setSyncStatus('error');showToast('Failed: '+e.message,'error');}
 }
 
 async function saveTransferToShop(whId) {
