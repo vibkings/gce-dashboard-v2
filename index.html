@@ -4517,44 +4517,45 @@ function renderExpenses() {
         <span style="width:3px;height:14px;background:var(--brand);border-radius:2px;display:inline-block"></span>
         ADD EXPENSE
       </div>
-      <!-- Row 1: description + amount -->
-      <div style="display:grid;grid-template-columns:1fr auto;gap:10px;margin-bottom:8px">
+      <!-- Single row: description | amount/mode | category | bank | date | button -->
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr auto auto;gap:8px;align-items:flex-end;margin-bottom:8px">
         <div>
           <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);margin-bottom:3px">DESCRIPTION</div>
           <input class="form-input" id="exp-desc" placeholder="e.g. Staff salary, Transport..." style="width:100%">
         </div>
-        <div style="width:160px">
-          <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);margin-bottom:3px">AMOUNT (₦)</div>
-          <input class="form-input" id="exp-amt" type="number" min="0" placeholder="0" style="width:100%">
+        <div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+            <div>
+              <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);margin-bottom:3px">AMOUNT (₦)</div>
+              <input class="form-input" id="exp-amt" type="number" min="0" placeholder="0" style="width:100%">
+            </div>
+            <div>
+              <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);margin-bottom:3px">PAYMENT MODE</div>
+              <select class="form-input" id="exp-mode" style="width:100%" onchange="toggleInlineExpBank()">
+                <option value="cash">Cash</option>
+                <option value="transfer">Transfer</option>
+                <option value="pos">POS</option>
+              </select>
+            </div>
+          </div>
         </div>
-      </div>
-      <!-- Row 2: category, mode, bank, date, submit -->
-      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
-        <div style="flex:1;min-width:130px">
+        <div>
           <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);margin-bottom:3px">CATEGORY</div>
           <select class="form-input" id="exp-cat" style="width:100%">
             ${catOpts}
           </select>
         </div>
-        <div style="flex:1;min-width:130px">
-          <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);margin-bottom:3px">PAYMENT MODE</div>
-          <select class="form-input" id="exp-mode" style="width:100%" onchange="toggleInlineExpBank()">
-            <option value="cash">Cash</option>
-            <option value="transfer">Transfer</option>
-            <option value="pos">POS</option>
-          </select>
-        </div>
-        <div style="flex:1;min-width:130px;display:none" id="exp-bank-wrap">
+        <div id="exp-bank-wrap" style="display:none;min-width:130px">
           <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);margin-bottom:3px" id="exp-bank-label">BANK ACCOUNT</div>
           <select class="form-input" id="exp-bank" style="width:100%">${bankSelectOpts('transfer')}</select>
         </div>
-        <div style="width:170px">
-          <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);margin-bottom:3px">EXPENSE DATE (BLANK = TODAY)</div>
+        <div>
+          <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);margin-bottom:3px">DATE (BLANK = TODAY)</div>
           <input class="form-input" id="exp-date" type="date" style="width:100%">
         </div>
-        <div>
-          <button class="btn btn-primary" onclick="saveInlineExpense()" style="white-space:nowrap;font-weight:700">+ Add expense</button>
-        </div>
+      </div>
+      <div style="margin-bottom:8px">
+        <button class="btn btn-primary" onclick="saveInlineExpense()" style="white-space:nowrap;font-weight:700">+ Add expense</button>
       </div>
       <!-- Row 3: manage categories -->
       <div style="display:flex;align-items:center;gap:8px;margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">
