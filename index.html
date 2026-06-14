@@ -1854,6 +1854,7 @@ async function saveAddItem() {
     updateInventoryBadge();
     setSyncStatus('synced');
     showToast(`✅ "${name}" added to inventory.`, 'success');
+    logActivity('Item added',`${name} — Qty: ${qty} — Cost: ${fmt(cost)} — Sell: ${fmt(sell)}`,cat||'');
   } catch(e) {
     setSyncStatus('error');
     console.error('saveAddItem error:', e);
@@ -1964,6 +1965,7 @@ async function saveInlineAddItem() {
     renderInventory(); renderOverviewIfActive(); updateInventoryBadge();
     setSyncStatus('synced');
     showToast(`✅ "${name}" added to inventory.`,'success');
+    logActivity('Item added',`${name} — Qty: ${qty} — Cost: ${fmt(cost)} — Sell: ${fmt(sell)}`,cat||'');
   } catch(e) {
     setSyncStatus('error');
     showToast(`❌ Save failed: ${(e.message||'').slice(0,80)}`,'error');
@@ -3197,7 +3199,180 @@ function printSaleInvoice(invNum) {
 }
 
 function reprintSaleInvoice(invNum) {
-  _showPrintModeModal(invNum);
+  showInvoiceViewModal(invNum);
+}
+
+function showInvoiceViewModal(invNum) {
+  const items = Object.values(STATE.sales||{}).filter(s=>s.invoiceNum===invNum);
+  if (!items.length) { showToast('Invoice not found.','error'); return; }
+  const first = items[0];
+  const custName = first.custName || first.printName || 'Walk-in customer';
+  const date = first.date || '—';
+  const seller = first.seller || '—';
+  const payment = first.payment || 'cash';
+  const payMode = first.payMode || first.payment || 'cash';
+  const bankName = first.bankName || first.posName || '';
+  const splitPayment = first.splitPayment || null;
+  const partPayment = first.partPayment || 0;
+  const discount = items.reduce((a,s)=>a+(s.discount||0),0);
+  const grandTotal = items.reduce((a,s)=>a+(s.total||0),0);
+  const grossProfit = items.reduce((a,s)=>a+(s.profit||0),0);
+
+  // Payment label
+  let payLabel = '';
+  if (payment==='credit') payLabel = '<span style="color:#dc2626;font-weight:700">Credit</span>';
+  else if (payment==='part') payLabel = `<span style="color:#d97706;font-weight:700">Part payment</span>`;
+  else if (payment==='split') payLabel = '<span style="color:#7c3aed;font-weight:700">Split payment</span>';
+  else payLabel = '<span style="color:#15803d;font-weight:700">Fully paid</span>';
+
+  let modeStr = '';
+  if (payMode==='split' && splitPayment) {
+    modeStr = `${splitPayment.mode1}${splitPayment.bank1?' → '+splitPayment.bank1:''}: ${fmt(splitPayment.amt1||0)} + ${splitPayment.mode2}${splitPayment.bank2?' → '+splitPayment.bank2:''}: ${fmt(splitPayment.amt2||0)}`;
+  } else if (payMode==='transfer' && bankName) {
+    modeStr = `Transfer → ${bankName}`;
+  } else if (payMode==='pos' && bankName) {
+    modeStr = `POS (${bankName})`;
+  } else {
+    modeStr = payMode ? (payMode.charAt(0).toUpperCase()+payMode.slice(1)) : 'Cash';
+  }
+
+  const itemRows = items.map((s,i) => {
+    const disc = s.discount||0;
+    return `<tr style="border-bottom:1px solid #f0f0f0">
+      <td style="padding:8px 10px;color:#666;font-size:13px">${i+1}</td>
+      <td style="padding:8px 10px;font-weight:600;font-size:13px">${esc(s.name||'')}</td>
+      <td style="padding:8px 10px;text-align:center;font-size:13px">${s.qty||1}</td>
+      <td style="padding:8px 10px;text-align:right;font-size:13px">${fmt(s.salePrice||s.unitPrice||0)}</td>
+      <td style="padding:8px 10px;text-align:right;font-size:13px;color:${disc>0?'#d97706':'#999'}">${disc>0?'-'+fmt(disc):'—'}</td>
+      <td style="padding:8px 10px;text-align:right;font-weight:700;font-size:13px">${fmt(s.total||0)}</td>
+      <td style="padding:8px 10px;text-align:right;font-size:12px;color:#16a34a">${fmt(s.profit||0)}</td>
+    </tr>`;
+  }).join('');
+
+  const existing = document.getElementById('_inv_view_overlay');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = '_inv_view_overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:99999;display:flex;align-items:center;justify-content:center;padding:16px;overflow-y:auto';
+  overlay.innerHTML = `
+    <div style="background:#fff;border-radius:16px;width:100%;max-width:760px;max-height:92vh;overflow-y:auto;box-shadow:0 8px 40px rgba(0,0,0,0.25)">
+      <!-- Header -->
+      <div style="padding:18px 24px 14px;border-bottom:1px solid #f0f0f0;display:flex;justify-content:space-between;align-items:flex-start;position:sticky;top:0;background:#fff;border-radius:16px 16px 0 0;z-index:1">
+        <div>
+          <div style="font-size:18px;font-weight:800;color:#111">Invoice #${esc(invNum)}</div>
+          <div style="font-size:13px;color:#666;margin-top:2px">${date} · ${esc(custName)} · Served by: ${esc(seller)}</div>
+        </div>
+        <button onclick="document.getElementById('_inv_view_overlay').remove()" style="background:none;border:1px solid #e5e7eb;border-radius:8px;padding:6px 10px;cursor:pointer;font-size:16px;color:#666;line-height:1">✕</button>
+      </div>
+
+      <!-- Items table -->
+      <div style="padding:0 24px">
+        <table style="width:100%;border-collapse:collapse;margin-top:4px">
+          <thead>
+            <tr style="background:#f9fafb">
+              <th style="padding:8px 10px;text-align:left;font-size:11px;font-weight:700;color:#9ca3af;text-transform:uppercase">#</th>
+              <th style="padding:8px 10px;text-align:left;font-size:11px;font-weight:700;color:#9ca3af;text-transform:uppercase">ITEM</th>
+              <th style="padding:8px 10px;text-align:center;font-size:11px;font-weight:700;color:#9ca3af;text-transform:uppercase">QTY</th>
+              <th style="padding:8px 10px;text-align:right;font-size:11px;font-weight:700;color:#9ca3af;text-transform:uppercase">PRICE</th>
+              <th style="padding:8px 10px;text-align:right;font-size:11px;font-weight:700;color:#9ca3af;text-transform:uppercase">DISCOUNT</th>
+              <th style="padding:8px 10px;text-align:right;font-size:11px;font-weight:700;color:#9ca3af;text-transform:uppercase">TOTAL</th>
+              <th style="padding:8px 10px;text-align:right;font-size:11px;font-weight:700;color:#9ca3af;text-transform:uppercase">PROFIT</th>
+            </tr>
+          </thead>
+          <tbody>${itemRows}</tbody>
+        </table>
+      </div>
+
+      <!-- Payment summary -->
+      <div style="padding:14px 24px 0;display:grid;grid-template-columns:1fr 1fr;gap:16px">
+        <div style="background:#f9fafb;border-radius:10px;padding:14px 16px;font-size:13px">
+          <div style="color:#666;margin-bottom:6px">Payment type: ${payLabel}</div>
+          <div style="color:#666;margin-bottom:6px">Payment mode: <b>${modeStr}</b></div>
+          ${payment==='part'?`<div style="color:#666">Paid now: <b style="color:#d97706">${fmt(partPayment)}</b></div>`:''}
+          ${payment==='credit'?`<div style="color:#dc2626;font-size:12px;margin-top:4px">⚠️ Not yet collected</div>`:''}
+        </div>
+        <div style="background:#f9fafb;border-radius:10px;padding:14px 16px;text-align:right">
+          ${discount>0?`<div style="font-size:13px;color:#d97706;margin-bottom:4px">Discount: -${fmt(discount)}</div>`:''}
+          <div style="font-size:18px;font-weight:800;color:#15803d">Grand total: ${fmt(grandTotal)}</div>
+          <div style="font-size:14px;font-weight:700;color:#7c3aed;margin-top:4px">Gross profit: ${fmt(grossProfit)}</div>
+        </div>
+      </div>
+
+      <!-- Action buttons -->
+      <div style="padding:16px 24px 20px;display:flex;gap:8px;flex-wrap:wrap;border-top:1px solid #f0f0f0;margin-top:14px">
+        <button onclick="document.getElementById('_inv_view_overlay').remove();_showPrintModeModal('${invNum}')" style="background:#1a237e;color:#fff;border:none;border-radius:8px;padding:10px 18px;cursor:pointer;font-size:13px;font-weight:600;display:flex;align-items:center;gap:6px">🖨️ Print invoice</button>
+        <button onclick="_shareInvoiceWhatsApp('${invNum}')" style="background:#25d366;color:#fff;border:none;border-radius:8px;padding:10px 18px;cursor:pointer;font-size:13px;font-weight:600;display:flex;align-items:center;gap:6px">📱 Share via WhatsApp</button>
+        <button onclick="document.getElementById('_inv_view_overlay').remove();showEditInvoiceModal('${invNum}')" style="background:#f9fafb;color:#374151;border:1px solid #e5e7eb;border-radius:8px;padding:10px 18px;cursor:pointer;font-size:13px;font-weight:600">✏️ Edit invoice</button>
+        <button onclick="document.getElementById('_inv_view_overlay').remove();showAddNoteModal('${invNum}')" style="background:#f9fafb;color:#374151;border:1px solid #e5e7eb;border-radius:8px;padding:10px 18px;cursor:pointer;font-size:13px;font-weight:600">📝 Add note</button>
+        <button onclick="document.getElementById('_inv_view_overlay').remove();showAddCommissionModal('${invNum}')" style="background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:8px;padding:10px 18px;cursor:pointer;font-size:13px;font-weight:600">🎯 Add Commission</button>
+      </div>
+    </div>`;
+
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', e=>{ if(e.target===overlay) overlay.remove(); });
+}
+
+function _shareInvoiceWhatsApp(invNum) {
+  const items = Object.values(STATE.sales||{}).filter(s=>s.invoiceNum===invNum);
+  if (!items.length) return;
+  const first = items[0];
+  const total = items.reduce((a,s)=>a+(s.total||0),0);
+  const custName = first.custName || 'Customer';
+  const bizName = (STATE.settings?.bizName || 'Great Chid Electro').split('/')[0].trim();
+  const itemList = items.map((s,i)=>`${i+1}. ${s.name} x${s.qty||1} = ₦${(s.total||0).toLocaleString()}`).join('\n');
+  const msg = `🧾 *${bizName}*\n`+
+    `Invoice #${invNum}\n`+
+    `Date: ${first.date||new Date().toLocaleDateString()}\n`+
+    `Customer: ${custName}\n\n`+
+    `${itemList}\n\n`+
+    `*TOTAL: ₦${total.toLocaleString()}*\n`+
+    `Payment: ${first.payment||'Cash'}\n\n`+
+    `Thank you for your business! 🙏`;
+  window.open('https://wa.me/?text='+encodeURIComponent(msg),'_blank');
+}
+
+function showAddNoteModal(invNum) {
+  showModal(`📝 Add Note — Invoice #${invNum}`,`<div class="form-group"><label>Note</label><textarea class="form-input" id="inv-note-text" rows="3" placeholder="Add a note to this invoice..."></textarea></div>`,[
+    {label:'Cancel',action:'close',style:''},
+    {label:'Save Note',action:`saveInvoiceNote('${invNum}')`,style:'btn-primary'}]);
+}
+
+async function saveInvoiceNote(invNum){
+  const note=document.getElementById('inv-note-text')?.value.trim();
+  if(!note)return;
+  const items=Object.values(STATE.sales||{}).filter(s=>s.invoiceNum===invNum);
+  for(const s of items){const upd={...s,note};await fsSave(COLS.SALES,s._id,upd);STATE.sales[s._id]=upd;}
+  closeModal();showToast('Note saved.','success');
+  logActivity('Invoice note',`Note added to Invoice #${invNum}`,note.slice(0,40));
+}
+
+function showAddCommissionModal(invNum){
+  showModal(`🎯 Add Commission — Invoice #${invNum}`,`<div class="form-grid c2">
+    <div class="form-group"><label>Customer (recipient)</label><input class="form-input" id="comm-cust" placeholder="Customer name receiving commission"></div>
+    <div class="form-group"><label>Commission Amount (₦)</label><input class="form-input" id="comm-amt" type="number" min="0" placeholder="0"></div>
+    <div class="form-group" style="grid-column:1/-1"><label>Note</label><input class="form-input" id="comm-note" placeholder="e.g. panel doors"></div>
+  </div>`,[{label:'Cancel',action:'close',style:''},{label:'Add Commission',action:`saveCommission('${invNum}')`,style:'btn-primary'}]);
+}
+
+async function saveCommission(invNum){
+  const custName=document.getElementById('comm-cust')?.value.trim();
+  const amt=parseFloat(document.getElementById('comm-amt')?.value)||0;
+  const note=document.getElementById('comm-note')?.value.trim()||'';
+  if(!custName||amt<=0){showToast('Enter customer and amount.','error');return;}
+  const now=new Date();const date=now.toLocaleDateString();const month=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
+  // Find customer
+  const cust=Object.values(STATE.customers||{}).find(c=>(c.name||'').toLowerCase()===custName.toLowerCase());
+  const custId=cust?._id||cust?.id||null;
+  const cfId=uid();
+  const cf={id:cfId,type:'in',cat:'Commission',commType:'earned',desc:`Commission earned — Invoice #${invNum}${note?' ('+note+')':''}`,amount:amt,custId,custName,invoiceNum:invNum,date,month,by:STATE.user?.name};
+  setSyncStatus('saving');
+  try{
+    await fsSave(COLS.CASHFLOW,cfId,cf);
+    if(!STATE.cashflow)STATE.cashflow={};STATE.cashflow[cfId]={...cf,_id:cfId};
+    closeModal();setSyncStatus('synced');showToast(`Commission of ${fmt(amt)} added for ${custName}.`,'success');
+    logActivity('Commission added',`${fmt(amt)} commission for ${custName} — Invoice #${invNum}`,note);
+  }catch(e){setSyncStatus('error');showToast('Failed.','error');}
 }
 
 function _showPrintModeModal(invNum) {
