@@ -4943,6 +4943,121 @@ async function saveInvoiceNote(invNum) {
   } catch(e){setSyncStatus('error');showToast('Failed.','error');}
 }
 
+// ── EDIT INVOICE MODAL (admin only) ──────────────────────────────────────────
+function showEditInvoiceModal(invNum) {
+  if (STATE.user?.role !== 'admin') {
+    showToast('Only admins can edit invoices.', 'error'); return;
+  }
+  const items = Object.values(STATE.sales||{}).filter(s=>s.invoiceNum===invNum);
+  if (!items.length) { showToast('Invoice not found.','error'); return; }
+  const first = items[0];
+
+  const printName   = esc(first.printName || first.custName || '');
+  const payment     = first.payment || 'paid';
+  const payMode     = first.payMode || 'cash';
+  const dueDate     = first.dueDate || '';
+  const deliveryAddr= esc(first.deliveryAddr || '');
+  const note        = esc(first.note || '');
+  const bankName    = esc(first.bankName || '');
+
+  const paymentOpts = ['paid','credit','part'].map(v=>
+    `<option value="${v}" ${payment===v?'selected':''}>${v==='paid'?'Fully Paid':v==='credit'?'Credit':'Part Payment'}</option>`).join('');
+  const payModeOpts = ['cash','transfer','pos','cheque'].map(v=>
+    `<option value="${v}" ${payMode===v?'selected':''}>${v.charAt(0).toUpperCase()+v.slice(1)}</option>`).join('');
+
+  showModal(`✏️ Edit Invoice #${invNum}`,
+    `<div class="form-grid c2">
+      <div class="form-group" style="grid-column:1/-1">
+        <label>Customer Display Name</label>
+        <input class="form-input" id="ei-printname" value="${printName}" placeholder="Name on invoice">
+      </div>
+      <div class="form-group">
+        <label>Payment Type</label>
+        <select class="form-input" id="ei-payment" onchange="
+          const v=this.value;
+          document.getElementById('ei-duedate-row').style.display=(v==='credit'||v==='part')?'block':'none';
+          document.getElementById('ei-paymode-row').style.display=(v==='credit')?'none':'block';
+        ">
+          ${paymentOpts}
+        </select>
+      </div>
+      <div class="form-group" id="ei-paymode-row" style="display:${payment==='credit'?'none':'block'}">
+        <label>Payment Mode</label>
+        <select class="form-input" id="ei-paymode">
+          ${payModeOpts}
+        </select>
+      </div>
+      <div class="form-group" id="ei-duedate-row" style="display:${(payment==='credit'||payment==='part')?'block':'none'};grid-column:1/-1">
+        <label>Due Date</label>
+        <input class="form-input" id="ei-duedate" type="date" value="${dueDate}">
+      </div>
+      <div class="form-group" style="grid-column:1/-1">
+        <label>Delivery Address</label>
+        <input class="form-input" id="ei-delivaddr" value="${deliveryAddr}" placeholder="(optional)">
+      </div>
+      <div class="form-group" style="grid-column:1/-1">
+        <label>Invoice Note</label>
+        <textarea class="form-input" id="ei-note" rows="2" placeholder="Add a note...">${note}</textarea>
+      </div>
+      <div class="form-group" style="grid-column:1/-1">
+        <label style="color:var(--danger)">Reason for Edit *</label>
+        <input class="form-input" id="ei-reason" placeholder="Required — explain why this invoice was edited">
+      </div>
+    </div>`,
+    [{label:'Cancel',action:'close',style:''},{label:'Save Changes',action:`saveEditedInvoice('${invNum}')`,style:'btn-primary'}]
+  );
+}
+
+async function saveEditedInvoice(invNum) {
+  if (STATE.user?.role !== 'admin') return;
+  const reason = document.getElementById('ei-reason')?.value.trim();
+  if (!reason) { showToast('Please enter a reason for the edit.','error'); return; }
+
+  const printName    = document.getElementById('ei-printname')?.value.trim();
+  const payment      = document.getElementById('ei-payment')?.value || 'paid';
+  const payMode      = document.getElementById('ei-paymode')?.value || 'cash';
+  const dueDate      = document.getElementById('ei-duedate')?.value || '';
+  const deliveryAddr = document.getElementById('ei-delivaddr')?.value.trim();
+  const note         = document.getElementById('ei-note')?.value.trim();
+
+  const items = Object.values(STATE.sales||{}).filter(s=>s.invoiceNum===invNum);
+  if (!items.length) { showToast('Invoice not found.','error'); return; }
+
+  setSyncStatus('saving');
+  try {
+    for (const s of items) {
+      const upd = {
+        ...s,
+        printName: printName || s.printName || s.custName,
+        payment, payMode, dueDate, deliveryAddr, note,
+        editedBy: STATE.user.name,
+        editedAt: new Date().toISOString(),
+        editReason: reason
+      };
+      // Sales are stored in monthly collections
+      const month = s.month || (s.date ? s.date.slice(0,7) : null);
+      if (month) {
+        const [yr, mo] = month.split('-').map(Number);
+        const col = salesCol(yr, mo);
+        await fsSave(col, s._id, upd);
+      } else {
+        await fsSave(COLS.SALES, s._id, upd);
+      }
+      STATE.sales[s._id] = {...upd, _id: s._id};
+    }
+    closeModal();
+    setSyncStatus('synced');
+    showToast('Invoice updated.', 'success');
+    logActivity('Invoice edited', `Invoice #${invNum} edited by ${STATE.user.name}`, reason.slice(0,60));
+    // Refresh sales view if visible
+    if (document.getElementById('pg-sales')?.classList.contains('active')) renderSalesHistory?.();
+  } catch(e) {
+    setSyncStatus('error');
+    showToast('Failed to save changes: ' + e.message, 'error');
+    console.error('saveEditedInvoice error:', e);
+  }
+}
+
 function showAddCommissionModal(invNum) {
   showModal(`🎯 Add Commission — Invoice #${invNum}`,
     `<div class="form-grid c2">
