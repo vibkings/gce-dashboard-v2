@@ -11540,12 +11540,14 @@ function checkAutoBackup() {
   const h = new Date().getHours();
   const m = new Date().getMinutes();
 
-  // 7PM reminder toast
+  // 7PM — auto download backup to local storage (silent, once per day)
   if (h === 19 && m <= 5) {
-    const key = 'gce_v2_backup_remind_'+new Date().toLocaleDateString();
+    const key = 'gce_v2_backup_7pm_'+new Date().toLocaleDateString();
     if (!localStorage.getItem(key)) {
       localStorage.setItem(key,'1');
-      showToast('🕖 7PM — Daily backup reminder! Click 💾 Backup in the toolbar.', 'info');
+      exportBackup();
+      _addBackupHistory('local');
+      showToast('🕖 7PM — Auto backup saved to your device.', 'success');
     }
   }
 
