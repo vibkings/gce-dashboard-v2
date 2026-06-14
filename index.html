@@ -7906,75 +7906,259 @@ function prodReportLiveSearch(term,force) {
 function renderMonthlySummary() {
   const el=document.getElementById('monthly-content'); if(!el)return;
   const now=new Date();
-  const selectedMonth=window._monthSumMonth||(now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0'));
+  const pad=n=>String(n).padStart(2,'0');
+  const selectedMonth=window._monthSumMonth||(now.getFullYear()+'-'+pad(now.getMonth()+1));
   const selDate=new Date(selectedMonth+'-02');
   const selMon=selDate.getMonth(); const selYear=selDate.getFullYear();
-  const monthName=selDate.toLocaleString('default',{month:'long',year:'numeric'});
-  function inMonth(date){const d=new Date(date);return d.getMonth()===selMon&&d.getFullYear()===selYear;}
-  const sales=Object.values(STATE.sales||{}).filter(s=>(s.month||'')===selectedMonth||inMonth(s.date));
+  const monthName=selDate.toLocaleString('en',{month:'long',year:'numeric'});
+  function inMonth(date){if(!date)return false;const d=new Date(date);return d.getMonth()===selMon&&d.getFullYear()===selYear;}
+
+  const EXC=['Restock','Change','Supplier Payment','Supplier Deposit'];
+  const allSales=Object.values(STATE.sales||{}).filter(s=>!s.voided);
+  const sales=allSales.filter(s=>(s.month||'')===selectedMonth||inMonth(s.date));
+
+  // Group by invoice
   const invs={};
-  sales.forEach(s=>{const k=s.invoiceNum;if(!invs[k])invs[k]={total:0,profit:0,payment:s.payment,payMode:s.payMode||'cash',partPayment:s.partPayment||0};invs[k].total+=s.total||0;invs[k].profit+=s.profit||0;});
+  sales.forEach(s=>{
+    const k=s.invoiceNum;
+    if(!invs[k])invs[k]={total:0,profit:0,payment:s.payment,payMode:s.payMode||'cash',
+      splitPayment:s.splitPayment||null,bankName:s.bankName||'',partPayment:s.partPayment||0,
+      seller:s.seller||''};
+    invs[k].total+=s.total||0; invs[k].profit+=s.profit||0;
+  });
   const invList=Object.values(invs);
+  const invoiceCount=invList.length;
+
+  // Revenue / Profit
   const revenue=invList.reduce((a,i)=>a+i.total,0);
-  const profit=invList.reduce((a,i)=>a+i.profit,0);
-  const creditOwed=invList.filter(i=>i.payment==='credit').reduce((a,i)=>a+i.total,0);
-  const partOwed=invList.filter(i=>i.payment==='part').reduce((a,i)=>a+Math.max(0,i.total-i.partPayment),0);
-  const totalCredit=creditOwed+partOwed;
-  const collected=invList.filter(i=>i.payment!=='credit').reduce((a,i)=>i.payment==='part'?a+(i.partPayment||0):a+i.total,0);
-  const expenses=Object.values(STATE.cashflow||{}).filter(c=>c.type==='out'&&!c.isReturn&&!['Restock','Change','Supplier Payment','Supplier Deposit'].includes(c.cat)&&((c.month||'')===selectedMonth||inMonth(c.date))).reduce((a,c)=>a+(c.amount||0),0);
+  const grossProfit=invList.reduce((a,i)=>a+i.profit,0);
+  const grossMargin=revenue>0?Math.round(grossProfit/revenue*100):0;
+
+  // Credit
+  const creditThisMonth=invList.filter(i=>i.payment==='credit').reduce((a,i)=>a+i.total,0);
+  const partOwed=invList.filter(i=>i.payment==='part').reduce((a,i)=>a+Math.max(0,i.total-(i.partPayment||0)),0);
+  const owedThisMonth=creditThisMonth+partOwed;
+  const totalCreditAllTime=Object.values(STATE.customers||{}).reduce((a,c)=>a+(c.creditBalance||0),0);
+
+  // Cash received (from this month's invoices, non-credit)
+  const cashReceived=invList.filter(i=>i.payment!=='credit').reduce((a,i)=>i.payment==='part'?a+(i.partPayment||0):a+i.total,0);
+
+  // Credit collected this month (old debts paid)
+  const creditCollected=Object.values(STATE.cashflow||{}).filter(c=>c.type==='in'&&c.cat==='Credit Payment'&&((c.month||'')===selectedMonth||inMonth(c.date))).reduce((a,c)=>a+(c.amount||0),0);
+
+  // Expenses
+  const expCFs=Object.values(STATE.cashflow||{}).filter(c=>c.type==='out'&&!c.isReturn&&!EXC.includes(c.cat)&&((c.month||'')===selectedMonth||inMonth(c.date)));
+  const expenses=expCFs.reduce((a,c)=>a+(c.amount||0),0);
+
+  // Restocking
   const restock=Object.values(STATE.purchases||{}).filter(p=>(p.month||'')===selectedMonth||inMonth(p.date)).reduce((a,p)=>a+(p.totalCost||0),0);
-  const netProfit=profit-expenses;
+
+  // Net profit & net cash
+  const netProfit=grossProfit-expenses;
+  const netMargin=revenue>0?Math.round(netProfit/revenue*100):0;
+  const netCash=cashReceived+creditCollected-expenses;
+
+  // Payment breakdown (split distributed)
+  let cashPay=0,posPay=0,transferPay=0;
+  invList.forEach(g=>{
+    if(g.payment==='credit')return;
+    if(g.payMode==='split'&&g.splitPayment){
+      const sp=g.splitPayment;
+      const add=(m,v)=>{if(m==='cash')cashPay+=v;else if(m==='pos')posPay+=v;else if(m==='transfer')transferPay+=v;};
+      add(sp.mode1,sp.amt1||0);add(sp.mode2,sp.amt2||0);
+    } else if(g.payMode==='pos')posPay+=g.total;
+    else if(g.payMode==='transfer')transferPay+=g.total;
+    else cashPay+=g.total;
+  });
+
+  // Expense breakdown by category
   const expMap={};
-  Object.values(STATE.cashflow||{}).filter(c=>c.type==='out'&&!['Restock','Change','Supplier Payment','Supplier Deposit'].includes(c.cat)&&((c.month||'')===selectedMonth||inMonth(c.date))).forEach(c=>{const cat=c.cat||'Other';if(!expMap[cat])expMap[cat]=0;expMap[cat]+=c.amount||0;});
-  const expRows=Object.entries(expMap).sort((a,b)=>b[1]-a[1]).map(([cat,amt])=>`<tr><td style="font-size:12px">${esc(cat)}</td><td class="td-right" style="font-size:12px">${fmt(amt)}</td></tr>`).join('');
+  expCFs.forEach(c=>{const cat=c.cat||'Other';if(!expMap[cat])expMap[cat]=0;expMap[cat]+=c.amount||0;});
+  const expEntries=Object.entries(expMap).sort((a,b)=>b[1]-a[1]);
+
+  // Top 5 items by revenue
   const itemMap={};
   sales.forEach(s=>{const k=s.itemId||s.name;if(!itemMap[k])itemMap[k]={name:s.name,qty:0,rev:0,profit:0};itemMap[k].qty+=s.qty||1;itemMap[k].rev+=s.total||0;itemMap[k].profit+=s.profit||0;});
   const topItems=Object.values(itemMap).sort((a,b)=>b.rev-a.rev).slice(0,5);
-  const itemRows=topItems.map((i,idx)=>`<tr><td style="font-size:12px"><b>${idx+1}.</b> ${esc(i.name)}</td><td style="text-align:center;font-size:12px">${i.qty}</td><td class="td-right" style="font-size:12px">${fmt(i.rev)}</td><td class="td-right" style="font-size:12px;color:var(--success)">${fmt(i.profit)}</td></tr>`).join('');
+
+  // Staff performance
+  const staffMap={};
+  invList.forEach(g=>{const s=g.seller||'Unknown';if(!staffMap[s])staffMap[s]={name:s,invoices:0,revenue:0,profit:0};staffMap[s].invoices++;staffMap[s].revenue+=g.total;staffMap[s].profit+=g.profit;});
+  const staffRows=Object.values(staffMap).sort((a,b)=>b.revenue-a.revenue);
+
+  // Credit outstanding top 5
   const creditCusts=Object.values(STATE.customers||{}).filter(c=>(c.creditBalance||0)>0).sort((a,b)=>(b.creditBalance||0)-(a.creditBalance||0)).slice(0,5);
-  const creditRows=creditCusts.map(c=>`<tr><td style="font-size:12px"><b>${esc(c.name)}</b></td><td class="td-right" style="font-size:12px;color:var(--danger)">${fmt(c.creditBalance||0)}</td></tr>`).join('');
+
+  // Month options (last 24 months)
   const months=[];
-  for(let i=0;i<24;i++){const d=new Date(now.getFullYear(),now.getMonth()-i,1);months.push(d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'));}
-  const monthOpts=months.map(m=>`<option value="${m}" ${m===selectedMonth?'selected':''}>${new Date(m+'-02').toLocaleString('default',{month:'long',year:'numeric'})}</option>`).join('');
+  for(let i=0;i<24;i++){const d=new Date(now.getFullYear(),now.getMonth()-i,1);months.push(d.getFullYear()+'-'+pad(d.getMonth()+1));}
+  const monthOpts=months.map(m=>`<option value="${m}" ${m===selectedMonth?'selected':''}>${new Date(m+'-02').toLocaleString('en',{month:'long',year:'numeric'})}</option>`).join('');
+
+  // KPI card helper for this page (v1 style with large numbers)
+  const mk=(label,val,sub,color='var(--text1)')=>`
+    <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px 16px">
+      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--text3);margin-bottom:6px">${label}</div>
+      <div style="font-size:20px;font-weight:800;color:${color};line-height:1.2;margin-bottom:4px">${val}</div>
+      <div style="font-size:11px;color:var(--text3)">${sub}</div>
+    </div>`;
+
   el.innerHTML=`
-    <div style="display:flex;align-items:center;gap:12px;margin-bottom:1.25rem;flex-wrap:wrap">
-      <div class="sec-title" style="margin:0">Monthly Summary</div>
-      <select class="form-input" style="width:220px" onchange="window._monthSumMonth=this.value;renderMonthlySummary()">${monthOpts}</select>
-      <button class="btn btn-sm" onclick="printMonthlySummary()" style="color:#1a237e;border-color:#93c5fd">Print</button>
-      <button class="btn btn-sm" onclick="shareMonthlySummaryWhatsApp()" style="color:#16a34a;border-color:#86efac">WhatsApp</button>
+    <!-- Month selector + actions -->
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:1.25rem;flex-wrap:wrap">
+      <select class="form-input" style="width:200px" onchange="window._monthSumMonth=this.value;renderMonthlySummary()">${monthOpts}</select>
+      <button class="btn btn-sm" onclick="printMonthlySummary()" style="color:#1a237e;border-color:#93c5fd">🖨 Print</button>
+      <button class="btn btn-sm" onclick="shareMonthlySummaryWhatsApp()" style="background:#25d366;color:#fff;border-color:#25d366">📱 Send on WhatsApp</button>
     </div>
-    <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:.75rem">
-      ${kpiCard('brand','Revenue',fmt(revenue),monthName)}
-      ${kpiCard('success','Gross Profit',fmt(profit),revenue>0?Math.round(profit/revenue*100)+'% margin':'')}
-      ${kpiCard('danger','Expenses',fmt(expenses),monthName)}
-      ${kpiCard(netProfit>=0?'success':'danger','Net Profit',fmt(netProfit),netProfit>=0?'Profitable':'Loss')}
+
+    <!-- Row 1: 4 main KPIs -->
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:10px">
+      ${mk('Revenue',fmt(revenue),invoiceCount+' invoices','var(--success)')}
+      ${mk('Gross Profit',fmt(grossProfit),grossMargin+'% margin','var(--success)')}
+      ${mk('Net Profit',fmt(netProfit),netMargin+'% after expenses',netProfit>=0?'var(--success)':'var(--danger)')}
+      ${mk('Net Cash',fmt(netCash),'Sales cash + debt collected − expenses','var(--warning)')}
     </div>
-    <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:1.25rem">
-      ${kpiCard('neutral','Invoices',invList.length,monthName)}
-      ${kpiCard('neutral','Credit Owed',fmt(totalCredit),'This month')}
-      ${kpiCard('neutral','Collected',fmt(collected),monthName)}
-      ${kpiCard('neutral','Restock Cost',fmt(restock),monthName)}
+    <!-- Row 2: 4 cash/credit KPIs -->
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:10px">
+      ${mk('Cash Received',fmt(cashReceived),"From this month's invoices",'var(--brand)')}
+      ${mk('Credit Collected',fmt(creditCollected),'Old debts paid this month','var(--success)')}
+      ${mk('Owed This Month',fmt(owedThisMonth),'New credit not yet paid','var(--danger)')}
+      ${mk('Total Credit (All Time)',fmt(totalCreditAllTime),'Live balance − all customers','var(--danger)')}
     </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:1.25rem">
-      <div class="card" style="padding:1rem">
-        <div class="sec-title" style="margin-bottom:.75rem">${monthName}</div>
-        ${[['Total Revenue',fmt(revenue),'var(--brand)'],['Gross Profit',fmt(profit),'var(--success)'],['Operating Expenses',fmt(expenses),'var(--danger)'],['Restock Cost',fmt(restock),'var(--danger)'],['Credit Owed',fmt(totalCredit),'#d97706'],['Net Profit',fmt(netProfit),netProfit>=0?'var(--success)':'var(--danger)']].map(([l,v,c],i)=>`<div style="display:flex;justify-content:space-between;padding:8px 0;${i>0?'border-top:1px solid var(--border)':''}${i===5?';font-weight:800':''}"><span style="font-size:13px;color:var(--text2)">${l}</span><span style="font-weight:700;color:${c}">${v}</span></div>`).join('')}
+    <!-- Row 3: Expenses + Restocking -->
+    <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:1.25rem">
+      ${mk('Expenses',fmt(expenses),'Operating costs this month','var(--danger)')}
+      ${mk('Restocking',fmt(restock),'Stock purchased this month','var(--danger)')}
+    </div>
+
+    <!-- Payment breakdown -->
+    <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px 16px;margin-bottom:1.25rem">
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--brand);margin-bottom:12px;display:flex;align-items:center;gap:6px">
+        <span style="width:3px;height:14px;background:var(--brand);border-radius:2px;display:inline-block"></span>
+        💳 PAYMENT BREAKDOWN
       </div>
-      <div class="card" style="padding:1rem">
-        <div class="sec-title" style="margin-bottom:.75rem">Top 5 Items</div>
-        ${itemRows?`<table style="width:100%;font-size:12px"><thead><tr><th style="text-align:left">Item</th><th style="text-align:center">Qty</th><th class="td-right">Revenue</th><th class="td-right">Profit</th></tr></thead><tbody>${itemRows}</tbody></table>`:'<div style="color:var(--text3);font-size:13px">No sales this month.</div>'}
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px">
+        ${mk('Cash',fmt(cashPay),'Incl. split','var(--success)')}
+        ${mk('POS',fmt(posPay),'Incl. split','var(--info)')}
+        ${mk('Transfer',fmt(transferPay),'Incl. split','var(--brand)')}
       </div>
-      <div class="card" style="padding:1rem">
-        <div class="sec-title" style="margin-bottom:.75rem">Expenses by Category</div>
-        ${expRows?`<table style="width:100%;font-size:12px"><thead><tr><th>Category</th><th class="td-right">Amount</th></tr></thead><tbody>${expRows}</tbody></table>`:'<div style="color:var(--text3);font-size:13px">No expenses.</div>'}
-        ${creditRows?`<div class="sec-title" style="margin:.75rem 0">Outstanding Credit</div><table style="width:100%;font-size:12px"><thead><tr><th>Customer</th><th class="td-right">Owes</th></tr></thead><tbody>${creditRows}</tbody></table>`:''}
+    </div>
+
+    <!-- Top 5 items -->
+    <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px 16px;margin-bottom:1.25rem">
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--brand);margin-bottom:12px;display:flex;align-items:center;gap:6px">
+        <span style="width:3px;height:14px;background:var(--brand);border-radius:2px;display:inline-block"></span>
+        🏆 TOP 5 ITEMS BY REVENUE
       </div>
+      ${topItems.length?`<div class="tbl-wrap" style="border-radius:var(--radius);border:1px solid var(--border)"><table>
+        <thead><tr><th>ITEM</th><th style="text-align:center">QTY SOLD</th><th class="td-right">REVENUE</th><th class="td-right">PROFIT</th></tr></thead>
+        <tbody>${topItems.map((i,idx)=>`<tr>
+          <td><b>${idx+1}. ${esc(i.name)}</b></td>
+          <td style="text-align:center">${i.qty}</td>
+          <td class="td-right;font-weight:600">${fmt(i.rev)}</td>
+          <td class="td-right" style="color:var(--success);font-weight:700">${fmt(i.profit)}</td>
+        </tr>`).join('')}</tbody>
+      </table></div>`:'<div style="color:var(--text3);text-align:center;padding:16px">No sales this month.</div>'}
+    </div>
+
+    <!-- Expenses breakdown -->
+    <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px 16px;margin-bottom:1.25rem">
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--danger);margin-bottom:12px;display:flex;align-items:center;gap:6px">
+        <span style="width:3px;height:14px;background:var(--danger);border-radius:2px;display:inline-block"></span>
+        💸 EXPENSES BREAKDOWN
+      </div>
+      ${expEntries.length?`<div class="tbl-wrap" style="border-radius:var(--radius);border:1px solid var(--border)"><table>
+        <thead><tr><th>CATEGORY</th><th class="td-right">AMOUNT</th></tr></thead>
+        <tbody>${expEntries.map(([cat,amt],i)=>`<tr style="${i%2?'background:var(--surface)':''}">
+          <td style="font-size:13px">${esc(cat)}</td>
+          <td class="td-right" style="font-weight:600;color:var(--danger)">${fmt(amt)}</td>
+        </tr>`).join('')}</tbody>
+        <tfoot><tr style="font-weight:700;background:var(--surface)">
+          <td style="padding:8px 12px">TOTAL</td>
+          <td class="td-right" style="padding:8px 12px;color:var(--danger)">${fmt(expenses)}</td>
+        </tr></tfoot>
+      </table></div>`:'<div style="color:var(--text3);text-align:center;padding:16px">No expenses this month.</div>'}
+    </div>
+
+    <!-- Staff performance -->
+    ${staffRows.length?`
+    <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px 16px;margin-bottom:1.25rem">
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--brand);margin-bottom:12px;display:flex;align-items:center;gap:6px">
+        <span style="width:3px;height:14px;background:var(--brand);border-radius:2px;display:inline-block"></span>
+        👤 STAFF PERFORMANCE
+      </div>
+      <div class="tbl-wrap" style="border-radius:var(--radius);border:1px solid var(--border)"><table>
+        <thead><tr><th>STAFF</th><th style="text-align:center">INVOICES</th><th class="td-right">REVENUE</th><th class="td-right">PROFIT</th></tr></thead>
+        <tbody>${staffRows.map(s=>`<tr>
+          <td style="font-weight:700">${esc(s.name)}</td>
+          <td style="text-align:center;font-weight:700;font-size:16px">${s.invoices}</td>
+          <td class="td-right;font-weight:600">${fmt(s.revenue)}</td>
+          <td class="td-right" style="color:var(--success);font-weight:700">${fmt(s.profit)}</td>
+        </tr>`).join('')}</tbody>
+      </table></div>
+    </div>`:''}
+
+    <!-- Credit outstanding -->
+    <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px 16px;margin-bottom:1.25rem">
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--danger);margin-bottom:12px;display:flex;align-items:center;gap:6px">
+        <span style="width:3px;height:14px;background:var(--danger);border-radius:2px;display:inline-block"></span>
+        💳 CREDIT OUTSTANDING (ALL TIME TOP 5)
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+        ${mk('New Credit This Month',fmt(owedThisMonth),"From this month's invoices",'var(--warning)')}
+        ${mk('Total Owed (All Time)',fmt(totalCreditAllTime),'Live balance − all customers','var(--danger)')}
+      </div>
+      ${creditCusts.length?`<div class="tbl-wrap" style="border-radius:var(--radius);border:1px solid var(--border)"><table>
+        <thead><tr><th>CUSTOMER</th><th>PHONE</th><th class="td-right">BALANCE OWED</th></tr></thead>
+        <tbody>${creditCusts.map(c=>`<tr>
+          <td style="font-weight:700">${esc(c.name)}</td>
+          <td style="font-size:12px;color:var(--text3)">${esc(c.phone||'—')}</td>
+          <td class="td-right" style="color:var(--danger);font-weight:700">${fmt(c.creditBalance||0)}</td>
+        </tr>`).join('')}</tbody>
+      </table></div>`:'<div style="color:var(--text3);font-size:13px;text-align:center;padding:10px">No outstanding credit.</div>'}
     </div>`;
 }
 
-function printMonthlySummary(){showToast('Monthly summary print coming soon.','info');}
-function shareMonthlySummaryWhatsApp(){showToast('WhatsApp share coming soon.','info');}
+function printMonthlySummary(){
+  const selectedMonth=window._monthSumMonth||'';
+  const monthName=selectedMonth?new Date(selectedMonth+'-02').toLocaleString('en',{month:'long',year:'numeric'}):'';
+  const el=document.getElementById('monthly-content');
+  if(!el)return;
+  const w=window.open('','_blank');
+  if(!w)return;
+  w.document.write(`<!DOCTYPE html><html><head><title>Monthly Summary ${monthName}</title>
+  <style>body{font-family:Arial;padding:20px;font-size:13px}h2{color:#1a237e}table{width:100%;border-collapse:collapse;margin-bottom:14px}th{background:#f0f4ff;padding:7px 10px;border:1px solid #ddd;font-size:11px;text-align:left}td{padding:7px 10px;border:1px solid #eee}@media print{button{display:none}}</style>
+  </head><body>
+  <h2>GREAT CHID ELECTRO — Monthly Summary: ${monthName}</h2>
+  ${el.innerHTML}
+  <button onclick="window.print()" style="padding:8px 20px;background:#1a237e;color:#fff;border:none;border-radius:6px;cursor:pointer;margin-top:10px">🖨️ Print</button>
+  </body></html>`);
+  w.document.close();
+}
 
+function shareMonthlySummaryWhatsApp(){
+  const selectedMonth=window._monthSumMonth||'';
+  const monthName=selectedMonth?new Date(selectedMonth+'-02').toLocaleString('en',{month:'long',year:'numeric'}):'';
+  const now=new Date();
+  const pad=n=>String(n).padStart(2,'0');
+  const EXC=['Restock','Change','Supplier Payment','Supplier Deposit'];
+  function inMonth(date){if(!date)return false;const d=new Date(date);const sd=new Date(selectedMonth+'-02');return d.getMonth()===sd.getMonth()&&d.getFullYear()===sd.getFullYear();}
+  const sales=Object.values(STATE.sales||{}).filter(s=>!s.voided&&((s.month||'')===selectedMonth||inMonth(s.date)));
+  const invs={};
+  sales.forEach(s=>{const k=s.invoiceNum;if(!invs[k])invs[k]={total:0,profit:0,payment:s.payment,partPayment:s.partPayment||0};invs[k].total+=s.total||0;invs[k].profit+=s.profit||0;});
+  const invList=Object.values(invs);
+  const revenue=invList.reduce((a,i)=>a+i.total,0);
+  const profit=invList.reduce((a,i)=>a+i.profit,0);
+  const expenses=Object.values(STATE.cashflow||{}).filter(c=>c.type==='out'&&!EXC.includes(c.cat)&&((c.month||'')===selectedMonth||inMonth(c.date))).reduce((a,c)=>a+(c.amount||0),0);
+  const netProfit=profit-expenses;
+  const msg=`📊 *GREAT CHID ELECTRO — ${monthName}*\n\n`+
+    `💰 Revenue: ${fmt(revenue)}\n`+
+    `📈 Gross Profit: ${fmt(profit)} (${revenue>0?Math.round(profit/revenue*100):0}%)\n`+
+    `💸 Expenses: ${fmt(expenses)}\n`+
+    `✅ Net Profit: ${fmt(netProfit)}\n`+
+    `📋 Invoices: ${invList.length}\n\n`+
+    `_Generated by GCE Dashboard v2 · ${now.toLocaleDateString()}_`;
+  window.open('https://wa.me/?text='+encodeURIComponent(msg),'_blank');
+}
 // ── ACTIVITY LOG ─────────────────────────────────────────
 function renderActivityLog() {
   const el=document.getElementById('activitylog-content'); if(!el)return;
