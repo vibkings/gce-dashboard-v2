@@ -3322,8 +3322,7 @@ function _buildInvoiceHTML(invNum, mode='a4', invTypeOverride='sales') {
     <td style="padding:${fs('5px','6px')} 8px;text-align:right;font-size:${fs('12px','13px')};font-weight:700">₦${(s.total||0).toLocaleString()}</td>
   </tr>`).join('');
 
-  const blankRows=items.length<maxRows
-    ?Array(maxRows-items.length).fill(`<tr><td colspan="5" style="height:${fs('18px','20px')};border-bottom:1px solid #f0f0f0">&nbsp;</td></tr>`).join(''):'';
+  const blankRows=''; // No blank rows — table adjusts to content naturally
 
   return `<!DOCTYPE html>
 <html><head><meta charset="UTF-8"><title>${badgeLabel} — ${invNum}</title>
