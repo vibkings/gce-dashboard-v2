@@ -1986,11 +1986,41 @@ function _showFirestoreGuide(errType) {
 }
 
 // ── startListeners / startExtraListeners ─────────────────
-// Replace polling with periodic background refresh
+// Sync-mode-aware background refresh system
 const _refreshIntervals = {};
 
+// Interval tables per mode (milliseconds). 0 = disabled.
+const _SYNC_MODES = {
+  aggressive: { fast: 60_000,       slow: 5 * 60_000,  sales: 2 * 60_000  },
+  balanced:   { fast: 5 * 60_000,   slow: 30 * 60_000, sales: 10 * 60_000 },
+  minimal:    { fast: 30 * 60_000,  slow: 30 * 60_000, sales: 30 * 60_000 },
+  manual:     { fast: 0,            slow: 0,            sales: 0           },
+};
+
+function _getSyncMode() {
+  return localStorage.getItem('gce_sync_mode') || 'balanced';
+}
+
+function setSyncMode(mode) {
+  localStorage.setItem('gce_sync_mode', mode);
+  // Restart listeners with new intervals
+  stopAllPolling();
+  startListeners();
+  startExtraListeners();
+  showToast(`Sync mode set to ${mode}.`, 'success');
+  renderSettings();
+}
+
+function stopAllPolling() {
+  Object.keys(_refreshIntervals).forEach(k => {
+    clearInterval(_refreshIntervals[k]);
+    delete _refreshIntervals[k];
+  });
+}
+
 function startListeners() {
-  // Refresh inventory/customers/suppliers every 60s in background
+  const intervals = _SYNC_MODES[_getSyncMode()] || _SYNC_MODES.balanced;
+  if (!intervals.fast) return; // manual mode — no polling
   const FAST_COLS = [
     [COLS.INVENTORY,  'inventory'],
     [COLS.CUSTOMERS,  'customers'],
@@ -1998,11 +2028,13 @@ function startListeners() {
     [COLS.USERS,      'users'],
   ];
   FAST_COLS.forEach(([col, key]) => {
-    _refreshIntervals[col] = setInterval(() => _refreshFromFirestore(col, key), 60_000);
+    _refreshIntervals[col] = setInterval(() => _refreshFromFirestore(col, key), intervals.fast);
   });
 }
 
 function startExtraListeners() {
+  const intervals = _SYNC_MODES[_getSyncMode()] || _SYNC_MODES.balanced;
+  if (!intervals.slow) return; // manual mode
   const SLOW_COLS = [
     [COLS.PURCHASES,     'purchases'],
     [COLS.CASHFLOW,      'cashflow'],
@@ -2012,19 +2044,42 @@ function startExtraListeners() {
     [COLS.SALESRETURNS,  'salesReturns'],
   ];
   SLOW_COLS.forEach(([col, key]) => {
-    _refreshIntervals[col] = setInterval(() => _refreshFromFirestore(col, key), 5 * 60_000);
+    _refreshIntervals[col] = setInterval(() => _refreshFromFirestore(col, key), intervals.slow);
   });
-  // Refresh current month sales every 2 min
-  _refreshIntervals['sales'] = setInterval(() => {
-    const now = new Date();
-    loadMonthlySales(now.getFullYear(), now.getMonth()+1);
-  }, 2 * 60_000);
+  if (intervals.sales) {
+    _refreshIntervals['sales'] = setInterval(() => {
+      const now = new Date();
+      loadMonthlySales(now.getFullYear(), now.getMonth()+1);
+    }, intervals.sales);
+  }
 }
 
 function stopLivePolling(col) {
   if (_refreshIntervals[col]) {
     clearInterval(_refreshIntervals[col]);
     delete _refreshIntervals[col];
+  }
+}
+
+async function manualSyncAll() {
+  setSyncStatus('saving');
+  showToast('Syncing all collections from Firestore...', 'info');
+  try {
+    await Promise.all([
+      _refreshFromFirestore(COLS.INVENTORY,  'inventory'),
+      _refreshFromFirestore(COLS.CUSTOMERS,  'customers'),
+      _refreshFromFirestore(COLS.SUPPLIERS,  'suppliers'),
+      _refreshFromFirestore(COLS.PURCHASES,  'purchases'),
+      _refreshFromFirestore(COLS.CASHFLOW,   'cashflow'),
+      _refreshFromFirestore(COLS.WAREHOUSE,  'warehouse'),
+    ]);
+    const now = new Date();
+    await loadMonthlySales(now.getFullYear(), now.getMonth()+1);
+    setSyncStatus('synced');
+    showToast('✅ All data synced from Firestore.', 'success');
+  } catch(e) {
+    setSyncStatus('error');
+    showToast('Sync failed: ' + e.message, 'error');
   }
 }
 
@@ -11738,6 +11793,37 @@ function renderSettingsFull(){
       <p style="font-size:13px;color:var(--text3);margin-bottom:1rem">Import from a v1 dashboard backup (.json) file.</p>
       <input type="file" id="v1-backup-file" accept=".json" style="margin-bottom:10px;font-size:13px"><br>
       <button class="btn btn-primary" onclick="importV1Backup()">Import v1 Backup</button>
+    </div>
+
+    <!-- Firestore Sync Settings -->
+    <div class="form-card" style="margin-bottom:1.25rem">
+      ${secTitle('☁️','Firestore Sync Settings')}
+      <p style="font-size:13px;color:var(--text3);margin-bottom:12px">
+        Control how often the dashboard reads from Firestore. Lower frequency = fewer quota reads.
+        Current Firebase project: <b>great-chid-electro-daad3</b>
+      </p>
+      ${(()=>{
+        const mode=localStorage.getItem('gce_sync_mode')||'balanced';
+        const modes=[
+          {id:'aggressive',label:'⚡ Aggressive',desc:'Inventory every 1 min · Sales every 2 min · Others every 5 min. Best for active multi-device use.'},
+          {id:'balanced', label:'⚖️ Balanced',  desc:'Inventory every 5 min · Sales every 10 min · Others every 30 min. Recommended default.'},
+          {id:'minimal',  label:'🐢 Minimal',   desc:'All collections every 30 min. Best for single-device or low-quota situations.'},
+          {id:'manual',   label:'🔌 Manual only',desc:'No background polling. Data only refreshes when you click 🔄 Sync or make a change.'},
+        ];
+        const modeCards=modes.map(m=>`
+          <div onclick="setSyncMode('${m.id}')" style="padding:12px 14px;border-radius:10px;border:2px solid ${mode===m.id?'var(--brand)':'var(--border)'};background:${mode===m.id?'var(--brand-bg,#eff6ff)':'var(--surface)'};cursor:pointer;margin-bottom:8px">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px">
+              <div style="width:14px;height:14px;border-radius:50%;border:2px solid ${mode===m.id?'var(--brand)':'var(--border)'};background:${mode===m.id?'var(--brand)':'transparent'};flex-shrink:0"></div>
+              <span style="font-size:13px;font-weight:700;color:${mode===m.id?'var(--brand)':'var(--text1)'}">${m.label}</span>
+            </div>
+            <p style="font-size:11.5px;color:var(--text3);margin:0 0 0 22px">${m.desc}</p>
+          </div>`).join('');
+        const estReads={aggressive:'~800–1,200 reads/hour',balanced:'~150–250 reads/hour',minimal:'~30–60 reads/hour',manual:'0 reads (manual only)'};
+        return`${modeCards}<div style="background:var(--warning-bg);border:1px solid var(--warning);border-radius:8px;padding:10px 12px;font-size:12px;color:var(--warning-text)">
+          📊 <b>Estimated reads:</b> ${estReads[mode]||'—'} · Current mode: <b>${modes.find(m=>m.id===mode)?.label||mode}</b>
+          <button onclick="manualSyncAll()" style="margin-left:12px;padding:4px 12px;background:var(--brand);color:#fff;border:none;border-radius:6px;font-size:11px;font-weight:700;cursor:pointer">🔄 Sync Now</button>
+        </div>`;
+      })()}
     </div>
 
     <!-- Danger Zone -->
