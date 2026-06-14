@@ -5769,8 +5769,259 @@ async function cancelPendingItem(pendId) {
 // WEEK 2 — CUSTOMERS MODULE
 // ════════════════════════════════════════════════════════════
 
+// ══════════════════════════════════════════════════════════════
+// CUSTOMER MESSAGING MODULE (ported from v1)
+// ══════════════════════════════════════════════════════════════
+var msgSelectedCusts=[],msgTemplateKey='custom',msgChannel='twilio';
+var MSG_TEMPLATES={
+  newmonth:{label:'🎉 New Month',get text(){const e=new Date;return'Dear {name}, wishing you a wonderful '+['January','February','March','April','May','June','July','August','September','October','November','December'][e.getMonth()]+' '+e.getFullYear()+'! 🎉 Thank you for your continued patronage at Great Chid Electro / Global Doors Ltd. We look forward to serving you better this month. Best regards, Great Chid Electro / Global Doors Ltd.';}},
+  reminder:{label:'💳 Balance Reminder',text:'Dear {name}, this is a friendly reminder that you have an outstanding balance of {balance} on your account. Kindly visit us or contact us to make payment. Thank you. Great Chid Electro / Global Doors Ltd.'},
+  promo:{label:'🛍 Promo / Announcement',text:'Dear {name}, we have exciting products and offers available for you! Visit us today and enjoy great deals. Great Chid Electro / Global Doors Ltd.'},
+  custom:{label:'✏ Custom message',text:''}
+};
+var TWILIO_FROM='whatsapp:+2347055693109';
+var TERMII_SENDER='great chid';
+function _msgGetSettings(){return STATE.settings||{};}
+function _msgSaveSettings(s){const updated={...(_msgGetSettings()||{}), ...s};fsSave('v2_settings','config',updated).then(()=>{STATE.settings=updated;}).catch(()=>{});STATE.settings=updated;}
+function getTwilioAccountSid(){return _msgGetSettings().twilioAccountSid||'';}
+function getTwilioAuthToken(){return _msgGetSettings().twilioAuthToken||'';}
+function getTermiiApiKey(){return _msgGetSettings().termiiApiKey||'';}
+
+function generateAIMessage(){
+  const custName=(document.getElementById('ai-msg-cust')||{}).value||'';
+  const type=(document.getElementById('ai-msg-type')||{}).value||'greeting';
+  const context=(document.getElementById('ai-msg-context')||{}).value||'';
+  const btn=document.getElementById('ai-gen-btn');
+  const status=document.getElementById('ai-gen-status');
+  const result=document.getElementById('ai-msg-result');
+  const textEl=document.getElementById('ai-msg-text');
+  if(!btn)return;
+  btn.disabled=true;btn.textContent='⏳ Generating...';
+  if(status)status.textContent='Connecting to Gemini...';
+  if(result)result.style.display='none';
+  const typeMap={credit_reminder:'a professional but friendly WhatsApp credit payment reminder',promo:'an exciting promotional offer message',new_stock:'a new stock arrival announcement',greeting:'a warm general greeting',thank_you:'a thank you message after purchase',follow_up:'a follow-up message after a recent purchase',custom:'a WhatsApp business message based on this context: '+context};
+  const prompt='You are a business messaging assistant for Great Chid Electro, a Nigerian electrical materials and doors shop in Ogbomoso. Write '+(typeMap[type]||typeMap.greeting)+' for a customer'+(custName?' named '+custName:'')+'. '+(context&&type!=='custom'?'Additional context: '+context+'. ':'')+'Requirements: Professional but warm Nigerian business tone. WhatsApp-ready format. Use relevant emojis. 3-5 sentences max. Sign off with "Great Chid Electro". Write ONLY the message, no explanation or preamble.';
+  fetch('https://greatchid-inventory.valentineahize.workers.dev?url='+encodeURIComponent('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({contents:[{parts:[{text:prompt}]}],generationConfig:{maxOutputTokens:800,temperature:0.8}})})
+  .then(r=>r.text().then(t=>{if(!r.ok){let m='API error '+r.status;try{const j=JSON.parse(t);m=j.error?.message||m;}catch(e){}throw new Error(m);}return JSON.parse(t);}))
+  .then(data=>{const t=data.candidates?.[0]?.content?.parts?.[0]?.text?.trim()||'';if(!t)throw new Error('Empty response');if(textEl)textEl.textContent=t;if(result)result.style.display='block';if(status)status.textContent='✅ Done';})
+  .catch(err=>{const fb=_msgFallback(custName,type,context);if(textEl)textEl.textContent=fb;if(result)result.style.display='block';if(status)status.textContent='⚠️ Used local template — '+err.message;})
+  .finally(()=>{btn.disabled=false;btn.textContent='✨ Generate message';});
+}
+function _msgFallback(custName,type,context){
+  const n=custName||'Valued Customer',co='Great Chid Electro';
+  const map={credit_reminder:`Dear ${n}, 👋 We hope you are doing well! We would like to kindly remind you about your outstanding balance with us. Kindly visit our store or make payment at your earliest convenience. We value your continued patronage. Thank you! — ${co}`,promo:`Hello ${n}! 🎉 We have exciting offers available at ${co} right now! Visit us today and enjoy great deals on electrical materials, doors, and more. ${context||'Limited time offer!'}  Don't miss out! — ${co}`,new_stock:`Hello ${n}! 📦 Great news! We just received new stock at ${co}. ${context||'Visit us today to see our latest products.'}  We look forward to serving you! — ${co}`,greeting:`Hello ${n}! 👋 Warm greetings from all of us at ${co}. We truly appreciate your patronage and look forward to serving you again soon. Have a wonderful day! — ${co}`,thank_you:`Dear ${n}, 🙏 Thank you so much for your recent purchase at ${co}! We truly appreciate your business and hope you are satisfied with your items. Please don't hesitate to reach out if you need anything. — ${co}`,follow_up:`Hello ${n}! 😊 We hope you are enjoying your recent purchase from ${co}. ${context||'Please let us know if you need anything else.'}  We are always here to serve you! — ${co}`,custom:context||`Hello ${n}! Warm greetings from ${co}. Thank you for your continued patronage. We look forward to serving you again soon!`};
+  return map[type]||map.greeting;
+}
+function copyAIMessage(){const t=(document.getElementById('ai-msg-text')||{}).textContent||'';navigator.clipboard?.writeText(t).then(()=>showToast('✅ Copied to clipboard')).catch(()=>{const a=document.createElement('textarea');a.value=t;document.body.appendChild(a);a.select();document.execCommand('copy');document.body.removeChild(a);showToast('✅ Copied');});}
+function useAIMessage(){const t=(document.getElementById('ai-msg-text')||{}).textContent||'';const el=document.getElementById('msg-text');if(el){el.value=t;showToast('✅ Message applied to template');}else showToast('Switch to the messaging section below first');}
+
+function buildMessagingPanel(){
+  const allCusts=Object.values(STATE.customers||{});
+  const custs=allCusts.filter(c=>c.phone);
+  const nophone=allCusts.filter(c=>!c.phone);
+  const settings=_msgGetSettings();
+
+  const templateBtns=Object.keys(MSG_TEMPLATES).map(k=>{const t=MSG_TEMPLATES[k],active=msgTemplateKey===k;return`<button onclick="setMsgTemplate('${k}')" style="padding:7px 12px;border-radius:8px;border:1.5px solid ${active?'#1a237e':'#cbd5e1'};background:${active?'#1a237e':'#fff'};color:${active?'#fff':'#374151'};font-size:12px;font-weight:600;cursor:pointer">${t.label}</button>`;}).join('');
+
+  const custRows=custs.map(c=>{const sel=msgSelectedCusts.includes(String(c._id||c.id));const bal=c.creditBalance||0;return`<tr style="cursor:pointer" onclick="toggleMsgCust('${c._id||c.id}')"><td style="width:36px;text-align:center"><input type="checkbox" ${sel?'checked':''} onclick="event.stopPropagation();toggleMsgCust('${c._id||c.id}')" style="width:15px;height:15px"></td><td style="font-weight:600">${esc(c.name)}</td><td>${esc(c.phone)}</td><td>${esc(c.biz||'—')}</td><td style="color:${bal>0?'#c0392b':'#15803d'}">${bal>0?fmt(bal):'₦0'}</td></tr>`;}).join('');
+
+  const channelBar=`<div style="display:flex;gap:8px;margin-bottom:12px;align-items:center"><span style="font-size:12px;font-weight:700;color:#374151">Channel:</span>
+    <button onclick="msgChannel='twilio';renderCustomers()" style="padding:6px 14px;border-radius:8px;border:1.5px solid ${'twilio'===msgChannel?'#25D366':'#cbd5e1'};background:${'twilio'===msgChannel?'#25D366':'#fff'};color:${'twilio'===msgChannel?'#fff':'#374151'};font-size:12px;font-weight:600;cursor:pointer">📲 WhatsApp (Twilio)</button>
+    <button onclick="msgChannel='meta';renderCustomers()" style="padding:6px 14px;border-radius:8px;border:1.5px solid ${'meta'===msgChannel?'#0084ff':'#cbd5e1'};background:${'meta'===msgChannel?'#0084ff':'#fff'};color:${'meta'===msgChannel?'#fff':'#374151'};font-size:12px;font-weight:600;cursor:pointer">💙 WhatsApp (Meta)</button>
+    <button onclick="msgChannel='termii';renderCustomers()" style="padding:6px 14px;border-radius:8px;border:1.5px solid ${'termii'===msgChannel?'#1a237e':'#cbd5e1'};background:${'termii'===msgChannel?'#1a237e':'#fff'};color:${'termii'===msgChannel?'#fff':'#374151'};font-size:12px;font-weight:600;cursor:pointer">📱 SMS (Termii)</button></div>`;
+
+  let channelSetup='';
+  if(msgChannel==='twilio'){
+    const hasCredentials=getTwilioAuthToken()&&getTwilioAccountSid();
+    const templates=settings.twilioTemplates||[];
+    const activeSid=settings.twilioContentSid||'';
+    const tplLibrary=`<div style="background:#f0f4ff;border:1px solid #c7d7fe;border-radius:10px;padding:12px;margin-top:10px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><div style="font-size:12px;font-weight:700;color:#1a237e">📋 Template Library</div><span style="font-size:10px;color:#6b7280">${templates.length} template${templates.length!==1?'s':''}</span></div>${templates.length?`<div style="margin-bottom:10px">${templates.map(t=>{const active=t.contentSid===activeSid;return`<div style="display:flex;align-items:center;gap:6px;padding:7px 10px;background:${active?'#e0e7ff':'#fff'};border:1px solid ${active?'#6366f1':'#e5e7eb'};border-radius:7px;margin-bottom:5px"><div style="flex:1;min-width:0"><div style="font-size:12px;font-weight:600;color:#1e293b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(t.name)}${active?' <span style="font-size:10px;background:#6366f1;color:#fff;padding:1px 6px;border-radius:10px">Active</span>':''}</div><div style="font-size:10px;color:#6b7280;font-family:monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(t.contentSid)}</div></div><button onclick="selectTwilioTemplate('${t.contentSid}')" style="padding:4px 10px;background:${active?'#6366f1':'#e0e7ff'};color:${active?'#fff':'#3730a3'};border:none;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer">${active?'✓ Selected':'Use'}</button><button onclick="deleteTwilioTemplate('${t.id}')" style="padding:4px 8px;background:#fff0f0;color:#dc2626;border:1px solid #fca5a5;border-radius:6px;font-size:11px;cursor:pointer">🗑</button></div>`;}).join('')}</div>`:`<div style="font-size:11px;color:#9ca3af;margin-bottom:10px;padding:8px;background:#fff;border-radius:6px;text-align:center">No templates saved yet.</div>`}<div style="border-top:1px solid #c7d7fe;padding-top:10px"><div style="font-size:11px;font-weight:600;color:#374151;margin-bottom:6px">➕ Add template</div><div style="display:grid;grid-template-columns:1fr 1fr auto;gap:6px;align-items:end"><div><label style="font-size:10px;color:#6b7280">Template name</label><input type="text" id="tpl-name-input" placeholder="e.g. Balance Reminder" style="width:100%;padding:7px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;margin-top:2px"></div><div><label style="font-size:10px;color:#6b7280">Content SID (HX...)</label><input type="text" id="tpl-sid-input" placeholder="HXxxxxxxxxxxxxxxxxxx" style="width:100%;padding:7px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;margin-top:2px;font-family:monospace"></div><button onclick="addTwilioTemplate()" style="padding:7px 14px;background:#4A3020;color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer">Add</button></div></div></div>`;
+    channelSetup=hasCredentials
+      ?`<div style="background:var(--success-bg);border:1px solid #86efac;border-radius:10px;padding:10px 14px;font-size:12px;color:#15803d;margin-bottom:1rem"><div style="display:flex;justify-content:space-between;align-items:center"><span>✅ WhatsApp (Twilio) connected — +2347055693109${activeSid?' | 📋 Template: <b>'+(templates.find(t=>t.contentSid===activeSid)||{name:activeSid}).name+'</b>':' | ⚠️ No template selected'}</span>${nophone.length?`<span style="color:#92400e">⚠ ${nophone.length} without phone</span>`:''}<button onclick="clearTwilioCreds()" style="background:none;border:none;color:#c0392b;font-size:11px;cursor:pointer;text-decoration:underline">Change</button></div></div>${tplLibrary}`
+      :`<div style="background:var(--warning-bg);border:1px solid #fcd34d;border-radius:10px;padding:12px;margin-bottom:1rem"><div style="font-size:12px;font-weight:700;color:#92400e;margin-bottom:6px">⚙️ Twilio credentials required</div><div style="display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:end"><div><label style="font-size:11px">Account SID</label><input type="text" id="twilio-sid-input" placeholder="ACxxxxxxxxx" style="width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px"></div><div><label style="font-size:11px">Auth Token</label><input type="password" id="twilio-token-input" placeholder="Auth token..." style="width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px"></div><button onclick="saveTwilioCreds()" style="padding:8px 14px;background:#4A3020;color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer">Save</button></div>${tplLibrary}</div>`;
+  } else if(msgChannel==='meta'){
+    const hasCreds=settings.metaPhoneNumberId&&settings.metaAccessToken;
+    const templates=settings.metaTemplates||[];
+    const activeTpl=settings.metaTemplateName||'';
+    const tplLibrary=`<div style="background:#e8f4ff;border:1px solid #93c5fd;border-radius:10px;padding:12px;margin-top:10px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><div style="font-size:12px;font-weight:700;color:#0d47a1">📋 Meta Template Library</div><span style="font-size:10px;color:#6b7280">${templates.length} template${templates.length!==1?'s':''}</span></div>${templates.length?`<div style="margin-bottom:10px">${templates.map(t=>{const active=t.templateName===activeTpl;return`<div style="display:flex;align-items:center;gap:6px;padding:7px 10px;background:${active?'#dbeafe':'#fff'};border:1px solid ${active?'#3b82f6':'#e5e7eb'};border-radius:7px;margin-bottom:5px"><div style="flex:1;min-width:0"><div style="font-size:12px;font-weight:600;color:#1e293b">${esc(t.name)}${active?' <span style="font-size:10px;background:#6B5237;color:#fff;padding:1px 6px;border-radius:10px">Active</span>':''}</div><div style="font-size:10px;color:#6b7280;font-family:monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(t.templateName)}</div></div><button onclick="selectMetaTemplate('${t.templateName.replace(/'/g,"\\'")}'')" style="padding:4px 10px;background:${active?'#0084ff':'#dbeafe'};color:${active?'#fff':'#1d4ed8'};border:none;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer">${active?'✓ Selected':'Use'}</button><button onclick="deleteMetaTemplate('${t.id}')" style="padding:4px 8px;background:#fff0f0;color:#dc2626;border:1px solid #fca5a5;border-radius:6px;font-size:11px;cursor:pointer">🗑</button></div>`;}).join('')}</div>`:`<div style="font-size:11px;color:#9ca3af;margin-bottom:10px;padding:8px;background:#fff;border-radius:6px;text-align:center">No templates saved yet.</div>`}<div style="border-top:1px solid #93c5fd;padding-top:10px"><div style="font-size:11px;font-weight:600;color:#374151;margin-bottom:6px">➕ Add template</div><div style="display:grid;grid-template-columns:1fr 1fr auto;gap:6px;align-items:end"><div><label style="font-size:10px;color:#6b7280">Friendly name</label><input type="text" id="meta-tpl-name-input" placeholder="e.g. New Month Greeting" style="width:100%;padding:7px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;margin-top:2px"></div><div><label style="font-size:10px;color:#6b7280">Exact template name from Meta</label><input type="text" id="meta-tpl-tname-input" placeholder="e.g. great_chid_electro_..." style="width:100%;padding:7px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;margin-top:2px;font-family:monospace"></div><button onclick="addMetaTemplate()" style="padding:7px 14px;background:#6B5237;color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer">Add</button></div></div></div>`;
+    channelSetup=hasCreds
+      ?`<div style="background:#e8f4ff;border:1px solid #93c5fd;border-radius:10px;padding:10px 14px;font-size:12px;color:#1d4ed8;margin-bottom:1rem"><div style="display:flex;justify-content:space-between;align-items:center"><span>💙 WhatsApp (Meta Cloud API) connected${activeTpl?' | 📋 Template: <b>'+(templates.find(t=>t.templateName===activeTpl)||{name:activeTpl}).name+'</b>':' | ⚠️ No template selected'}</span>${nophone.length?`<span style="color:#92400e">⚠ ${nophone.length} without phone</span>`:''}<button onclick="clearMetaCreds()" style="background:none;border:none;color:#c0392b;font-size:11px;cursor:pointer;text-decoration:underline">Change</button></div></div>${tplLibrary}`
+      :`<div style="background:var(--warning-bg);border:1px solid #fcd34d;border-radius:10px;padding:12px;margin-bottom:1rem"><div style="font-size:12px;font-weight:700;color:#92400e;margin-bottom:8px">⚙️ Meta Cloud API credentials required</div><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px"><div><label style="font-size:11px">Phone Number ID</label><input type="text" id="meta-phone-id-input" placeholder="e.g. 123456789012345" style="width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;margin-top:3px"></div><div><label style="font-size:11px">Permanent Access Token</label><input type="password" id="meta-token-input" placeholder="EAAxxxxxxxxxxxxxxx..." style="width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;margin-top:3px"></div></div><div style="margin-bottom:10px"><label style="font-size:11px">Language Code</label><input type="text" id="meta-lang-input" placeholder="en_US" value="${settings.metaLangCode||'en_US'}" style="width:120px;padding:8px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;margin-top:3px"></div><button onclick="saveMetaCreds()" style="padding:8px 18px;background:#6B5237;color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer">💾 Save Meta credentials</button><div style="margin-top:10px;font-size:10px;color:#92400e;background:#fff8e1;border-radius:6px;padding:8px"><b>Where to find these:</b> Meta Business Suite → WhatsApp → API Setup → Phone Number ID & Access Token.</div>${tplLibrary}</div>`;
+  } else {
+    channelSetup=getTermiiApiKey()
+      ?`<div style="background:var(--success-bg);border:1px solid #86efac;border-radius:10px;padding:10px 14px;font-size:12px;color:#15803d;margin-bottom:1rem">✅ SMS (Termii) connected${nophone.length?' | <span style="color:#92400e">⚠ '+nophone.length+' without phone</span>':''} <button onclick="clearTermiiKey()" style="background:none;border:none;color:#c0392b;font-size:11px;cursor:pointer;text-decoration:underline">Change</button></div>`
+      :`<div style="background:var(--warning-bg);border:1px solid #fcd34d;border-radius:10px;padding:12px;margin-bottom:1rem"><div style="font-size:12px;font-weight:700;color:#92400e;margin-bottom:6px">⚙️ Termii API Key required</div><div style="display:flex;gap:8px"><input type="text" id="termii-key-input" placeholder="Paste API key..." style="flex:1;padding:8px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px"><button onclick="saveTermiiKey()" style="padding:8px 14px;background:#4A3020;color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer">Save</button></div></div>`;
+  }
+  const sendBtn=msgChannel==='twilio'
+    ?`<button onclick="sendTwilioWhatsApp()" style="padding:11px 24px;background:#25D366;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer">📲 Send WhatsApp to selected</button>`
+    :msgChannel==='meta'
+    ?`<button onclick="sendMetaWhatsApp()" style="padding:11px 24px;background:#6B5237;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer">💙 Send WhatsApp to selected</button>`
+    :`<button onclick="sendTermiiSMS()" style="padding:11px 24px;background:#4A3020;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer">📱 Send SMS to selected</button>`;
+
+  const msgText=MSG_TEMPLATES[msgTemplateKey]?.text||'';
+  return `<p class="sec-title">📲 Customer Messaging</p>
+<div style="background:linear-gradient(135deg,#e8eaf6,#f3e5f5);border:1.5px solid #9c27b0;border-radius:12px;padding:16px;margin-bottom:1.5rem">
+  <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px"><span style="font-size:18px">✨</span><b style="font-size:14px;color:#6a1b9a">AI Message Generator</b><span style="font-size:11px;color:#9c27b0;background:#f3e5f5;padding:2px 8px;border-radius:10px;border:1px solid #ce93d8">Powered by Gemini</span></div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+    <div class="form-group" style="margin:0"><label style="font-size:11px">Customer name (optional)</label><input type="text" id="ai-msg-cust" placeholder="e.g. Mr David" style="width:100%;font-size:13px"></div>
+    <div class="form-group" style="margin:0"><label style="font-size:11px">Message type</label><select id="ai-msg-type" style="width:100%;font-size:13px"><option value="credit_reminder">💳 Credit payment reminder</option><option value="promo">🎉 Promo / special offer</option><option value="new_stock">📦 New stock arrival</option><option value="greeting">👋 General greeting</option><option value="thank_you">🙏 Thank you message</option><option value="follow_up">📞 Follow-up after purchase</option><option value="custom">✏️ Custom (describe below)</option></select></div>
+  </div>
+  <div class="form-group" style="margin-bottom:10px"><label style="font-size:11px">Extra context (optional)</label><input type="text" id="ai-msg-context" placeholder="e.g. owes ₦12,900, product name, offer details..." style="width:100%;font-size:13px"></div>
+  <div style="display:flex;gap:8px;align-items:center"><button onclick="generateAIMessage()" id="ai-gen-btn" style="padding:9px 20px;background:#9c27b0;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer">✨ Generate message</button><span id="ai-gen-status" style="font-size:12px;color:#9c27b0"></span></div>
+  <div id="ai-msg-result" style="display:none;margin-top:12px"><div style="background:#fff;border:1px solid #ce93d8;border-radius:8px;padding:12px;font-size:13px;line-height:1.6;white-space:pre-wrap;color:#333" id="ai-msg-text"></div><div style="display:flex;gap:8px;margin-top:8px"><button onclick="copyAIMessage()" style="padding:6px 14px;background:#9c27b0;color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer">📋 Copy</button><button onclick="useAIMessage()" style="padding:6px 14px;background:#15803d;color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer">✅ Use as template</button><button onclick="generateAIMessage()" style="padding:6px 14px;background:none;border:1px solid #9c27b0;color:#9c27b0;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer">🔄 Regenerate</button></div></div>
+</div>
+${channelBar}${channelSetup}
+<p style="font-size:12px;font-weight:700;color:var(--text1,#374151);margin-bottom:8px">1. Choose a message template</p>
+<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">${templateBtns}</div>
+<div class="form-group" style="margin-bottom:1rem"><label style="font-size:12px">Message &nbsp;<span style="font-weight:400;color:#6b7280">({name} = customer name, {balance} = balance)</span></label><textarea id="msg-text" rows="5" style="width:100%;padding:10px;border:1.5px solid #cbd5e1;border-radius:8px;font-size:13px;resize:vertical;font-family:inherit" placeholder="Type your message here...">${esc(msgText)}</textarea></div>
+<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
+  <p style="font-size:12px;font-weight:700;color:var(--text1,#374151);margin:0">2. Select recipients</p>
+  <button onclick="msgSelectAll()" style="padding:5px 10px;border-radius:6px;border:1px solid #cbd5e1;background:var(--bg);font-size:11px;cursor:pointer">Select all</button>
+  <button onclick="msgSelectNone()" style="padding:5px 10px;border-radius:6px;border:1px solid #cbd5e1;background:var(--bg);font-size:11px;cursor:pointer">Clear</button>
+  <button onclick="msgSelectCredit()" style="padding:5px 10px;border-radius:6px;border:1px solid #fcd34d;background:var(--warning-bg);font-size:11px;cursor:pointer;color:#92400e">Credit customers only</button>
+  <span id="msg-sel-count" style="font-size:11px;color:#6b7280">${msgSelectedCusts.length} selected</span>
+</div>
+${custs.length?`<div class="tbl-wrap" style="max-height:280px;overflow-y:auto;margin-bottom:1rem"><table><thead><tr><th style="width:36px"></th><th>Name</th><th>Phone</th><th>Business</th><th>Balance</th></tr></thead><tbody>${custRows}</tbody></table></div>`:'<div class="empty-state" style="margin-bottom:1rem">No customers with phone numbers found.</div>'}
+<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">${sendBtn}<span id="msg-send-status" style="font-size:12px;color:#6b7280"></span></div>
+<div id="msg-results" style="margin-top:12px"></div>`;
+}
+
+function setMsgTemplate(key){msgTemplateKey=key;renderCustomers();setTimeout(()=>{const el=document.getElementById('msg-text');if(el)el.value=MSG_TEMPLATES[key]?.text||'';},50);}
+function toggleMsgCust(id){const sid=String(id),idx=msgSelectedCusts.indexOf(sid);idx===-1?msgSelectedCusts.push(sid):msgSelectedCusts.splice(idx,1);const el=document.getElementById('msg-sel-count');if(el)el.textContent=msgSelectedCusts.length+' selected';}
+function msgSelectAll(){msgSelectedCusts=Object.values(STATE.customers||{}).filter(c=>c.phone).map(c=>String(c._id||c.id));renderCustomers();}
+function msgSelectNone(){msgSelectedCusts=[];renderCustomers();}
+function msgSelectCredit(){msgSelectedCusts=Object.values(STATE.customers||{}).filter(c=>c.phone&&(c.creditBalance||0)>0).map(c=>String(c._id||c.id));renderCustomers();}
+
+function saveTwilioCreds(){const sid=document.getElementById('twilio-sid-input'),tok=document.getElementById('twilio-token-input');if(!sid?.value.trim()){showToast('Enter Account SID.','error');return;}if(!tok?.value.trim()){showToast('Enter Auth Token.','error');return;}_msgSaveSettings({twilioAccountSid:sid.value.trim(),twilioAuthToken:tok.value.trim()});renderCustomers();showToast('✅ Twilio credentials saved!','success');}
+function addTwilioTemplate(){const nm=document.getElementById('tpl-name-input'),sid=document.getElementById('tpl-sid-input');if(!nm?.value.trim()){showToast('Enter a template name.','error');return;}if(!sid?.value.trim()||!sid.value.startsWith('HX')){showToast('Content SID must start with HX...','error');return;}const s=_msgGetSettings();const tmpls=[...(s.twilioTemplates||[])];if(tmpls.find(t=>t.contentSid===sid.value.trim())){showToast('This Content SID is already saved.','error');return;}tmpls.push({id:uid(),name:nm.value.trim(),contentSid:sid.value.trim()});const update={twilioTemplates:tmpls};if(tmpls.length===1)update.twilioContentSid=sid.value.trim();_msgSaveSettings(update);renderCustomers();showToast(`✅ Template "${nm.value.trim()}" added!`,'success');}
+function deleteTwilioTemplate(id){if(!confirm('Remove this template?'))return;const s=_msgGetSettings();const tmpls=(s.twilioTemplates||[]).filter(t=>t.id!==id);const removed=(s.twilioTemplates||[]).find(t=>t.id===id);const update={twilioTemplates:tmpls};if(removed?.contentSid===s.twilioContentSid)update.twilioContentSid=tmpls.length?tmpls[0].contentSid:'';_msgSaveSettings(update);renderCustomers();showToast('Template removed.','success');}
+function selectTwilioTemplate(sid){_msgSaveSettings({twilioContentSid:sid});renderCustomers();const t=(_msgGetSettings().twilioTemplates||[]).find(t=>t.contentSid===sid);showToast(`✅ Template "${t?t.name:sid}" selected.`,'success');}
+function clearTwilioCreds(){if(!confirm('Remove Twilio credentials?'))return;_msgSaveSettings({twilioAccountSid:'',twilioAuthToken:''});renderCustomers();}
+function saveTermiiKey(){const el=document.getElementById('termii-key-input');if(!el?.value.trim()){showToast('Paste your Termii API key.','error');return;}_msgSaveSettings({termiiApiKey:el.value.trim()});renderCustomers();showToast('✅ Termii key saved!','success');}
+function clearTermiiKey(){if(!confirm('Remove Termii API key?'))return;_msgSaveSettings({termiiApiKey:''});renderCustomers();}
+function saveMetaCreds(){const pid=document.getElementById('meta-phone-id-input')?.value.trim(),tok=document.getElementById('meta-token-input')?.value.trim(),lang=document.getElementById('meta-lang-input')?.value.trim()||'en_US';if(!pid||!tok){showToast('Enter both Phone Number ID and Access Token.','error');return;}_msgSaveSettings({metaPhoneNumberId:pid,metaAccessToken:tok,metaLangCode:lang});renderCustomers();showToast('✅ Meta credentials saved!','success');}
+function addMetaTemplate(){const nm=document.getElementById('meta-tpl-name-input'),tn=document.getElementById('meta-tpl-tname-input');if(!nm?.value.trim()){showToast('Enter a friendly name.','error');return;}if(!tn?.value.trim()){showToast('Enter the exact Meta template name.','error');return;}const s=_msgGetSettings();const tmpls=[...(s.metaTemplates||[])];if(tmpls.find(t=>t.templateName===tn.value.trim())){showToast('This template name is already saved.','error');return;}tmpls.push({id:uid(),name:nm.value.trim(),templateName:tn.value.trim()});const update={metaTemplates:tmpls};if(tmpls.length===1)update.metaTemplateName=tn.value.trim();_msgSaveSettings(update);renderCustomers();showToast(`✅ Template "${nm.value.trim()}" added!`,'success');}
+function deleteMetaTemplate(id){if(!confirm('Remove this template?'))return;const s=_msgGetSettings();const tmpls=(s.metaTemplates||[]).filter(t=>t.id!==id);const removed=(s.metaTemplates||[]).find(t=>t.id===id);const update={metaTemplates:tmpls};if(removed?.templateName===s.metaTemplateName)update.metaTemplateName=tmpls.length?tmpls[0].templateName:'';_msgSaveSettings(update);renderCustomers();showToast('Template removed.','success');}
+function selectMetaTemplate(name){_msgSaveSettings({metaTemplateName:name});renderCustomers();const t=(_msgGetSettings().metaTemplates||[]).find(t=>t.templateName===name);showToast(`✅ Template "${t?t.name:name}" selected.`,'success');}
+function clearMetaCreds(){if(!confirm('Remove Meta credentials?'))return;_msgSaveSettings({metaPhoneNumberId:'',metaAccessToken:''});renderCustomers();}
+
+async function sendTwilioWhatsApp(){
+  const msg=(document.getElementById('msg-text')?.value||'').trim();
+  if(!msg){showToast('Enter a message.','error');return;}
+  if(!msgSelectedCusts.length){showToast('Select at least one customer.','error');return;}
+  const tok=getTwilioAuthToken(),sid=getTwilioAccountSid();
+  if(!tok||!sid){showToast('Please save your Twilio credentials first.','error');return;}
+  const selected=Object.values(STATE.customers||{}).filter(c=>msgSelectedCusts.includes(String(c._id||c.id))&&c.phone);
+  const statusEl=document.getElementById('msg-send-status');
+  const resultsEl=document.getElementById('msg-results');
+  if(statusEl)statusEl.textContent='Sending...';
+  if(resultsEl)resultsEl.innerHTML='';
+  const results=[];
+  const contentSid=(_msgGetSettings()).twilioContentSid||'';
+  const url='https://greatchid-inventory.valentineahize.workers.dev?url='+encodeURIComponent('https://api.twilio.com/2010-04-01/Accounts/'+sid+'/Messages.json');
+  const headers={Authorization:'Basic '+btoa(sid+':'+tok),'Content-Type':'application/x-www-form-urlencoded'};
+  for(let i=0;i<selected.length;i++){
+    const c=selected[i];
+    if(statusEl)statusEl.textContent=`Sending ${i+1} of ${selected.length}...`;
+    let phone=c.phone.replace(/[\s\-\(\)]/g,'');
+    if(phone.startsWith('0'))phone='234'+phone.substring(1);
+    if(!phone.startsWith('234')&&!phone.startsWith('+'))phone='234'+phone;
+    phone=phone.replace(/^\+/,'');
+    try{
+      let body;
+      if(contentSid){body=`From=${encodeURIComponent(TWILIO_FROM)}&To=${encodeURIComponent('whatsapp:+'+phone)}&ContentSid=${encodeURIComponent(contentSid)}&ContentVariables=${encodeURIComponent(JSON.stringify({1:c.name||'Valued Customer'}))}`;}
+      else{const txt=msg.replace(/\{name\}/g,c.name).replace(/\{balance\}/g,(c.creditBalance||0)>0?fmt(c.creditBalance):'₦0');body=`From=${encodeURIComponent(TWILIO_FROM)}&To=${encodeURIComponent('whatsapp:+'+phone)}&Body=${encodeURIComponent(txt)}`;}
+      const r=await fetch(url,{method:'POST',headers,body});
+      const j=await r.json();
+      results.push({name:c.name,phone:c.phone,status:j.sid?'✅ Sent':'❌ '+(j.message||j.error_message||'Failed')});
+    }catch(e){results.push({name:c.name,phone:c.phone,status:'❌ Error: '+e.message});}
+    await new Promise(r=>setTimeout(r,300));
+  }
+  const sent=results.filter(r=>r.status.startsWith('✅')).length;
+  if(statusEl)statusEl.textContent=`Done — ${sent} sent, ${results.length-sent} failed.`;
+  if(resultsEl)resultsEl.innerHTML=`<div style="font-size:12px;font-weight:700;margin-bottom:6px">Delivery report:</div><div class="tbl-wrap" style="max-height:200px;overflow-y:auto"><table><thead><tr><th>Customer</th><th>Phone</th><th>Status</th></tr></thead><tbody>${results.map(r=>`<tr><td>${esc(r.name)}</td><td>${r.phone}</td><td>${r.status}</td></tr>`).join('')}</tbody></table></div>`;
+  logActivity('WhatsApp sent',`${sent} messages sent via Twilio`,STATE.user?.name||'');
+}
+
+async function sendTermiiSMS(){
+  const msg=(document.getElementById('msg-text')?.value||'').trim();
+  if(!msg){showToast('Enter a message.','error');return;}
+  if(!msgSelectedCusts.length){showToast('Select at least one customer.','error');return;}
+  const apiKey=getTermiiApiKey();
+  if(!apiKey){showToast('Please save your Termii API key first.','error');return;}
+  const selected=Object.values(STATE.customers||{}).filter(c=>msgSelectedCusts.includes(String(c._id||c.id))&&c.phone);
+  if(!selected.length){showToast('No selected customers have phone numbers.','error');return;}
+  if(!confirm(`Send SMS to ${selected.length} customer(s) via Termii?\nEstimated cost: ₦${6*selected.length}–₦${10*selected.length}`))return;
+  const statusEl=document.getElementById('msg-send-status');
+  const resultsEl=document.getElementById('msg-results');
+  if(statusEl)statusEl.textContent='Sending...';
+  if(resultsEl)resultsEl.innerHTML='';
+  const results=[];
+  for(let i=0;i<selected.length;i++){
+    const c=selected[i];
+    if(statusEl)statusEl.textContent=`Sending ${i+1} of ${selected.length}...`;
+    const txt=msg.replace(/\{name\}/g,c.name).replace(/\{balance\}/g,(c.creditBalance||0)>0?fmt(c.creditBalance):'₦0');
+    let phone=c.phone.replace(/[\s\-\(\)]/g,'');
+    if(phone.startsWith('0'))phone='234'+phone.substring(1);
+    if(!phone.startsWith('234')&&!phone.startsWith('+'))phone='234'+phone;
+    phone=phone.replace(/^\+/,'');
+    try{
+      const r=await fetch('https://greatchid-inventory.valentineahize.workers.dev/termii/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({to:phone,from:TERMII_SENDER,sms:txt,type:'plain',api_key:apiKey,channel:'generic'})});
+      const j=await r.json().catch(()=>({}));
+      const ok=r.ok&&(j.message_id||j.messageId||j.code==='ok'||j.status==='Message Sent');
+      results.push({name:c.name,phone:c.phone,status:ok?'✅ Sent':'❌ '+(j.message||j.error||j.description||'HTTP '+r.status)});
+    }catch(e){results.push({name:c.name,phone:c.phone,status:'❌ Error: '+e.message});}
+    await new Promise(r=>setTimeout(r,200));
+  }
+  const sent=results.filter(r=>r.status.startsWith('✅')).length;
+  if(statusEl)statusEl.textContent=`Done — ${sent} sent, ${results.length-sent} failed.`;
+  if(resultsEl)resultsEl.innerHTML=`<div style="font-size:12px;font-weight:700;margin-bottom:6px">Delivery report:</div><div class="tbl-wrap" style="max-height:200px;overflow-y:auto"><table><thead><tr><th>Customer</th><th>Phone</th><th>Status</th></tr></thead><tbody>${results.map(r=>`<tr><td>${esc(r.name)}</td><td>${r.phone}</td><td>${r.status}</td></tr>`).join('')}</tbody></table></div>`;
+  logActivity('Termii SMS sent',`${sent} messages sent`,STATE.user?.name||'');
+}
+
+async function sendMetaWhatsApp(){
+  const settings=_msgGetSettings();
+  const phoneId=settings.metaPhoneNumberId;
+  const accessToken=settings.metaAccessToken;
+  const templateName=settings.metaTemplateName||'great_chid_electro_global_doors_ltd';
+  const langCode=settings.metaLangCode||'en_US';
+  if(!phoneId||!accessToken){showToast('Meta Cloud API credentials not configured. Go to Messaging settings.','error');return;}
+  if(!msgSelectedCusts.length){showToast('Select at least one customer.','error');return;}
+  const selected=Object.values(STATE.customers||{}).filter(c=>msgSelectedCusts.includes(String(c._id||c.id))&&c.phone);
+  if(!selected.length){showToast('No selected customers have phone numbers.','error');return;}
+  const statusEl=document.getElementById('msg-send-status');
+  if(statusEl)statusEl.innerHTML='<span style="color:#0084ff">💙 Sending via Meta Cloud API...</span>';
+  let sent=0,failed=0;const errors=[];
+  for(const c of selected){
+    let phone=c.phone.replace(/\D/g,'');
+    if(phone.length===11&&phone.startsWith('0'))phone='234'+phone.slice(1);
+    else if(!phone.startsWith('234'))phone='234'+phone;
+    const payload={messaging_product:'whatsapp',to:phone,type:'template',template:{name:templateName,language:{code:langCode},components:[{type:'body',parameters:[{type:'text',text:c.name||'Valued Customer'}]}]}};
+    try{
+      const r=await fetch('https://greatchid-inventory.valentineahize.workers.dev?url='+encodeURIComponent(`https://graph.facebook.com/v19.0/${phoneId}/messages`),{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+accessToken},body:JSON.stringify(payload)});
+      const j=await r.json();
+      r.ok&&j.messages?sent++:(failed++,errors.push(c.name+': '+(j.error?.message||'Unknown error')));
+    }catch(e){failed++;errors.push(c.name+': '+e.message);}
+  }
+  const summary=`💙 Meta WhatsApp: ${sent} sent${failed?` | ❌ ${failed} failed`:''}`;
+  if(statusEl)statusEl.innerHTML=`<span style="color:${failed?'#dc2626':'#0084ff'}">${summary}${errors.length?`<br><small style="color:#dc2626">${errors.slice(0,3).join('<br>')}</small>`:''}</span>`;
+  logActivity('Meta WhatsApp sent',`${sent} messages sent, ${failed} failed`,STATE.user?.name||'');
+}
+
+// ══════════════════════════════════════════════════════════════
+// END MESSAGING MODULE
+// ══════════════════════════════════════════════════════════════
+
 function renderCustomers(){
   const el=document.getElementById('customers-content');if(!el)return;
+
+  // Messaging tab
+  if(window._custTab==='messaging'){
+    const tabBar=`<div class="subtabs"><button class="subtab" onclick="window._custTab='list';renderCustomers()">👥 All Customers</button><button class="subtab active">📱 Messaging</button></div>`;
+    el.innerHTML=tabBar+buildMessagingPanel();
+    return;
+  }
+
   const custs=Object.values(STATE.customers||{}).sort((a,b)=>(a.name||'').localeCompare(b.name||''));
   const searchTerm=(document.getElementById('cust-search')?.value||'').toLowerCase();
   const filtered=custs.filter(c=>!searchTerm||c.name?.toLowerCase().includes(searchTerm)||(c.phone||'').includes(searchTerm));
