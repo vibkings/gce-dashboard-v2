@@ -6816,49 +6816,137 @@ function renderCustomerOverview() {
   const el=document.getElementById('customeroverview-content'); if(!el)return;
   const custs=Object.values(STATE.customers||{});
   const sales=Object.values(STATE.sales||{});
+
+  // Build customer stats
   const custMap={};
-  custs.forEach(c=>{custMap[c._id||c.id]={id:c._id||c.id,name:c.name,phone:c.phone||'—',type:c.type||'retail',creditBalance:c.creditBalance||0,totalSpent:0,invoiceCount:0,lastPurchase:null};});
+  custs.forEach(c=>{
+    custMap[c._id||c.id]={
+      id:c._id||c.id,name:c.name,phone:c.phone||'—',type:c.type||'retail',
+      creditBalance:c.creditBalance||0,totalSpent:0,creditPaid:0,
+      invoiceCount:0,lastPurchase:null,monthlySpend:{}
+    };
+  });
+  // Group sales by invoice to avoid double-counting line items
   const invGroups={};
-  sales.forEach(s=>{const k=s.invoiceNum;if(!invGroups[k])invGroups[k]={custId:s.custId,date:s.date,total:0};invGroups[k].total+=s.total||0;});
-  Object.values(invGroups).forEach(g=>{if(g.custId&&custMap[g.custId]){custMap[g.custId].totalSpent+=g.total;custMap[g.custId].invoiceCount++;const d=new Date(g.date);if(!custMap[g.custId].lastPurchase||d>custMap[g.custId].lastPurchase)custMap[g.custId].lastPurchase=d;}});
+  sales.forEach(s=>{
+    const k=s.invoiceNum||s.id;
+    if(!invGroups[k])invGroups[k]={custId:s.custId,custName:s.custName,date:s.date,month:s.month,total:0};
+    invGroups[k].total+=s.total||0;
+  });
+  Object.values(invGroups).forEach(g=>{
+    if(g.custId&&custMap[g.custId]){
+      custMap[g.custId].totalSpent+=g.total;
+      custMap[g.custId].invoiceCount++;
+      const d=new Date(g.date);
+      if(!custMap[g.custId].lastPurchase||d>custMap[g.custId].lastPurchase)custMap[g.custId].lastPurchase=d;
+      const m=g.month||(d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'));
+      custMap[g.custId].monthlySpend[m]=(custMap[g.custId].monthlySpend[m]||0)+g.total;
+    }
+  });
+  // Credit collected from cashflow
+  Object.values(STATE.cashflow||{}).filter(c=>c.type==='in'&&c.cat==='Credit Payment'&&c.custId).forEach(c=>{
+    if(custMap[c.custId])custMap[c.custId].creditPaid+=c.amount||0;
+  });
+
   const custData=Object.values(custMap);
   const totalSpent=custData.reduce((a,c)=>a+c.totalSpent,0);
-  const totalOwed=custData.filter(c=>c.creditBalance>0).reduce((a,c)=>a+c.creditBalance,0);
+  const totalOwed=custData.reduce((a,c)=>a+(c.creditBalance||0),0);
+  const totalCreditCollected=custData.reduce((a,c)=>a+c.creditPaid,0);
+  const activeCusts=custData.filter(c=>c.invoiceCount>0).length;
+  const withBalance=custData.filter(c=>c.creditBalance>0).length;
+
+  // Monthly revenue last 6 months
+  const now=new Date();
+  const last6=Array.from({length:6},(_,i)=>{
+    const d=new Date(now.getFullYear(),now.getMonth()-5+i,1);
+    const key=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
+    const label=d.toLocaleString('en',{month:'short',year:'2-digit'});
+    const total=custData.reduce((a,c)=>a+(c.monthlySpend[key]||0),0);
+    return{key,label,total};
+  });
+  const maxBar=Math.max(...last6.map(m=>m.total),1);
+  const monthBars=last6.map(m=>{
+    const h=Math.max(4,Math.round(m.total/maxBar*100));
+    return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:4px"><div style="font-size:10px;color:var(--text3);font-weight:600;text-align:center">${m.total>0?fmt(m.total):'₦0'}</div><div style="width:100%;display:flex;align-items:flex-end;height:80px"><div style="width:100%;background:${m.total>0?'#6366f1':'var(--border)'};border-radius:4px 4px 0 0;height:${h}%;min-height:4px"></div></div><div style="font-size:10px;color:var(--text3)">${m.label}</div></div>`;
+  }).join('');
+
+  // Top 5 customers bar chart
+  const top5=custData.slice().sort((a,b)=>b.totalSpent-a.totalSpent).slice(0,5);
+  const maxP=top5[0]?.totalSpent||1;
+  const clrs=['#6366f1','#8b5cf6','#06b6d4','#10b981','#f59e0b'];
+  const top5Bars=top5.map((c,i)=>{
+    const pct=Math.round(c.totalSpent/maxP*100);
+    return `<div style="margin-bottom:12px"><div style="display:flex;justify-content:space-between;font-size:12px;font-weight:700;margin-bottom:4px;text-transform:uppercase;letter-spacing:.03em"><span>${esc(c.name)}</span><span style="color:${clrs[i]}">${fmt(c.totalSpent)}</span></div><div style="background:var(--border);border-radius:6px;height:10px;overflow:hidden"><div style="width:${pct}%;height:100%;background:${clrs[i]};border-radius:6px"></div></div></div>`;
+  }).join('');
+
+  // Filter & search
   const search=(window._custOvSearch||'').toLowerCase();
   const filter=window._custOvFilter||'all';
   const filtered=custData.filter(c=>{
-    if(search&&!c.name.toLowerCase().includes(search)&&!c.phone.toLowerCase().includes(search))return false;
+    if(search&&!(c.name||'').toLowerCase().includes(search)&&!(c.phone||'').toLowerCase().includes(search))return false;
     if(filter==='balance')return c.creditBalance>0;
-    if(filter==='cleared')return c.creditBalance<=0;
+    if(filter==='cleared')return c.creditBalance<=0&&c.invoiceCount>0;
     if(filter==='active')return c.invoiceCount>0;
     return true;
-  });
-  const top5=custData.slice().sort((a,b)=>b.totalSpent-a.totalSpent).slice(0,5);
-  const maxS=top5[0]?.totalSpent||1;
-  const colors=['#6366f1','#8b5cf6','#06b6d4','#10b981','#f59e0b'];
-  const bars=top5.map((c,i)=>{const pct=Math.round(c.totalSpent/maxS*100);return`<div style="margin-bottom:10px"><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px"><span style="font-weight:600">${esc(c.name)}</span><span style="color:#6b7280">${fmt(c.totalSpent)}</span></div><div style="background:var(--surface);border-radius:6px;height:10px;overflow:hidden"><div style="width:${pct}%;height:100%;background:${colors[i]};border-radius:6px"></div></div></div>`;}).join('');
-  const rows=filtered.map(c=>{
-    const typeLabel=c.type==='wholesale'?'Wholesale':c.type==='vip'?'VIP':'Retail';
-    const statusBadge=c.creditBalance>0?'<span style="background:#fee2e2;color:#dc2626;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:700">HAS BALANCE</span>':'<span style="background:#d1fae5;color:#065f46;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:700">CLEARED</span>';
-    const lastDate=c.lastPurchase?c.lastPurchase.toLocaleDateString():'—';
-    const collectBtn=c.creditBalance>0?`<button class="btn btn-sm" onclick="switchPage('credit')" style="color:var(--danger);border-color:#fca5a5;font-size:11px">Collect</button>`:'';
-    return `<tr><td><b>${esc(c.name)}</b></td><td>${c.phone}</td><td style="font-size:11px;color:var(--text3)">${typeLabel}</td><td class="td-right">${fmt(c.totalSpent)}</td><td class="td-right" style="color:${c.creditBalance>0?'var(--danger)':'inherit'}"><b>${fmt(c.creditBalance)}</b></td><td style="font-size:12px">${lastDate}</td><td style="text-align:center">${c.invoiceCount}</td><td>${statusBadge}</td><td>${collectBtn}</td></tr>`;
-  }).join('');
-  el.innerHTML=`
-    <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:1.25rem">
-      ${kpiCard('info','Total Customers',custs.length,'')}
-      ${kpiCard('brand','Total Customer Spend',fmt(totalSpent),'All time')}
-      ${kpiCard('danger','Total Credit Owed',fmt(totalOwed),'Outstanding')}
-      ${kpiCard('success','Active Customers',custData.filter(c=>c.invoiceCount>0).length,'Have purchased')}
-    </div>
-    ${top5.length?`<div class="card" style="padding:1rem;margin-bottom:1.25rem"><div class="sec-title" style="margin-bottom:.75rem">Top Customers by Spend</div>${bars}</div>`:''}
-    <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap">
-      <div style="position:relative;flex:1;max-width:300px"><span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--text3)">🔍</span><input class="form-input" style="padding-left:32px" placeholder="Search name or phone..." value="${window._custOvSearch||''}" oninput="window._custOvSearch=this.value;renderCustomerOverview()"></div>
-      ${['all','balance','cleared','active'].map(f=>`<button class="btn btn-sm ${filter===f?'btn-primary':''}" onclick="window._custOvFilter='${f}';renderCustomerOverview()">${f==='all'?'All':f==='balance'?'Has Balance':f==='cleared'?'Cleared':'Active'}</button>`).join('')}
-    </div>
-    ${rows?`<div class="tbl-wrap"><table><thead><tr><th>Customer</th><th>Phone</th><th>Type</th><th class="td-right">Total Spent</th><th class="td-right">Credit Owed</th><th>Last Purchase</th><th style="text-align:center">Invoices</th><th>Status</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`:'<div class="empty-state"><div class="empty-state-icon">👥</div><div>No customers match filter.</div></div>'}`;
-}
+  }).sort((a,b)=>b.totalSpent-a.totalSpent);
 
+  const typeIcon={retail:'🛒',wholesale:'🏭',vip:'⭐'};
+  const typeLabel={retail:'Retail',wholesale:'Wholesale',vip:'VIP'};
+
+  const rows=filtered.map(c=>{
+    const statusBadge=c.creditBalance>0
+      ?'<span style="background:#fee2e2;color:#dc2626;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700">HAS BALANCE</span>'
+      :c.invoiceCount>0?'<span style="background:#d1fae5;color:#065f46;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700">CLEARED</span>'
+      :'<span style="background:var(--surface);color:var(--text3);padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700">NEW</span>';
+    const lastDate=c.lastPurchase?c.lastPurchase.toLocaleDateString():'—';
+    const collectBtn=c.creditBalance>0?`<button class="btn btn-sm" onclick="showCreditPayModal('${c.id}')" style="color:var(--danger);border-color:#fca5a5;font-size:11px;padding:3px 8px">💰 Collect</button>`:'';
+    return `<tr>
+      <td><b>${esc(c.name)}</b></td>
+      <td style="font-size:12px;color:var(--text3)">${esc(c.phone)}</td>
+      <td><span style="font-size:11px">${typeIcon[c.type]||'🛒'} ${typeLabel[c.type]||'Retail'}</span></td>
+      <td class="td-right" style="font-weight:600">${fmt(c.totalSpent)}</td>
+      <td class="td-right" style="color:var(--success)">${fmt(c.creditPaid)}</td>
+      <td class="td-right" style="color:${c.creditBalance>0?'var(--danger)':'inherit'};font-weight:${c.creditBalance>0?700:400}">${fmt(c.creditBalance)}</td>
+      <td style="font-size:12px;color:var(--text3)">${lastDate}</td>
+      <td style="text-align:center">${c.invoiceCount}</td>
+      <td>${statusBadge}</td>
+      <td>${collectBtn}</td>
+    </tr>`;
+  }).join('');
+
+  el.innerHTML=`
+    <!-- 6 KPI cards matching v1 -->
+    <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:1.25rem">
+      <div class="kpi-card" style="border-left:3px solid #8b5cf6"><div class="kpi-label" style="color:#8b5cf6">👤 TOTAL CUSTOMERS</div><div class="kpi-value" style="font-size:26px;font-weight:800">${custs.length}</div><div class="kpi-sub">${activeCusts} active</div></div>
+      <div class="kpi-card" style="border-left:3px solid var(--brand)"><div class="kpi-label" style="color:var(--brand)">💰 TOTAL REVENUE</div><div class="kpi-value" style="font-size:18px;font-weight:800;color:var(--brand)">${fmt(totalSpent)}</div><div class="kpi-sub">All time</div></div>
+      <div class="kpi-card" style="border-left:3px solid var(--danger)"><div class="kpi-label" style="color:var(--danger)">⚠️ CREDIT OWED TO SHOP ${totalOwed>0?'🔴':''}</div><div class="kpi-value" style="font-size:18px;font-weight:800;color:${totalOwed>0?'var(--danger)':'var(--text1)'}">${fmt(totalOwed)}</div><div class="kpi-sub">${withBalance} customer${withBalance!==1?'s':''} with balance</div></div>
+      <div class="kpi-card" style="border-left:3px solid var(--success)"><div class="kpi-label" style="color:var(--success)">✅ CREDIT COLLECTED</div><div class="kpi-value" style="font-size:18px;font-weight:800;color:var(--success)">${fmt(totalCreditCollected)}</div><div class="kpi-sub">Payments received</div></div>
+      <div class="kpi-card" style="border-left:3px solid #7c3aed"><div class="kpi-label" style="color:#7c3aed">🔥 ACTIVE CUSTOMERS</div><div class="kpi-value" style="font-size:26px;font-weight:800;color:#7c3aed">${activeCusts}</div><div class="kpi-sub">Have purchased</div></div>
+      <div class="kpi-card" style="border-left:3px solid var(--warning)"><div class="kpi-label" style="color:var(--warning)">🔴 WITH BALANCE</div><div class="kpi-value" style="font-size:26px;font-weight:800;color:${withBalance>0?'var(--warning)':'var(--text1)'}">${withBalance}</div><div class="kpi-sub">Unpaid credit</div></div>
+    </div>
+
+    <!-- Two-column: Top 5 + Monthly chart -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:1.25rem">
+      <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px 16px">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--brand);margin-bottom:14px;display:flex;align-items:center;gap:6px"><span style="width:3px;height:14px;background:var(--brand);border-radius:2px;display:inline-block"></span>🏆 TOP 5 CUSTOMERS BY PURCHASE VALUE</div>
+        ${top5Bars||'<div style="color:var(--text3);text-align:center;padding:20px">No customer data yet</div>'}
+      </div>
+      <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px 16px">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--brand);margin-bottom:14px;display:flex;align-items:center;gap:6px"><span style="width:3px;height:14px;background:var(--brand);border-radius:2px;display:inline-block"></span>📅 MONTHLY REVENUE (LAST 6 MONTHS)</div>
+        <div style="display:flex;gap:4px;align-items:flex-end;height:120px;padding:0 4px">${monthBars}</div>
+      </div>
+    </div>
+
+    <!-- Customer Performance table -->
+    <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px 16px">
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--brand);margin-bottom:12px;display:flex;align-items:center;gap:6px"><span style="width:3px;height:14px;background:var(--brand);border-radius:2px;display:inline-block"></span>📋 CUSTOMER PERFORMANCE</div>
+      <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
+        ${['all','balance','cleared','active'].map(f=>`<button class="btn btn-sm ${filter===f?'btn-primary':''}" onclick="window._custOvFilter='${f}';renderCustomerOverview()">${f==='all'?'All':f==='balance'?'Has Balance':f==='cleared'?'Cleared':'Active'}</button>`).join('')}
+        <div class="search-wrap" style="margin-left:auto;max-width:240px"><span class="search-icon">🔍</span><input class="form-input" placeholder="Search customers..." value="${window._custOvSearch||''}" oninput="window._custOvSearch=this.value;renderCustomerOverview()"></div>
+      </div>
+      ${rows?`<div class="tbl-wrap" style="border-radius:var(--radius);border:1px solid var(--border)"><table><thead><tr><th>CUSTOMER</th><th>PHONE</th><th>TYPE</th><th class="td-right">TOTAL SPENT</th><th class="td-right">CREDIT PAID</th><th class="td-right">CREDIT BALANCE</th><th>LAST PURCHASE</th><th style="text-align:center">INVOICES</th><th>STATUS</th><th>ACTION</th></tr></thead><tbody>${rows}</tbody></table></div>`:'<div class="empty-state"><div class="empty-state-icon">👥</div><div>No customers match filter.</div></div>'}
+    </div>`;
+}
 // ── INVENTORY VALUATION ──────────────────────────────────
 function renderInvValuation() {
   const el=document.getElementById('invvaluation-content'); if(!el)return;
