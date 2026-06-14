@@ -161,6 +161,22 @@ input,select,textarea{font-family:var(--font)}
 .header-logo-sub{font-size:9px;color:var(--text3);font-weight:400}
 .header-center{flex:1;display:flex;align-items:center;gap:8px;padding:0 1rem}
 .header-page-title{font-size:13.5px;font-weight:600;color:var(--text1)}
+/* Global search */
+.gs-wrap{position:relative;flex:1;max-width:380px}
+.gs-input{width:100%;padding:6px 12px 6px 32px;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--text1);font-size:12.5px;outline:none;transition:border .15s}
+.gs-input:focus{border-color:var(--brand)}
+.gs-icon{position:absolute;left:10px;top:50%;transform:translateY(-50%);font-size:13px;opacity:.5;pointer-events:none}
+.gs-dropdown{position:absolute;top:calc(100% + 4px);left:0;right:0;background:var(--surface);border:1px solid var(--border);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.18);z-index:9999;max-height:400px;overflow-y:auto;display:none}
+.gs-dropdown.open{display:block}
+.gs-group-label{font-size:9.5px;font-weight:800;text-transform:uppercase;letter-spacing:.1em;color:var(--text3);padding:8px 12px 4px}
+.gs-item{display:flex;align-items:center;gap:10px;padding:8px 12px;cursor:pointer;transition:background .1s}
+.gs-item:hover{background:var(--border)}
+.gs-item-icon{font-size:15px;width:20px;text-align:center;flex-shrink:0}
+.gs-item-main{flex:1;min-width:0}
+.gs-item-name{font-size:13px;font-weight:600;color:var(--text1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.gs-item-sub{font-size:11px;color:var(--text3)}
+.gs-item-badge{font-size:11px;font-weight:700;color:var(--brand);white-space:nowrap}
+.gs-empty{padding:20px;text-align:center;font-size:13px;color:var(--text3)}
 .header-right{display:flex;align-items:center;gap:8px;margin-left:auto}
 .sync-dot{width:7px;height:7px;border-radius:50%;background:#22c55e;flex-shrink:0}
 .sync-dot.syncing{background:var(--accent3);animation:pulse 1.2s infinite}
@@ -879,6 +895,13 @@ input[type=number]::-webkit-inner-spin-button{opacity:.25}
       <span class="live-pill" id="live-pill" style="display:none">
         <span class="live-dot"></span>Live
       </span>
+      <!-- Global Search -->
+      <div class="gs-wrap" id="gs-wrap">
+        <span class="gs-icon">🔍</span>
+        <input class="gs-input" id="gs-input" placeholder="Search inventory, customers, invoices..." autocomplete="off"
+          oninput="gsSearch(this.value)" onfocus="gsSearch(this.value)" onkeydown="gsKeyNav(event)">
+        <div class="gs-dropdown" id="gs-dropdown"></div>
+      </div>
     </div>
     <div class="header-right">
       <span class="sync-dot" id="sync-dot"></span>
@@ -1294,6 +1317,15 @@ input[type=number]::-webkit-inner-spin-button{opacity:.25}
       <div id="closing-content"></div>
     </div>
 
+    <!-- ── HELD CHANGE REGISTER ── -->
+    <div class="page" id="page-held-change">
+      <div class="page-header">
+        <div><div class="page-title">🔒 Held Change Register</div>
+          <div style="font-size:12px;color:var(--text3);margin-top:2px">Track change owed to customers that hasn't been collected yet</div></div>
+      </div>
+      <div id="held-change-content"></div>
+    </div>
+
   </main>
 </div>
 
@@ -1427,6 +1459,7 @@ const NAV = [
   {id:'reports',          label:'Financial Dashboard',  icon:'📊', perm:'all'},
   {id:'credit',           label:'Credit',               icon:'💳', perm:'all'},
   {id:'closing',          label:'Daily Closing',        icon:'📋', perm:'all'},
+  {id:'held-change',      label:'Held Change Register', icon:'🔒', perm:'all'},
   {id:'supplieroverview', label:'Supplier Overview',    icon:'🚛', perm:'all'},
   {id:'customeroverview', label:'Customer Overview',    icon:'👥', perm:'all'},
   {id:'invvaluation',     label:'Inventory Valuation',  icon:'💰', perm:'all'},
@@ -2529,7 +2562,8 @@ function switchPage(pageId) {
     demosales:'Demo Sales', credit:'Credit', supplieroverview:'Supplier Overview',
     customeroverview:'Customer Overview', invvaluation:'Inventory Valuation',
     pandl:'Profit & Loss', returns:'Returns Tracker', productreport:'Product Report',
-    monthly:'Monthly Summary', activitylog:'Activity Log', recyclebin:'Recycle Bin'
+    monthly:'Monthly Summary', activitylog:'Activity Log', recyclebin:'Recycle Bin',
+    'held-change':'Held Change Register'
   };
   document.getElementById('page-title').textContent = titles[pageId] || pageId;
   document.getElementById('sidebar').classList.remove('open');
@@ -2544,6 +2578,7 @@ function switchPage(pageId) {
   if (pageId === 'reports')          renderReports();
   if (pageId === 'warehouse')        renderWarehouse();
   if (pageId === 'closing')          renderClosing();
+  if (pageId === 'held-change')      renderHeldChange();
   if (pageId === 'users')            renderUsers();
   if (pageId === 'settings')         renderSettings();
   if (pageId === 'stockmgmt')        renderStockMgmt();
@@ -11928,6 +11963,416 @@ renderCustomers = function(){
 renderSuppliers = function(){ renderSuppliersFull(); };
 renderUsers     = function(){ renderUsersFull(); };
 renderSettings  = function(){ renderSettingsFull(); };
+
+// ════════════════════════════════════════════════════════════
+// #3 — GLOBAL SEARCH
+// ════════════════════════════════════════════════════════════
+let _gsTimeout = null;
+
+function gsSearch(q) {
+  const dd = document.getElementById('gs-dropdown');
+  if (!dd) return;
+  q = (q || '').trim().toLowerCase();
+  if (!q) { dd.classList.remove('open'); dd.innerHTML = ''; return; }
+
+  const results = [];
+
+  // Inventory
+  const inv = Object.values(STATE.inventory || {}).filter(i =>
+    (i.name||'').toLowerCase().includes(q) || (i.cat||'').toLowerCase().includes(q)
+  ).slice(0, 5);
+  if (inv.length) {
+    results.push(`<div class="gs-group-label">📦 Inventory</div>`);
+    inv.forEach(i => {
+      const status = i.qty === 0 ? '<span style="color:var(--danger);font-size:11px">Out</span>'
+        : i.qty <= (i.minQty||0) ? '<span style="color:#d97706;font-size:11px">Low ('+i.qty+')</span>'
+        : '<span style="color:var(--success);font-size:11px">'+i.qty+' in stock</span>';
+      results.push(`<div class="gs-item" onclick="gsGoInventory('${esc(i._id||i.id||'')}')">
+        <span class="gs-item-icon">📦</span>
+        <div class="gs-item-main"><div class="gs-item-name">${esc(i.name)}</div>
+          <div class="gs-item-sub">${esc(i.cat||'—')} · Cost: ${fmt(i.cost||0)} · Sell: ${fmt(i.sell||0)}</div></div>
+        <span class="gs-item-badge">${status}</span></div>`);
+    });
+  }
+
+  // Customers
+  const custs = Object.values(STATE.customers || {}).filter(c =>
+    (c.name||'').toLowerCase().includes(q) || (c.phone||'').includes(q) || (c.biz||'').toLowerCase().includes(q)
+  ).slice(0, 4);
+  if (custs.length) {
+    results.push(`<div class="gs-group-label">👥 Customers</div>`);
+    custs.forEach(c => {
+      const owed = c.creditBalance || 0;
+      results.push(`<div class="gs-item" onclick="gsGoCustomer('${esc(c._id||c.id||'')}')">
+        <span class="gs-item-icon">👤</span>
+        <div class="gs-item-main"><div class="gs-item-name">${esc(c.name)}</div>
+          <div class="gs-item-sub">${esc(c.phone||'—')}${c.biz?' · '+esc(c.biz):''}</div></div>
+        ${owed > 0 ? `<span class="gs-item-badge" style="color:var(--danger)">Owes ${fmt(owed)}</span>` : ''}</div>`);
+    });
+  }
+
+  // Invoices / Sales
+  const invNums = {};
+  Object.values(STATE.sales || {}).forEach(s => {
+    const n = s.invoiceNum || '';
+    if (n.toLowerCase().includes(q) || (s.custName||'').toLowerCase().includes(q) || (s.printName||'').toLowerCase().includes(q)) {
+      if (!invNums[n]) invNums[n] = {invoiceNum:n, date:s.date, custName:s.printName||s.custName||'Walk-in', total:0, payment:s.payment};
+      invNums[n].total += s.total || 0;
+    }
+  });
+  const invList = Object.values(invNums).slice(0, 4);
+  if (invList.length) {
+    results.push(`<div class="gs-group-label">🧾 Invoices</div>`);
+    invList.forEach(inv => {
+      results.push(`<div class="gs-item" onclick="gsGoInvoice('${esc(inv.invoiceNum)}')">
+        <span class="gs-item-icon">🧾</span>
+        <div class="gs-item-main"><div class="gs-item-name">Invoice #${esc(inv.invoiceNum)}</div>
+          <div class="gs-item-sub">${esc(inv.custName)} · ${inv.date||'—'}</div></div>
+        <span class="gs-item-badge">${fmt(inv.total)}</span></div>`);
+    });
+  }
+
+  // Suppliers
+  const sups = Object.values(STATE.suppliers || {}).filter(s =>
+    (s.name||'').toLowerCase().includes(q) || (s.contact||'').toLowerCase().includes(q)
+  ).slice(0, 3);
+  if (sups.length) {
+    results.push(`<div class="gs-group-label">🚛 Suppliers</div>`);
+    sups.forEach(s => {
+      results.push(`<div class="gs-item" onclick="gsGoSupplier('${esc(s._id||s.id||'')}')">
+        <span class="gs-item-icon">🚛</span>
+        <div class="gs-item-main"><div class="gs-item-name">${esc(s.name)}</div>
+          <div class="gs-item-sub">${esc(s.contact||s.phone||'—')}</div></div>
+        ${(s.owedToSupplier||0)>0?`<span class="gs-item-badge" style="color:#d97706">Owed ${fmt(s.owedToSupplier)}</span>`:''}</div>`);
+    });
+  }
+
+  if (!results.length) {
+    dd.innerHTML = `<div class="gs-empty">No results for "<b>${esc(q)}</b>"</div>`;
+  } else {
+    dd.innerHTML = results.join('');
+  }
+  dd.classList.add('open');
+}
+
+function gsKeyNav(e) {
+  if (e.key === 'Escape') { gsClose(); return; }
+  if (e.key === 'Enter') {
+    const first = document.querySelector('.gs-item');
+    if (first) { first.click(); gsClose(); }
+  }
+}
+function gsClose() {
+  const dd = document.getElementById('gs-dropdown');
+  const inp = document.getElementById('gs-input');
+  if (dd) { dd.classList.remove('open'); dd.innerHTML = ''; }
+  if (inp) inp.value = '';
+}
+function gsGoInventory(id) {
+  gsClose();
+  navigateTo('inventory');
+  // Highlight the item after navigation
+  setTimeout(() => {
+    window._invHighlight = id;
+    if (typeof renderInventory === 'function') renderInventory();
+  }, 150);
+}
+function gsGoCustomer(id) {
+  gsClose();
+  navigateTo('customers');
+  setTimeout(() => {
+    if (id) showCustProfile(id);
+  }, 150);
+}
+function gsGoInvoice(invNum) {
+  gsClose();
+  navigateTo('sales');
+  setTimeout(() => {
+    if (typeof showInvoiceViewModal === 'function') showInvoiceViewModal(invNum);
+  }, 200);
+}
+function gsGoSupplier(id) {
+  gsClose();
+  navigateTo('suppliers');
+  setTimeout(() => {
+    if (id && typeof renderSupplierProfile === 'function') {
+      window._supProfileId = id;
+      renderSuppliersFull();
+    }
+  }, 150);
+}
+// Close dropdown on outside click
+document.addEventListener('click', e => {
+  if (!document.getElementById('gs-wrap')?.contains(e.target)) gsClose();
+});
+
+// ════════════════════════════════════════════════════════════
+// #2 — SUPPLIER DEPOSITS
+// ════════════════════════════════════════════════════════════
+function showSupplierDepositModal(supId) {
+  const s = STATE.suppliers?.[supId];
+  if (!s) { showToast('Supplier not found.', 'error'); return; }
+  const banks = Object.values(STATE.banks || {}).filter(b => !b._deleted);
+  const bankOpts = banks.map(b => `<option value="${esc(b.name)}">${esc(b.name)}${b.acct?' · '+b.acct:''}</option>`).join('');
+
+  showModal(`💰 Supplier Deposit — ${esc(s.name)}`,
+    `<div style="background:var(--surface);border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:13px">
+      <div style="color:var(--text3);margin-bottom:2px">Advance payment / deposit to supplier</div>
+      <div style="font-weight:700;font-size:15px;color:var(--brand)">${esc(s.name)}</div>
+      ${(s.owedToSupplier||0)>0?`<div style="font-size:12px;color:#d97706;margin-top:4px">Currently owed: <b>${fmt(s.owedToSupplier)}</b></div>`:''}
+    </div>
+    <div class="form-grid c2">
+      <div class="form-group">
+        <label>Amount (₦) <span class="req">*</span></label>
+        <input class="form-input" id="sdep-amount" type="number" min="1" placeholder="0">
+      </div>
+      <div class="form-group">
+        <label>Date</label>
+        <input class="form-input" id="sdep-date" type="date" value="${new Date().toISOString().slice(0,10)}">
+      </div>
+      <div class="form-group">
+        <label>Payment mode</label>
+        <select class="form-input" id="sdep-mode" onchange="document.getElementById('sdep-bank-row').style.display=this.value==='transfer'||this.value==='pos'?'block':'none'">
+          <option value="cash">Cash</option>
+          <option value="transfer">Bank Transfer</option>
+          <option value="pos">POS</option>
+        </select>
+      </div>
+      <div class="form-group" id="sdep-bank-row" style="display:none">
+        <label>Bank</label>
+        <select class="form-input" id="sdep-bank">${bankOpts||'<option value="">No banks added</option>'}</select>
+      </div>
+      <div class="form-group" style="grid-column:1/-1">
+        <label>Note (optional)</label>
+        <input class="form-input" id="sdep-note" placeholder="e.g. Advance for June order">
+      </div>
+    </div>`,
+    [
+      {label:'Cancel', action:'close', style:''},
+      {label:'💰 Record Deposit', action:`saveSupplierDeposit('${supId}')`, style:'btn-primary'}
+    ]
+  );
+}
+
+async function saveSupplierDeposit(supId) {
+  const s = STATE.suppliers?.[supId];
+  if (!s) return;
+  const amount = parseFloat(document.getElementById('sdep-amount')?.value) || 0;
+  if (!amount || amount <= 0) { showToast('Enter a valid amount.', 'error'); return; }
+  const date = document.getElementById('sdep-date')?.value || new Date().toISOString().slice(0,10);
+  const mode = document.getElementById('sdep-mode')?.value || 'cash';
+  const bankName = document.getElementById('sdep-bank')?.value || '';
+  const note = document.getElementById('sdep-note')?.value?.trim() || '';
+  const month = date.slice(0,7);
+
+  setSyncStatus('saving');
+  try {
+    const cfId = uid();
+    const cf = {
+      id: cfId, type: 'out', cat: 'Supplier Deposit',
+      desc: `Deposit to ${s.name}${note?' — '+note:''}`,
+      amount, payMode: mode, bankName, supplierId: supId,
+      supplierName: s.name, date, month, by: STATE.user?.name || ''
+    };
+    await fsSave(COLS.CASHFLOW, cfId, cf);
+    if (!STATE.cashflow) STATE.cashflow = {};
+    STATE.cashflow[cfId] = {...cf, _id: cfId};
+
+    // Reduce owed amount if supplier owes us
+    const owed = s.owedToSupplier || 0;
+    if (owed > 0) {
+      const newOwed = Math.max(0, owed - amount);
+      const updatedSup = {...s, owedToSupplier: newOwed, _id: supId};
+      await fsSave(COLS.SUPPLIERS, supId, updatedSup);
+      STATE.suppliers[supId] = updatedSup;
+    }
+
+    closeModal();
+    setSyncStatus('synced');
+    showToast(`✅ Deposit of ${fmt(amount)} recorded for ${s.name}.`, 'success');
+    logActivity('Supplier Deposit', `${s.name} — ${fmt(amount)} (${mode})`, note.slice(0,40));
+    if (typeof renderSuppliersFull === 'function') renderSuppliersFull();
+  } catch(e) {
+    setSyncStatus('error');
+    showToast('Failed: ' + e.message, 'error');
+  }
+}
+
+// ════════════════════════════════════════════════════════════
+// #1 — HELD CHANGE REGISTER
+// ════════════════════════════════════════════════════════════
+// Held change = when customer gives ₦X, you owe them the difference to collect later
+
+function renderHeldChange() {
+  const el = document.getElementById('held-change-content');
+  if (!el) return;
+
+  const entries = Object.values(STATE.cashflow || {})
+    .filter(c => c.cat === 'Held Change')
+    .sort((a,b) => (b.date||'').localeCompare(a.date||''));
+  const pending = entries.filter(e => e.status === 'pending');
+  const settled = entries.filter(e => e.status !== 'pending');
+  const totalHeld = pending.reduce((a,e) => a + (e.amount||0), 0);
+
+  const isAdmin = STATE.user?.role === 'admin';
+
+  const pendingRows = pending.map(e => `<tr>
+    <td style="font-size:12px">${e.date||'—'}</td>
+    <td><b>${esc(e.custName||'Walk-in')}</b>${e.invoiceNum?`<div style="font-size:10.5px;color:var(--text3)">Inv #${esc(e.invoiceNum)}</div>`:''}</td>
+    <td class="td-right"><b style="color:var(--brand)">${fmt(e.amount||0)}</b></td>
+    <td style="font-size:12px;color:var(--text3)">${esc(e.note||'—')}</td>
+    <td style="font-size:11px;color:var(--text3)">${esc(e.by||'—')}</td>
+    <td>
+      <div style="display:flex;gap:4px">
+        <button class="btn btn-sm" onclick="settleHeldChange('${e._id||e.id}')" style="color:var(--success);border-color:var(--success);font-size:11px">✓ Settle</button>
+        ${isAdmin?`<button class="btn btn-sm" onclick="deleteHeldChange('${e._id||e.id}')" style="color:var(--danger);font-size:11px">Del</button>`:''}
+      </div>
+    </td>
+  </tr>`).join('');
+
+  const settledRows = settled.slice(0,50).map(e => `<tr>
+    <td style="font-size:12px">${e.date||'—'}</td>
+    <td>${esc(e.custName||'Walk-in')}</td>
+    <td class="td-right">${fmt(e.amount||0)}</td>
+    <td style="font-size:12px;color:var(--text3)">${esc(e.note||'—')}</td>
+    <td style="font-size:11px;color:var(--text3)">${e.settledDate||'—'}</td>
+    <td><span style="background:var(--success-bg);color:var(--success);padding:2px 8px;border-radius:20px;font-size:11px;font-weight:700">Settled</span></td>
+  </tr>`).join('');
+
+  el.innerHTML = `
+    <!-- KPIs -->
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:1.5rem">
+      <div class="kpi-card" style="border-left:3px solid var(--brand)">
+        <div class="kpi-label" style="color:var(--brand)">TOTAL HELD</div>
+        <div class="kpi-value" style="font-size:26px;font-weight:800;color:var(--brand)">${fmt(totalHeld)}</div>
+        <div class="kpi-sub">${pending.length} customer${pending.length!==1?'s':''} waiting</div>
+      </div>
+      <div class="kpi-card" style="border-left:3px solid var(--success)">
+        <div class="kpi-label" style="color:var(--success)">SETTLED</div>
+        <div class="kpi-value" style="font-size:26px;font-weight:800">${settled.length}</div>
+        <div class="kpi-sub">Change returned</div>
+      </div>
+      <div class="kpi-card" style="border-left:3px solid var(--warning)">
+        <div class="kpi-label" style="color:var(--warning)">PENDING</div>
+        <div class="kpi-value" style="font-size:26px;font-weight:800;color:var(--warning)">${pending.length}</div>
+        <div class="kpi-sub">Not yet collected</div>
+      </div>
+    </div>
+
+    <!-- Add new held change -->
+    <div class="form-card" style="margin-bottom:1.5rem">
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--brand);margin-bottom:14px;display:flex;align-items:center;gap:6px">
+        <span style="width:3px;height:14px;background:var(--brand);border-radius:2px;display:inline-block"></span>
+        🔒 RECORD HELD CHANGE
+      </div>
+      <div class="form-grid c3">
+        <div class="form-group">
+          <label>Customer name</label>
+          <input class="form-input" id="hc-cust" placeholder="e.g. Mr David">
+        </div>
+        <div class="form-group">
+          <label>Amount held (₦) <span class="req">*</span></label>
+          <input class="form-input" id="hc-amount" type="number" min="1" placeholder="0">
+        </div>
+        <div class="form-group">
+          <label>Invoice # (optional)</label>
+          <input class="form-input" id="hc-invoice" placeholder="e.g. 2026/0631">
+        </div>
+        <div class="form-group" style="grid-column:1/-1">
+          <label>Note</label>
+          <input class="form-input" id="hc-note" placeholder="e.g. Balance from ₦5,000 on ₦4,200 purchase">
+        </div>
+      </div>
+      <div style="margin-top:10px">
+        <button class="btn btn-primary" onclick="addHeldChange()">+ Record Held Change</button>
+      </div>
+    </div>
+
+    <!-- Pending -->
+    <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.07em;color:var(--warning);margin-bottom:8px">⏳ Pending — Change Not Yet Collected (${pending.length})</div>
+    ${pending.length ? `<div class="tbl-wrap" style="margin-bottom:1.5rem">
+      <table><thead><tr>
+        <th>Date</th><th>Customer</th><th class="td-right">Amount</th><th>Note</th><th>By</th><th>Action</th>
+      </tr></thead><tbody>${pendingRows}</tbody></table>
+    </div>` : `<div class="empty-state" style="margin-bottom:1.5rem"><div class="empty-state-icon">✅</div><div>No pending held change — all clear!</div></div>`}
+
+    <!-- Settled -->
+    ${settled.length ? `<div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.07em;color:var(--success);margin-bottom:8px">✅ Settled History</div>
+    <div class="tbl-wrap">
+      <table><thead><tr>
+        <th>Date</th><th>Customer</th><th class="td-right">Amount</th><th>Note</th><th>Settled on</th><th>Status</th>
+      </tr></thead><tbody>${settledRows}</tbody></table>
+    </div>` : ''}
+  `;
+}
+
+async function addHeldChange() {
+  const custName = document.getElementById('hc-cust')?.value?.trim() || 'Walk-in';
+  const amount = parseFloat(document.getElementById('hc-amount')?.value) || 0;
+  const invoiceNum = document.getElementById('hc-invoice')?.value?.trim() || '';
+  const note = document.getElementById('hc-note')?.value?.trim() || '';
+  if (!amount || amount <= 0) { showToast('Enter a valid amount.', 'error'); return; }
+  const date = new Date().toISOString().slice(0,10);
+  const month = date.slice(0,7);
+  setSyncStatus('saving');
+  try {
+    const id = uid();
+    const entry = {
+      id, cat: 'Held Change', type: 'liability',
+      custName, amount, invoiceNum, note,
+      date, month, status: 'pending',
+      by: STATE.user?.name || ''
+    };
+    await fsSave(COLS.CASHFLOW, id, entry);
+    if (!STATE.cashflow) STATE.cashflow = {};
+    STATE.cashflow[id] = {...entry, _id: id};
+    // Clear form
+    ['hc-cust','hc-amount','hc-invoice','hc-note'].forEach(id => {
+      const el = document.getElementById(id); if (el) el.value = '';
+    });
+    setSyncStatus('synced');
+    showToast(`✅ Held change of ${fmt(amount)} recorded for ${custName}.`, 'success');
+    logActivity('Held Change recorded', `${custName} — ${fmt(amount)}`, note.slice(0,40));
+    renderHeldChange();
+  } catch(e) {
+    setSyncStatus('error');
+    showToast('Failed: ' + e.message, 'error');
+  }
+}
+
+async function settleHeldChange(id) {
+  const entry = STATE.cashflow?.[id];
+  if (!entry) { showToast('Entry not found.', 'error'); return; }
+  if (!confirm(`Mark ${fmt(entry.amount)} change for ${entry.custName||'Walk-in'} as settled (returned to customer)?`)) return;
+  setSyncStatus('saving');
+  try {
+    const updated = {...entry, status: 'settled', settledDate: new Date().toISOString().slice(0,10), settledBy: STATE.user?.name||''};
+    await fsSave(COLS.CASHFLOW, id, updated);
+    STATE.cashflow[id] = {...updated, _id: id};
+    setSyncStatus('synced');
+    showToast(`✅ Change of ${fmt(entry.amount)} marked as settled.`, 'success');
+    logActivity('Held Change settled', `${entry.custName||'Walk-in'} — ${fmt(entry.amount)}`, '');
+    renderHeldChange();
+  } catch(e) {
+    setSyncStatus('error');
+    showToast('Failed: ' + e.message, 'error');
+  }
+}
+
+async function deleteHeldChange(id) {
+  if (!confirm('Delete this held change entry?')) return;
+  setSyncStatus('saving');
+  try {
+    await fsDelete(COLS.CASHFLOW, id);
+    if (STATE.cashflow) delete STATE.cashflow[id];
+    setSyncStatus('synced');
+    showToast('Entry deleted.', 'info');
+    renderHeldChange();
+  } catch(e) {
+    setSyncStatus('error');
+    showToast('Failed: ' + e.message, 'error');
+  }
+}
 
 
 // ── WEEK 4 — FINAL WIRE-UP
