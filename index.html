@@ -7625,49 +7625,268 @@ async function saveEditReturn(id) {
 function renderProductReport() {
   const el=document.getElementById('productreport-content'); if(!el)return;
   const search=window._prSearch||''; const itemId=window._prItemId||null;
-  const searchBar=`<div class="card" style="padding:1.25rem;margin-bottom:1.25rem"><div class="sec-title" style="margin-bottom:.75rem">Select a Product</div><div style="position:relative;max-width:500px"><input class="form-input" id="prod-report-search" autocomplete="off" placeholder="Type product name to search..." value="${esc(search)}" oninput="prodReportLiveSearch(this.value)" onfocus="prodReportLiveSearch(this.value,true)" onblur="setTimeout(()=>{const d=document.getElementById('prod-report-dd');if(d)d.style.display='none';},200)" style="border:2px solid var(--primary)"><div id="prod-report-dd" style="display:none;position:absolute;left:0;right:0;top:100%;background:var(--white);border:1px solid var(--border);border-radius:8px;box-shadow:0 6px 24px rgba(0,0,0,.12);z-index:9999;max-height:280px;overflow-y:auto;margin-top:3px"></div></div>${itemId?`<button class="btn btn-sm" onclick="window._prSearch='';window._prItemId=null;renderProductReport()" style="margin-top:8px;color:var(--danger)">← Search again</button>`:''}</div>`;
-  if(!search&&!itemId){el.innerHTML=searchBar+'<div class="empty-state" style="padding:40px"><div class="empty-state-icon">🔎</div><div>Type a product name above to generate its report.</div></div>';return;}
-  if(!itemId){el.innerHTML=searchBar+'<div class="empty-state"><div class="empty-state-icon">📦</div><div>Select a product from the dropdown.</div></div>';return;}
-  const item=STATE.inventory?.[itemId]; if(!item){el.innerHTML=searchBar+'<div class="empty-state"><div class="empty-state-icon">❌</div><div>Product not found.</div></div>';return;}
+
+  const searchCard=`
+    <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px 16px;margin-bottom:1.25rem">
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--brand);margin-bottom:12px;display:flex;align-items:center;gap:6px">
+        <span style="width:3px;height:14px;background:var(--brand);border-radius:2px;display:inline-block"></span>
+        🔑 SELECT A PRODUCT
+      </div>
+      <div style="position:relative;max-width:540px">
+        <input class="form-input" id="prod-report-search" autocomplete="off" placeholder="Type product name to search..."
+          value="${esc(search)}" oninput="prodReportLiveSearch(this.value)"
+          onfocus="prodReportLiveSearch(this.value,true)"
+          onblur="setTimeout(()=>{const d=document.getElementById('prod-report-dd');if(d)d.style.display='none';},200)"
+          style="border:2px solid var(--brand);font-size:14px;font-weight:600">
+        <div id="prod-report-dd" style="display:none;position:absolute;left:0;right:0;top:100%;background:var(--white);border:1px solid var(--border);border-radius:var(--radius);box-shadow:0 6px 24px rgba(0,0,0,.12);z-index:9999;max-height:280px;overflow-y:auto;margin-top:3px"></div>
+      </div>
+      ${itemId?`<button class="btn btn-sm" onclick="window._prSearch='';window._prItemId=null;renderProductReport()" style="margin-top:10px;color:var(--danger)">← Search again</button>`:''}
+    </div>`;
+
+  if(!search&&!itemId){
+    el.innerHTML=searchCard+'<div class="empty-state" style="padding:40px"><div class="empty-state-icon">🔎</div><div>Type a product name above to generate its report.</div></div>';
+    return;
+  }
+  if(!itemId){
+    el.innerHTML=searchCard+'<div class="empty-state"><div class="empty-state-icon">📦</div><div>Select a product from the dropdown.</div></div>';
+    return;
+  }
+  const item=STATE.inventory?.[itemId];
+  if(!item){el.innerHTML=searchCard+'<div class="empty-state"><div class="empty-state-icon">❌</div><div>Product not found.</div></div>';return;}
+
+  const cost=item.costPrice||item.cost||0;
+  const sell=item.sellPrice||item.sell||0;
   const supplier=Object.values(STATE.suppliers||{}).find(s=>s._id===item.supId||s.id===item.supId)||{};
+
+  // Sales — group by invoice
   const salesOfItem=Object.values(STATE.sales||{}).filter(s=>s.itemId===itemId||s.name===item.name);
   const saleInvs={};
-  salesOfItem.forEach(s=>{const k=s.invoiceNum;if(!saleInvs[k])saleInvs[k]={invoiceNum:k,date:s.date,custName:s.custName||s.printName||'Walk-in',qty:0,total:0,salePrice:s.salePrice,payment:s.payment,seller:s.seller};saleInvs[k].qty+=s.qty||0;saleInvs[k].total+=s.total||0;});
+  salesOfItem.forEach(s=>{
+    const k=s.invoiceNum;
+    if(!saleInvs[k])saleInvs[k]={invoiceNum:k,date:s.date,custName:s.custName||'Walk-in',ordered:0,supplied:0,pending:0,sellPrice:s.salePrice||sell,total:0,profit:0,payment:s.payment,seller:s.seller||''};
+    saleInvs[k].ordered+=s.qty||0;
+    saleInvs[k].supplied+=s.qty||0;
+    saleInvs[k].total+=s.total||0;
+    saleInvs[k].profit+=s.profit||0;
+  });
   const saleList=Object.values(saleInvs).sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+
+  // Purchases
   const purchasesOfItem=Object.values(STATE.purchases||{}).filter(p=>p.itemId===itemId||p.itemName===item.name);
+  const purchaseList=purchasesOfItem.sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+
+  // Returns
   const returnsOfItem=Object.values(STATE.salesReturns||{}).filter(r=>r.itemId===itemId||r.itemName===item.name);
+
+  // Stock adjustments
+  const adjOfItem=Object.values(STATE.adjLog||{}).filter(a=>a.itemId===itemId||a.itemName===item.name).sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+
+  // KPI calcs
+  const totalPurchased=purchaseList.reduce((a,p)=>a+(p.qty||0),0);
+  const totalSupplied=saleList.reduce((a,s)=>a+s.supplied,0);
+  const totalReturned=returnsOfItem.reduce((a,r)=>a+(r.qty||1),0);
   const totalRevenue=saleList.reduce((a,s)=>a+s.total,0);
-  const totalQtySold=saleList.reduce((a,s)=>a+s.qty,0);
-  const totalCOGS=totalQtySold*(item.costPrice||item.cost||0);
-  const totalProfit=totalRevenue-totalCOGS;
-  const avgSellPrice=totalQtySold>0?Math.round(totalRevenue/totalQtySold):0;
-  const saleRows=saleList.slice(0,30).map(s=>`<tr><td style="font-size:12px">${s.date||''}</td><td><b style="font-family:var(--font-mono)">#${esc(s.invoiceNum)}</b></td><td>${esc(s.custName)}</td><td style="text-align:center">${s.qty}</td><td class="td-right">${fmt(s.salePrice||0)}</td><td class="td-right"><b>${fmt(s.total)}</b></td><td><button class="btn btn-sm" onclick="reprintSaleInvoice('${s.invoiceNum}')" style="font-size:11px;color:#1a237e">Print</button></td></tr>`).join('');
-  const purchaseRows=purchasesOfItem.slice(0,20).map(p=>`<tr><td style="font-size:12px">${p.date||''}</td><td>${esc(p.supplier||'—')}</td><td style="text-align:center">${p.qty||0}</td><td class="td-right">${fmt(p.costPrice||0)}</td><td class="td-right">${fmt(p.totalCost||0)}</td></tr>`).join('');
-  el.innerHTML=`${searchBar}
-    <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:1.25rem">
-      ${kpiCard('info','Current Stock',item.qty||0,'In shop')}
-      ${kpiCard('brand','Total Revenue',fmt(totalRevenue),'All time')}
-      ${kpiCard('success','Total Profit',fmt(totalProfit),totalRevenue>0?Math.round(totalProfit/totalRevenue*100)+'% margin':'')}
-      ${kpiCard('neutral','Total Qty Sold',totalQtySold,'Units')}
-    </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.25rem;margin-bottom:1.25rem">
-      <div class="card" style="padding:1rem"><div class="sec-title" style="margin-bottom:.75rem">Product Details</div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:13px">
-          <div style="color:var(--text3)">Category</div><div><b>${esc(item.cat||'—')}</b></div>
-          <div style="color:var(--text3)">Cost Price</div><div><b>${fmt(item.costPrice||item.cost||0)}</b></div>
-          <div style="color:var(--text3)">Sell Price</div><div><b>${fmt(item.sellPrice||item.sell||0)}</b></div>
-          <div style="color:var(--text3)">Min Qty</div><div><b>${item.minQty||5}</b></div>
-          <div style="color:var(--text3)">Supplier</div><div><b>${esc(supplier.name||'—')}</b></div>
-          <div style="color:var(--text3)">Avg Sale Price</div><div><b>${fmt(avgSellPrice)}</b></div>
+  const totalCostSpent=purchaseList.reduce((a,p)=>a+(p.totalCost||0),0);
+  const totalProfit=saleList.reduce((a,s)=>a+s.profit,0);
+  const profitMargin=totalRevenue>0?Math.round(totalProfit/totalRevenue*100):0;
+  const stockAdjs=adjOfItem.length;
+  const netAdjChange=adjOfItem.reduce((a,adj)=>a+(adj.change||0),0);
+  const avgSellPrice=totalSupplied>0?Math.round(totalRevenue/totalSupplied):sell;
+
+  // Stock movement summary
+  const openingStock=0; // estimated
+  const currentStockCalc=openingStock+totalPurchased-totalSupplied+totalReturned+netAdjChange;
+
+  el.innerHTML=`${searchCard}
+    <!-- Product header card -->
+    <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--radius-lg);padding:16px 20px;margin-bottom:1.25rem;display:flex;justify-content:space-between;align-items:flex-start">
+      <div>
+        <div style="font-size:22px;font-weight:800;color:var(--text1);margin-bottom:6px">${esc(item.name)}</div>
+        <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:12px">
+          <span style="color:var(--text3)">📂 ${esc(item.cat||'—')}</span>
+          <span style="color:var(--text3)">🚛 ${esc(supplier.name||'No supplier')}</span>
+          <span style="color:var(--warning)">💰 Cost: ${fmt(cost)}</span>
+          <span style="color:var(--success)">🏷️ Sell: ${fmt(sell)}</span>
         </div>
       </div>
-      <div class="card" style="padding:1rem"><div class="sec-title" style="margin-bottom:.75rem">Returns (${returnsOfItem.length})</div>
-        ${returnsOfItem.length?`<div style="font-size:13px">Qty returned: <b>${returnsOfItem.reduce((a,r)=>a+(r.qty||1),0)}</b></div><div style="font-size:13px;margin-top:4px">Refunded: <b style="color:var(--danger)">${fmt(returnsOfItem.reduce((a,r)=>a+(r.refundAmt||0),0))}</b></div>`:'<div style="color:var(--text3);font-size:13px">No returns for this item.</div>'}
+      <div style="text-align:right">
+        <div style="font-size:32px;font-weight:800;color:${item.qty<=0?'var(--danger)':item.qty<=(item.minQty||5)?'var(--warning)':'var(--brand)'}">${item.qty||0}</div>
+        <div style="font-size:11px;color:var(--text3)">Current stock</div>
       </div>
     </div>
-    <div class="sec-title" style="margin-bottom:.75rem">Sales History (${saleList.length} invoices)</div>
-    ${saleRows?`<div class="tbl-wrap" style="margin-bottom:1.25rem"><table><thead><tr><th>Date</th><th>Invoice #</th><th>Customer</th><th style="text-align:center">Qty</th><th class="td-right">Unit Price</th><th class="td-right">Total</th><th></th></tr></thead><tbody>${saleRows}</tbody></table></div>`:'<div style="color:var(--text3);font-size:13px;margin-bottom:1.25rem">No sales yet.</div>'}
-    ${purchaseRows?`<div class="sec-title" style="margin-bottom:.75rem">Purchase History</div><div class="tbl-wrap"><table><thead><tr><th>Date</th><th>Supplier</th><th style="text-align:center">Qty</th><th class="td-right">Cost/Unit</th><th class="td-right">Total Cost</th></tr></thead><tbody>${purchaseRows}</tbody></table></div>`:''}`;
+
+    <!-- 8 KPI cards matching v1 -->
+    <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:10px">
+      <div class="kpi-card" style="border-left:3px solid var(--brand)">
+        <div class="kpi-label" style="color:var(--brand)">📥 TOTAL PURCHASED</div>
+        <div class="kpi-value" style="font-size:22px;font-weight:800;color:var(--brand)">${totalPurchased} <span style="font-size:13px">units</span></div>
+        <div class="kpi-sub">${purchaseList.length} order${purchaseList.length!==1?'s':''}</div>
+      </div>
+      <div class="kpi-card" style="border-left:3px solid var(--info)">
+        <div class="kpi-label" style="color:var(--info)">📤 TOTAL SUPPLIED</div>
+        <div class="kpi-value" style="font-size:22px;font-weight:800;color:var(--info)">${totalSupplied} <span style="font-size:13px">units</span></div>
+        <div class="kpi-sub">${saleList.length} invoice${saleList.length!==1?'s':''}</div>
+      </div>
+      <div class="kpi-card" style="border-left:3px solid var(--warning)">
+        <div class="kpi-label" style="color:var(--warning)">↩️ TOTAL RETURNED</div>
+        <div class="kpi-value" style="font-size:22px;font-weight:800;color:var(--warning)">${totalReturned} <span style="font-size:13px">units</span></div>
+        <div class="kpi-sub">${returnsOfItem.length} return record${returnsOfItem.length!==1?'s':''}</div>
+      </div>
+      <div class="kpi-card" style="border-left:3px solid var(--success)">
+        <div class="kpi-label" style="color:var(--success)">💰 TOTAL REVENUE</div>
+        <div class="kpi-value" style="font-size:18px;font-weight:800;color:var(--success)">${fmt(totalRevenue)}</div>
+        <div class="kpi-sub">From all sales</div>
+      </div>
+      <div class="kpi-card" style="border-left:3px solid var(--danger)">
+        <div class="kpi-label" style="color:var(--danger)">💸 TOTAL COST SPENT</div>
+        <div class="kpi-value" style="font-size:18px;font-weight:800;color:var(--danger)">${fmt(totalCostSpent)}</div>
+        <div class="kpi-sub">Purchase cost</div>
+      </div>
+      <div class="kpi-card" style="border-left:3px solid #7c3aed">
+        <div class="kpi-label" style="color:#7c3aed">📈 TOTAL PROFIT</div>
+        <div class="kpi-value" style="font-size:18px;font-weight:800;color:#7c3aed">${fmt(totalProfit)}</div>
+        <div class="kpi-sub">${profitMargin}% margin</div>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:1.25rem">
+      <div class="kpi-card" style="border-left:3px solid #8b5cf6">
+        <div class="kpi-label" style="color:#8b5cf6">✏️ STOCK ADJUSTMENTS</div>
+        <div class="kpi-value" style="font-size:22px;font-weight:800;color:#8b5cf6">${stockAdjs} <span style="font-size:13px">times</span></div>
+        <div class="kpi-sub">Manual adjustments recorded</div>
+      </div>
+      <div class="kpi-card" style="border-left:3px solid var(--info)">
+        <div class="kpi-label" style="color:var(--info)">📊 NET ADJ. CHANGE</div>
+        <div class="kpi-value" style="font-size:22px;font-weight:800;color:${netAdjChange>=0?'var(--success)':'var(--danger)'}">${netAdjChange>=0?'+':''}${netAdjChange} <span style="font-size:13px">units</span></div>
+        <div class="kpi-sub">Net from all adjustments</div>
+      </div>
+    </div>
+
+    <!-- Purchase History -->
+    <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px 16px;margin-bottom:1.25rem">
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--brand);margin-bottom:12px;display:flex;align-items:center;gap:6px">
+        <span style="width:3px;height:14px;background:var(--brand);border-radius:2px;display:inline-block"></span>
+        🛒 PURCHASE HISTORY (${purchaseList.length} orders · ${totalPurchased} units received)
+      </div>
+      ${purchaseList.length?`<div class="tbl-wrap" style="border-radius:var(--radius);border:1px solid var(--border)"><table>
+        <thead><tr><th>DATE</th><th>SUPPLIER</th><th style="text-align:center">QTY</th><th class="td-right">COST/UNIT</th><th class="td-right">TOTAL COST</th><th>MODE</th></tr></thead>
+        <tbody>${purchaseList.map(p=>`<tr>
+          <td style="font-size:12px;color:var(--text3)">${p.date||'—'}</td>
+          <td>${esc(p.supplier||'—')}</td>
+          <td style="text-align:center;font-weight:700;color:var(--success)">${p.qty||0}</td>
+          <td class="td-right">${fmt(p.costPrice||0)}</td>
+          <td class="td-right;font-weight:600">${fmt(p.totalCost||0)}</td>
+          <td style="font-size:11px;color:var(--text3)">${p.payMode||'cash'}</td>
+        </tr>`).join('')}</tbody>
+      </table></div>`
+      :'<div style="color:var(--text3);font-size:13px;text-align:center;padding:16px">No purchase records found for this product.</div>'}
+    </div>
+
+    <!-- Sales History -->
+    <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px 16px;margin-bottom:1.25rem">
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--brand);margin-bottom:12px;display:flex;align-items:center;gap:6px">
+        <span style="width:3px;height:14px;background:var(--brand);border-radius:2px;display:inline-block"></span>
+        🧾 SALES HISTORY (${saleList.length} invoices · ${totalSupplied} supplied)
+      </div>
+      ${saleList.length?`<div class="tbl-wrap" style="border-radius:var(--radius);border:1px solid var(--border)"><table>
+        <thead><tr><th>DATE</th><th>INVOICE #</th><th>CUSTOMER</th><th style="text-align:center">ORDERED</th><th style="text-align:center">SUPPLIED</th><th style="text-align:center;color:var(--danger)">PENDING</th><th class="td-right">SELL PRICE</th><th class="td-right">REVENUE</th><th class="td-right">PROFIT</th><th>PAY TYPE</th><th>SELLER</th></tr></thead>
+        <tbody>${saleList.map(s=>{
+          const payBadge=s.payment==='credit'?'<span style="background:#fee2e2;color:#dc2626;padding:2px 7px;border-radius:20px;font-size:10px;font-weight:700">CREDIT</span>':'<span style="background:#d1fae5;color:#065f46;padding:2px 7px;border-radius:20px;font-size:10px;font-weight:700">PAID</span>';
+          return`<tr>
+            <td style="font-size:12px;color:var(--text3)">${s.date||''}</td>
+            <td><b style="font-family:var(--font-mono)">${esc(s.invoiceNum)}</b></td>
+            <td style="font-size:12px">${esc(s.custName)}</td>
+            <td style="text-align:center;font-weight:700">${s.ordered}</td>
+            <td style="text-align:center;font-weight:700;color:var(--success)">${s.supplied}</td>
+            <td style="text-align:center;font-weight:700;color:var(--danger)">${s.pending}</td>
+            <td class="td-right">${fmt(s.sellPrice||sell)}</td>
+            <td class="td-right;font-weight:600">${fmt(s.total)}</td>
+            <td class="td-right" style="color:var(--success);font-weight:700">${fmt(s.profit)}</td>
+            <td>${payBadge}</td>
+            <td style="font-size:11px;color:var(--text3)">${esc(s.seller)}</td>
+          </tr>`;
+        }).join('')}</tbody>
+        <tfoot><tr style="font-weight:700;background:var(--surface)">
+          <td colspan="3" style="padding:8px 12px;text-transform:uppercase">TOTAL</td>
+          <td style="text-align:center;padding:8px 12px">${saleList.reduce((a,s)=>a+s.ordered,0)}</td>
+          <td style="text-align:center;padding:8px 12px;color:var(--success)">${totalSupplied}</td>
+          <td style="text-align:center;padding:8px 12px;color:var(--danger)">0</td>
+          <td></td>
+          <td class="td-right" style="padding:8px 12px;color:var(--brand)">${fmt(totalRevenue)}</td>
+          <td class="td-right" style="padding:8px 12px;color:var(--success)">${fmt(totalProfit)}</td>
+          <td colspan="2"></td>
+        </tr></tfoot>
+      </table></div>`
+      :'<div style="color:var(--text3);font-size:13px;text-align:center;padding:16px">No sales recorded for this product.</div>'}
+    </div>
+
+    <!-- Returns -->
+    ${returnsOfItem.length?`
+    <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px 16px;margin-bottom:1.25rem">
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--danger);margin-bottom:12px;display:flex;align-items:center;gap:6px">
+        <span style="width:3px;height:14px;background:var(--danger);border-radius:2px;display:inline-block"></span>
+        ↩️ RETURNS (${returnsOfItem.length} returns · ${totalReturned} units)
+      </div>
+      <div class="tbl-wrap" style="border-radius:var(--radius);border:1px solid var(--border)"><table>
+        <thead><tr><th>DATE</th><th>INVOICE #</th><th>CUSTOMER</th><th style="text-align:center">QTY</th><th class="td-right">REFUND</th><th>REASON</th><th>TYPE</th><th>BY</th></tr></thead>
+        <tbody>${returnsOfItem.sort((a,b)=>(b.date||'').localeCompare(a.date||'')).map(r=>`<tr>
+          <td style="font-size:12px;color:var(--text3)">${r.date||''}</td>
+          <td><b>#${esc(r.invoiceNum||'—')}</b></td>
+          <td style="font-size:12px">${esc(r.custName||'—')}</td>
+          <td style="text-align:center;font-weight:700;color:var(--warning)">${r.qty||1}</td>
+          <td class="td-right" style="color:var(--danger);font-weight:700">${fmt(r.refundAmt||0)}</td>
+          <td style="font-size:12px;color:var(--text3)">${esc(r.reason||'—')}</td>
+          <td><span style="background:${r.refundType==='cash'?'#d1fae5':r.refundType==='exchange'?'#fef3c7':'#eff6ff'};color:${r.refundType==='cash'?'#065f46':r.refundType==='exchange'?'#92400e':'#1d4ed8'};padding:2px 8px;border-radius:20px;font-size:10px;font-weight:700;text-transform:uppercase">${r.refundType||'cash'}</span></td>
+          <td style="font-size:11px;color:var(--text3)">${esc(r.by||'—')}</td>
+        </tr>`).join('')}</tbody>
+      </table></div>
+    </div>`:''}
+
+    <!-- Stock Adjustments -->
+    ${adjOfItem.length?`
+    <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px 16px;margin-bottom:1.25rem">
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:#8b5cf6;margin-bottom:12px;display:flex;align-items:center;gap:6px">
+        <span style="width:3px;height:14px;background:#8b5cf6;border-radius:2px;display:inline-block"></span>
+        ✏️ STOCK ADJUSTMENTS (${adjOfItem.length} entries)
+      </div>
+      <div class="tbl-wrap" style="border-radius:var(--radius);border:1px solid var(--border)"><table>
+        <thead><tr><th>DATE</th><th>TYPE</th><th>REASON</th><th style="text-align:center">BEFORE</th><th style="text-align:center">CHANGE</th><th style="text-align:center">AFTER</th><th>BY</th></tr></thead>
+        <tbody>${adjOfItem.map(a=>{
+          const typeColor=a.adjType==='add'||a.change>0?'var(--success)':a.adjType==='remove'?'var(--danger)':'var(--info)';
+          const typeIcon=a.adjType==='add'||a.change>0?'➕ Add':a.adjType==='remove'?'➖ Remove':'🔢 Count';
+          return`<tr>
+            <td style="font-size:12px;color:var(--text3)">${a.date||''}</td>
+            <td style="color:${typeColor};font-weight:700">${typeIcon}</td>
+            <td style="font-size:12px">${esc(a.reason||'—')}</td>
+            <td style="text-align:center">${a.before??'—'}</td>
+            <td style="text-align:center;font-weight:700;color:${(a.change||0)>=0?'var(--success)':'var(--danger)'}">${(a.change||0)>=0?'+':''}${a.change||0}</td>
+            <td style="text-align:center;font-weight:700">${a.after??'—'}</td>
+            <td style="font-size:11px;color:var(--text3)">${esc(a.by||'—')}</td>
+          </tr>`;
+        }).join('')}</tbody>
+      </table></div>
+    </div>`:''}
+
+    <!-- Stock Movement Summary -->
+    <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px 16px;margin-bottom:1.25rem">
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--brand);margin-bottom:12px;display:flex;align-items:center;gap:6px">
+        <span style="width:3px;height:14px;background:var(--brand);border-radius:2px;display:inline-block"></span>
+        📊 STOCK MOVEMENT SUMMARY
+      </div>
+      ${[
+        {label:'Opening stock (estimated)',val:'0 units',bold:false,bg:'var(--surface)'},
+        {label:'+ Total Received (purchases)',val:'+ '+totalPurchased,bold:false,bg:'',color:'var(--success)'},
+        {label:'− Total Supplied (goods delivered)',val:'− '+totalSupplied,bold:false,bg:'',color:'var(--info)'},
+        {label:'+ Total Returned by customers',val:'+ '+totalReturned,bold:false,bg:'',color:'var(--success)'},
+        {label:'+Net stock adjustments',val:(netAdjChange>=0?'+':'')+netAdjChange,bold:false,bg:'',color:'var(--text2)'},
+      ].map(r=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:9px 14px;background:${r.bg||'var(--white)'};border-bottom:1px solid var(--border)">
+        <span style="font-size:13px;color:${r.color||'var(--text2)'}${r.bold?';font-weight:700':''}">${r.label}</span>
+        <span style="font-weight:600;color:${r.color||'var(--text2)'}">${r.val}</span>
+      </div>`).join('')}
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 14px;background:#f0fdf4;border-radius:0 0 var(--radius) var(--radius)">
+        <span style="font-size:14px;font-weight:800;color:var(--success)">Current Stock</span>
+        <span style="font-size:20px;font-weight:800;color:var(--success)">${item.qty||0} units</span>
+      </div>
+    </div>`;
 }
 
 function prodReportLiveSearch(term,force) {
@@ -7677,9 +7896,12 @@ function prodReportLiveSearch(term,force) {
   const matches=Object.values(STATE.inventory||{}).filter(i=>(i.name||'').toLowerCase().includes(term.toLowerCase())).slice(0,12);
   if(!matches.length){box.style.display='none';return;}
   box.style.display='block';
-  box.innerHTML=matches.map(i=>`<div style="padding:10px 14px;cursor:pointer;border-bottom:1px solid var(--border)" onmousedown="window._prItemId='${i._id||i.id}';window._prSearch='${esc(i.name).replace(/'/g,"\\'")}';document.getElementById('prod-report-search').value='${esc(i.name).replace(/'/g,"\\'")}';document.getElementById('prod-report-dd').style.display='none';renderProductReport()"><b>${esc(i.name)}</b><span style="float:right;font-size:11px;color:var(--text3)">Stock: ${i.qty||0} · ${fmt(i.sellPrice||i.sell||0)}</span></div>`).join('');
+  box.innerHTML=matches.map(i=>`<div style="padding:10px 14px;cursor:pointer;border-bottom:1px solid var(--border)"
+    onmousedown="window._prItemId='${i._id||i.id}';window._prSearch='${esc(i.name).replace(/'/g,"\\'")}';document.getElementById('prod-report-search').value='${esc(i.name).replace(/'/g,"\\'")}';document.getElementById('prod-report-dd').style.display='none';renderProductReport()">
+    <b>${esc(i.name)}</b>
+    <span style="float:right;font-size:11px;color:var(--text3)">Stock: ${i.qty||0} · ${fmt(i.sellPrice||i.sell||0)} · ${esc(i.cat||'')}</span>
+  </div>`).join('');
 }
-
 // ── MONTHLY SUMMARY ──────────────────────────────────────
 function renderMonthlySummary() {
   const el=document.getElementById('monthly-content'); if(!el)return;
