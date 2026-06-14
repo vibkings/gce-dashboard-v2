@@ -8432,104 +8432,237 @@ async function recordCreditPay(id){
 // ── SUPPLIERS FULL ────────────────────────────────────────
 function renderSuppliersFull(){
   const el=document.getElementById('suppliers-content');if(!el)return;
+
+  // If viewing a supplier profile
+  if(window._supProfileId){renderSupplierProfile(window._supProfileId);return;}
+
   const search=(window._supSearch||'').toLowerCase();
-  const sups=Object.values(STATE.suppliers||{}).filter(s=>!search||(s.name||'').toLowerCase().includes(search)||(s.contact||'').toLowerCase().includes(search));
-  const addForm=`<div class="sec-title">Add supplier</div>
-    <div class="form-grid" style="grid-template-columns:1fr 1fr 1fr 1fr 1fr auto;gap:8px;margin-bottom:1.5rem">
-      <div class="form-group"><label>Name</label><input class="form-input" id="su-name" placeholder="Supplier name"></div>
-      <div class="form-group"><label>Contact person</label><input class="form-input" id="su-contact" placeholder="e.g. Mr Bello"></div>
-      <div class="form-group"><label>Phone</label><input class="form-input" id="su-phone" placeholder="08012345678"></div>
-      <div class="form-group"><label>Address</label><input class="form-input" id="su-addr" placeholder="Address"></div>
-      <div class="form-group"><label>Opening balance (N)</label><input class="form-input" id="su-opening-bal" type="number" placeholder="0" min="0"></div>
-      <div class="form-group"><label>&nbsp;</label><button class="btn btn-primary" onclick="saveNewSupplier()">+ Add</button></div>
-    </div>`;
-  const rows=sups.map(s=>`<tr><td><b>${esc(s.name)}</b></td><td>${esc(s.contact||'—')}</td><td>${esc(s.phone||'—')}</td><td>${esc(s.address||'—')}</td><td class="td-right">${fmt(s.totalPurchased||0)}</td><td class="td-right" style="color:${(s.openingBalance||0)>0?'#92400e':'inherit'}">${(s.openingBalance||0)>0?fmt(s.openingBalance):'—'}</td><td class="td-right" style="color:var(--danger)">${fmt(s.owedToSupplier||0)}</td><td style="text-align:right">${Object.values(STATE.purchases||{}).filter(p=>p.supplier===s.name).length}</td><td><div style="display:flex;gap:4px;flex-wrap:wrap"><button class="btn btn-sm" onclick="editSupplier('${s._id||s.id}')" style="color:var(--primary);border-color:#b6d4fe;font-size:11px">View</button>${(s.owedToSupplier||0)>0?`<button class="btn btn-sm" onclick="showSupplierPayModal('${s._id||s.id}')" style="color:#15803d;border-color:#86efac;font-size:11px">Pay</button>`:''}<button class="btn btn-sm" onclick="showSupplierDepositModal('${s._id||s.id}')" style="color:#7c3aed;border-color:#c4b5fd;font-size:11px">Deposit</button>${STATE.user?.role==='admin'?`<button class="btn btn-sm" onclick="removeSupplier('${s._id||s.id}')" style="color:var(--danger);font-size:11px">X</button>`:''}</div></td></tr>`).join('');
-  el.innerHTML=`${addForm}
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px">
-      <div class="sec-title" style="margin:0">Supplier list</div>
-      <div style="position:relative;max-width:280px;width:100%"><span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--text3)">🔍</span><input class="form-input" style="padding-left:32px" placeholder="Search suppliers..." value="${window._supSearch||''}" oninput="window._supSearch=this.value;renderSuppliers()"></div>
+  const sups=Object.values(STATE.suppliers||{}).filter(s=>!s._deleted&&(!search||(s.name||'').toLowerCase().includes(search)||(s.contact||'').toLowerCase().includes(search)||(s.phone||'').toLowerCase().includes(search))).sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+
+  const rows=sups.map(s=>{
+    const orders=Object.values(STATE.purchases||{}).filter(p=>p.supplier===s.name).length;
+    const totalBought=Object.values(STATE.purchases||{}).filter(p=>p.supplier===s.name).reduce((a,p)=>a+(p.totalCost||0),0);
+    const owed=s.owedToSupplier||0;
+    return`<tr>
+      <td><b style="cursor:pointer;color:var(--brand)" onclick="window._supProfileId='${s._id||s.id}';renderSuppliersFull()">${esc(s.name)}</b></td>
+      <td style="font-size:12px;color:var(--text3)">${esc(s.contact||'—')}</td>
+      <td style="font-size:12px">${esc(s.phone||'—')}</td>
+      <td style="font-size:12px;color:var(--text3)">${esc(s.address||'—')}</td>
+      <td class="td-right" style="font-weight:600">${fmt(totalBought)}</td>
+      <td class="td-right" style="color:${(s.openingBalance||0)>0?'#92400e':'var(--text3)'}">${(s.openingBalance||0)>0?fmt(s.openingBalance):'—'}</td>
+      <td class="td-right" style="color:${owed>0?'var(--danger)':'inherit'};font-weight:${owed>0?700:400}">${fmt(owed)}</td>
+      <td style="text-align:center">${orders}</td>
+      <td>
+        <div style="display:flex;gap:4px;flex-wrap:wrap">
+          <button class="btn btn-sm" onclick="window._supProfileId='${s._id||s.id}';renderSuppliersFull()" style="color:var(--brand);border-color:#b6d4fe;font-size:11px">View</button>
+          <button class="btn btn-sm" onclick="showSupplierDepositModal('${s._id||s.id}')" style="color:#7c3aed;border-color:#c4b5fd;font-size:11px">💰 Deposit</button>
+          ${STATE.user?.role==='admin'?`<button class="btn btn-sm" onclick="removeSupplier('${s._id||s.id}')" style="color:var(--danger);font-size:11px">✕</button>`:''}
+        </div>
+      </td>
+    </tr>`;
+  }).join('');
+
+  el.innerHTML=`
+    <!-- ADD SUPPLIER inline form -->
+    <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px 16px;margin-bottom:1.25rem">
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--brand);margin-bottom:12px;display:flex;align-items:center;gap:6px">
+        <span style="width:3px;height:14px;background:var(--brand);border-radius:2px;display:inline-block"></span>
+        ADD SUPPLIER
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1fr auto;gap:8px;align-items:flex-end">
+        <div>
+          <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);margin-bottom:3px">NAME <span style="color:var(--danger)">*</span></div>
+          <input class="form-input" id="su-name" placeholder="Supplier name" style="width:100%">
+        </div>
+        <div>
+          <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);margin-bottom:3px">CONTACT PERSON</div>
+          <input class="form-input" id="su-contact" placeholder="e.g. Mr Bello" style="width:100%">
+        </div>
+        <div>
+          <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);margin-bottom:3px">PHONE</div>
+          <input class="form-input" id="su-phone" placeholder="08012345678" style="width:100%">
+        </div>
+        <div>
+          <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);margin-bottom:3px">ADDRESS</div>
+          <input class="form-input" id="su-addr" placeholder="Address" style="width:100%">
+        </div>
+        <div>
+          <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);margin-bottom:3px">OPENING BALANCE (₦) — AMOUNT ALREADY OWED TO SUPPLIER</div>
+          <input class="form-input" id="su-opening-bal" type="number" placeholder="0" min="0" style="width:100%">
+        </div>
+        <div>
+          <button class="btn btn-primary" onclick="saveNewSupplier()" style="white-space:nowrap">+ Add</button>
+        </div>
+      </div>
     </div>
-    ${rows?`<div class="tbl-wrap"><table><thead><tr><th>Name</th><th>Contact</th><th>Phone</th><th>Address</th><th class="td-right">Total Purchased</th><th class="td-right">Opening Bal.</th><th class="td-right">Owed</th><th class="td-right">Orders</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`:'<div class="empty-state"><div class="empty-state-icon">🚛</div><div>No suppliers yet.</div></div>'}`;
+
+    <!-- SUPPLIER LIST -->
+    <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px 16px">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:12px">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--brand);display:flex;align-items:center;gap:6px">
+          <span style="width:3px;height:14px;background:var(--brand);border-radius:2px;display:inline-block"></span>
+          SUPPLIER LIST
+        </div>
+        <div class="search-wrap" style="max-width:280px">
+          <span class="search-icon">🔍</span>
+          <input class="form-input" placeholder="Search suppliers..." value="${window._supSearch||''}" oninput="window._supSearch=this.value;renderSuppliersFull()">
+        </div>
+      </div>
+      ${rows?`<div class="tbl-wrap" style="border-radius:var(--radius);border:1px solid var(--border)">
+        <table>
+          <thead><tr>
+            <th>NAME</th><th>CONTACT</th><th>PHONE</th><th>ADDRESS</th>
+            <th class="td-right">TOTAL BOUGHT</th>
+            <th class="td-right">OPENING BAL.</th>
+            <th class="td-right">TOTAL OWED</th>
+            <th style="text-align:center">ORDERS</th>
+            <th>ACTIONS</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`:'<div class="empty-state"><div class="empty-state-icon">🚛</div><div>No suppliers yet. Add one above.</div></div>'}
+    </div>`;
 }
 
-async function saveNewSupplier(){
-  const name=document.getElementById('su-name')?.value.trim();
-  if(!name){showToast('Name required.','error');return;}
-  const id=uid();
-  const sup={id,name,contact:document.getElementById('su-contact')?.value.trim()||'',phone:document.getElementById('su-phone')?.value.trim()||'',address:document.getElementById('su-addr')?.value.trim()||'',openingBalance:parseFloat(document.getElementById('su-opening-bal')?.value)||0,owedToSupplier:parseFloat(document.getElementById('su-opening-bal')?.value)||0,totalPurchased:0,createdAt:new Date().toISOString()};
-  setSyncStatus('saving');
-  try{await fsSave(COLS.SUPPLIERS,id,sup);if(!STATE.suppliers)STATE.suppliers={};STATE.suppliers[id]={...sup,_id:id};document.getElementById('su-name').value='';setSyncStatus('synced');showToast(`Supplier "${name}" added.`,'success');renderSuppliers();}
-  catch(e){setSyncStatus('error');showToast('Failed.','error');}
-}
+function renderSupplierProfile(id){
+  const el=document.getElementById('suppliers-content');if(!el)return;
+  const s=STATE.suppliers?.[id];if(!s){window._supProfileId=null;renderSuppliersFull();return;}
+  const purchases=Object.values(STATE.purchases||{}).filter(p=>p.supplier===s.name).sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+  const payments=Object.values(STATE.cashflow||{}).filter(c=>c.supplierId===id&&c.cat==='Supplier Payment').sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+  const deposits=Object.values(STATE.cashflow||{}).filter(c=>c.supplierId===id&&c.cat==='Supplier Deposit').sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+  const totalPurchased=purchases.reduce((a,p)=>a+(p.totalCost||0),0);
+  const totalPaid=payments.reduce((a,p)=>a+(p.amount||0),0);
+  const totalDeposited=deposits.reduce((a,d)=>a+(d.amount||0),0);
+  const depositBalance=totalDeposited-0; // deposits available as credit
+  const amountOwed=s.owedToSupplier||0;
+  const netPayable=Math.max(0,amountOwed-depositBalance);
+  const lastPurchase=purchases[0]?.date||'—';
+  const initials=(s.name||'?').split(' ').map(w=>w[0]).slice(0,2).join('').toUpperCase();
 
-function editSupplier(id){
-  const s=STATE.suppliers?.[id];if(!s)return;
-  showModal(`Edit — ${esc(s.name)}`,`<div class="form-grid c2"><div class="form-group"><label>Name *</label><input class="form-input" id="es-name" value="${esc(s.name||'')}"></div><div class="form-group"><label>Phone</label><input class="form-input" id="es-phone" value="${esc(s.phone||'')}"></div><div class="form-group"><label>Contact</label><input class="form-input" id="es-contact" value="${esc(s.contact||'')}"></div><div class="form-group"><label>Email</label><input class="form-input" id="es-email" value="${esc(s.email||'')}"></div><div class="form-group" style="grid-column:1/-1"><label>Address</label><input class="form-input" id="es-addr" value="${esc(s.address||'')}"></div></div>`,[{label:'Cancel',action:'close',style:''},{label:'Save',action:`saveEditSupplier('${id}')`,style:'btn-primary'}]);
-}
+  el.innerHTML=`
+    <!-- Nav -->
+    <div style="display:flex;gap:8px;margin-bottom:1.25rem">
+      <button class="btn btn-sm" onclick="window._supProfileId=null;renderSuppliersFull()" style="color:var(--text2)">← All Suppliers</button>
+      <button class="btn btn-sm btn-primary">Supplier Profile</button>
+    </div>
 
-async function saveEditSupplier(id){
-  const s=STATE.suppliers?.[id];if(!s)return;
-  const name=document.getElementById('es-name')?.value.trim();
-  if(!name){showToast('Name required.','error');return;}
-  const upd={...s,name,phone:document.getElementById('es-phone')?.value.trim()||'',contact:document.getElementById('es-contact')?.value.trim()||'',email:document.getElementById('es-email')?.value.trim()||'',address:document.getElementById('es-addr')?.value.trim()||''};
-  setSyncStatus('saving');
-  try{await fsSave(COLS.SUPPLIERS,id,upd);STATE.suppliers[id]={...upd,_id:id};closeModal();setSyncStatus('synced');showToast('Supplier updated.','success');renderSuppliers();}
-  catch(e){setSyncStatus('error');showToast('Failed.','error');}
-}
+    <!-- Profile header -->
+    <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--radius-lg);padding:18px 20px;margin-bottom:1.25rem">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:14px">
+        <div style="display:flex;align-items:center;gap:14px">
+          <div style="width:54px;height:54px;border-radius:50%;background:var(--brand);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:18px;flex-shrink:0">${initials}</div>
+          <div>
+            <div style="font-size:22px;font-weight:800;color:var(--text1)">${esc(s.name)}</div>
+            <div style="font-size:12px;color:var(--text3)">${esc(s.contact||'—')} · ${esc(s.phone||'—')}</div>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-primary" onclick="showSupplierDepositModal('${id}')" style="background:#22c55e;border-color:#22c55e">💰 Add deposit</button>
+          ${amountOwed>0?`<button class="btn btn-primary" onclick="showSupplierPayModal('${id}')" style="background:var(--danger);border-color:var(--danger)">💳 Pay supplier</button>`:''}
+          <button class="btn btn-sm" onclick="editSupplier('${id}')" style="color:var(--brand);border-color:var(--brand)">✏ Edit</button>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px;font-size:12px;border-top:1px solid var(--border);padding-top:12px">
+        <div><div style="color:var(--text3);text-transform:uppercase;font-size:10px;letter-spacing:.05em;margin-bottom:3px">PHONE</div><b>${esc(s.phone||'—')}</b></div>
+        <div><div style="color:var(--text3);text-transform:uppercase;font-size:10px;letter-spacing:.05em;margin-bottom:3px">CONTACT PERSON</div><b>${esc(s.contact||'—')}</b></div>
+        <div><div style="color:var(--text3);text-transform:uppercase;font-size:10px;letter-spacing:.05em;margin-bottom:3px">ADDRESS</div><b>${esc(s.address||'—')}</b></div>
+        <div><div style="color:var(--text3);text-transform:uppercase;font-size:10px;letter-spacing:.05em;margin-bottom:3px">LAST PURCHASE</div><b>${lastPurchase}</b></div>
+        <div><div style="color:var(--text3);text-transform:uppercase;font-size:10px;letter-spacing:.05em;margin-bottom:3px">TOTAL ORDERS</div><b>${purchases.length}</b></div>
+        <div><div style="color:var(--text3);text-transform:uppercase;font-size:10px;letter-spacing:.05em;margin-bottom:3px">OPENING BALANCE</div><b style="color:${(s.openingBalance||0)>0?'var(--warning)':'inherit'}">${(s.openingBalance||0)>0?fmt(s.openingBalance):'—'}</b></div>
+      </div>
+    </div>
 
-async function removeSupplier(id){
-  if(!confirm('Remove this supplier?'))return;
-  setSyncStatus('saving');
-  try{const s=STATE.suppliers?.[id];if(s)await sendToRecycleBin('supplier',{...s,_id:id},s.name);await fsDelete(COLS.SUPPLIERS,id);delete STATE.suppliers?.[id];setSyncStatus('synced');showToast('Supplier removed.','info');renderSuppliers();}
-  catch(e){setSyncStatus('error');showToast('Failed.','error');}
-}
+    <!-- 6 KPI cards -->
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:10px">
+      <div class="kpi-card" style="border-left:3px solid var(--brand)">
+        <div class="kpi-label" style="color:var(--brand)">TOTAL PURCHASED</div>
+        <div class="kpi-value" style="font-size:20px;font-weight:800;color:var(--brand)">${fmt(totalPurchased)}</div>
+        <div class="kpi-sub">Lifetime</div>
+      </div>
+      <div class="kpi-card" style="border-left:3px solid var(--success)">
+        <div class="kpi-label" style="color:var(--success)">TOTAL PAID</div>
+        <div class="kpi-value" style="font-size:20px;font-weight:800;color:var(--success)">${fmt(totalPaid)}</div>
+        <div class="kpi-sub">Payments + deposits applied</div>
+      </div>
+      <div class="kpi-card" style="border-left:3px solid var(--danger)">
+        <div class="kpi-label" style="color:var(--danger)">AMOUNT OWED</div>
+        <div class="kpi-value" style="font-size:20px;font-weight:800;color:${amountOwed>0?'var(--danger)':'var(--text1)'}">${fmt(amountOwed)}</div>
+        <div class="kpi-sub">Still to pay</div>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:1.25rem">
+      <div class="kpi-card" style="border-left:3px solid #8b5cf6">
+        <div class="kpi-label" style="color:#8b5cf6">DEPOSIT BALANCE</div>
+        <div class="kpi-value" style="font-size:20px;font-weight:800;color:#8b5cf6">${fmt(depositBalance)}</div>
+        <div class="kpi-sub">Available</div>
+      </div>
+      <div class="kpi-card" style="border-left:3px solid var(--info)">
+        <div class="kpi-label" style="color:var(--info)">TOTAL DEPOSITED</div>
+        <div class="kpi-value" style="font-size:20px;font-weight:800;color:var(--info)">${fmt(totalDeposited)}</div>
+        <div class="kpi-sub">All time deposits</div>
+      </div>
+      <div class="kpi-card" style="border-left:3px solid var(--warning)">
+        <div class="kpi-label" style="color:var(--warning)">ORDERS</div>
+        <div class="kpi-value" style="font-size:26px;font-weight:800;color:var(--warning)">${purchases.length}</div>
+        <div class="kpi-sub">Purchase invoices</div>
+      </div>
+    </div>
 
-function showSupplierPayModal(id){
-  const s=STATE.suppliers?.[id];if(!s)return;
-  showModal(`Pay Supplier — ${esc(s.name)}`,`<p style="margin-bottom:1rem">Amount owed: <b style="color:var(--danger)">N${(s.owedToSupplier||0).toLocaleString()}</b></p><div class="form-grid c2"><div class="form-group"><label>Amount Paying (N) *</label><input class="form-input" id="sp-amt" type="number" min="0" placeholder="0"></div><div class="form-group"><label>Payment Mode</label><select class="form-input" id="sp-mode" onchange="toggleGenericBankField('sp','out')"><option value="cash">Cash</option><option value="transfer">Transfer</option><option value="pos">POS</option></select></div><div class="form-group" id="sp-bank-wrap" style="display:none;grid-column:1/-1"><label id="sp-bank-label">Bank Account</label><select class="form-input" id="sp-bank">${bankSelectOpts('transfer')}</select></div><div class="form-group" style="grid-column:1/-1"><label>Note</label><input class="form-input" id="sp-note" placeholder="Optional"></div></div>`,[{label:'Cancel',action:'close',style:''},{label:'Record Payment',action:`recordSupplierPay('${id}')`,style:'btn-primary'}]);
-}
+    <!-- Deposit Ledger -->
+    <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px 16px;margin-bottom:1.25rem">
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:#7c3aed;margin-bottom:12px;display:flex;align-items:center;justify-content:space-between;gap:6px">
+        <div style="display:flex;align-items:center;gap:6px"><span style="width:3px;height:14px;background:#7c3aed;border-radius:2px;display:inline-block"></span>💰 DEPOSIT LEDGER</div>
+        <button class="btn btn-sm" onclick="showSupplierDepositModal('${id}')" style="color:#7c3aed;border-color:#c4b5fd;font-size:11px">+ Add deposit</button>
+      </div>
+      ${deposits.length?`<div class="tbl-wrap" style="border-radius:var(--radius);border:1px solid var(--border)"><table>
+        <thead><tr><th>DATE</th><th class="td-right">AMOUNT</th><th>MODE</th><th>NOTE</th><th>BY</th></tr></thead>
+        <tbody>${deposits.map(d=>`<tr>
+          <td style="font-size:12px;color:var(--text3)">${d.date||'—'}</td>
+          <td class="td-right" style="color:#7c3aed;font-weight:700">${fmt(d.amount||0)}</td>
+          <td style="font-size:12px">${d.payMode||'cash'}</td>
+          <td style="font-size:12px;color:var(--text3)">${esc(d.desc||'').replace(`Deposit to ${s.name}`,'')||'—'}</td>
+          <td style="font-size:11px;color:var(--text3)">${esc(d.by||'—')}</td>
+        </tr>`).join('')}</tbody>
+      </table></div>`:'<div style="color:var(--text3);font-size:13px;text-align:center;padding:20px">No deposits recorded yet. <button class="btn btn-sm" onclick="showSupplierDepositModal(\''+id+'\')" style="color:#7c3aed;border-color:#c4b5fd;font-size:11px;margin-left:8px">+ Add deposit</button></div>'}
+    </div>
 
-async function recordSupplierPay(id){
-  const s=STATE.suppliers?.[id];if(!s)return;
-  const amt=parseFloat(document.getElementById('sp-amt')?.value)||0;
-  if(amt<=0){showToast('Enter amount.','error');return;}
-  const mode=document.getElementById('sp-mode')?.value||'cash';
-  const bankName=document.getElementById('sp-bank')?.value||'';
-  const note=document.getElementById('sp-note')?.value.trim()||'';
-  const now=new Date();const date=now.toLocaleDateString();const month=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
-  setSyncStatus('saving');
-  try{
-    const newOwed=Math.max(0,(s.owedToSupplier||0)-amt);
-    const upd={...s,owedToSupplier:newOwed};
-    await fsSave(COLS.SUPPLIERS,id,upd);STATE.suppliers[id]={...upd,_id:id};
-    const cfId=uid();
-    await fsSave(COLS.CASHFLOW,cfId,{id:cfId,type:'out',cat:'Supplier Payment',desc:`Supplier payment — ${s.name}${note?' — '+note:''}`,amount:amt,payMode:mode,bankName,supplierId:id,date,month,by:STATE.user?.name});
-    if(!STATE.cashflow)STATE.cashflow={};STATE.cashflow[cfId]={id:cfId,_id:cfId,type:'out',cat:'Supplier Payment',amount:amt,date,month};
-    closeModal();setSyncStatus('synced');showToast(`N${amt.toLocaleString()} paid to ${s.name}.`,'success');renderSuppliers();
-  }catch(e){setSyncStatus('error');showToast('Failed.','error');}
-}
+    <!-- Purchase History -->
+    <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px 16px;margin-bottom:1.25rem">
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--brand);margin-bottom:12px;display:flex;align-items:center;gap:6px">
+        <span style="width:3px;height:14px;background:var(--brand);border-radius:2px;display:inline-block"></span>
+        🛒 PURCHASE HISTORY
+      </div>
+      ${purchases.length?`<div class="tbl-wrap" style="border-radius:var(--radius);border:1px solid var(--border)"><table>
+        <thead><tr><th>DATE</th><th>ITEM</th><th style="text-align:center">QTY</th><th class="td-right">COST/UNIT</th><th class="td-right">TOTAL</th><th>MODE</th></tr></thead>
+        <tbody>${purchases.map(p=>`<tr>
+          <td style="font-size:12px;color:var(--text3)">${p.date||'—'}</td>
+          <td><b>${esc(p.itemName||'—')}</b>${p.purchaseInvoiceNum?`<div style="font-size:10px;color:var(--text3)">${esc(p.purchaseInvoiceNum)}</div>`:''}</td>
+          <td style="text-align:center;font-weight:700">${p.qty||0}</td>
+          <td class="td-right">${fmt(p.costPrice||0)}</td>
+          <td class="td-right;font-weight:600">${fmt(p.totalCost||0)}</td>
+          <td style="font-size:11px;color:var(--text3)">${p.payMode||'cash'}</td>
+        </tr>`).join('')}</tbody>
+      </table></div>`:'<div style="color:var(--text3);font-size:13px;text-align:center;padding:16px">No purchases recorded yet.</div>'}
+    </div>
 
-function showSupplierDepositModal(id){
-  const s=STATE.suppliers?.[id];if(!s)return;
-  showModal(`Deposit — ${esc(s.name)}`,`<p style="margin-bottom:1rem;font-size:13px">Record advance payment to this supplier.</p><div class="form-grid c2"><div class="form-group"><label>Deposit Amount (N) *</label><input class="form-input" id="sd-amt" type="number" min="0" placeholder="0"></div><div class="form-group"><label>Payment Mode</label><select class="form-input" id="sd-mode" onchange="toggleGenericBankField('sd','out')"><option value="cash">Cash</option><option value="transfer">Transfer</option><option value="pos">POS</option></select></div><div class="form-group" id="sd-bank-wrap" style="display:none;grid-column:1/-1"><label id="sd-bank-label">Bank Account</label><select class="form-input" id="sd-bank">${bankSelectOpts('transfer')}</select></div><div class="form-group" style="grid-column:1/-1"><label>Note</label><input class="form-input" id="sd-note" placeholder="Optional"></div></div>`,[{label:'Cancel',action:'close',style:''},{label:'Record Deposit',action:`recordSupplierDeposit('${id}')`,style:'btn-primary'}]);
+    <!-- Payment History -->
+    <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px 16px;margin-bottom:1.25rem">
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--success);margin-bottom:12px;display:flex;align-items:center;gap:6px">
+        <span style="width:3px;height:14px;background:var(--success);border-radius:2px;display:inline-block"></span>
+        💳 PAYMENT HISTORY
+      </div>
+      ${payments.length?`<div class="tbl-wrap" style="border-radius:var(--radius);border:1px solid var(--border)"><table>
+        <thead><tr><th>DATE</th><th class="td-right">AMOUNT PAID</th><th>MODE</th><th>REFERENCE</th><th>BY</th></tr></thead>
+        <tbody>${payments.map(p=>`<tr>
+          <td style="font-size:12px;color:var(--text3)">${p.date||'—'}</td>
+          <td class="td-right" style="color:var(--success);font-weight:700">${fmt(p.amount||0)}</td>
+          <td style="font-size:12px;text-transform:uppercase">${p.payMode||'cash'}</td>
+          <td style="font-size:12px;color:var(--text3)">${p.bankName?esc(p.bankName):'—'}</td>
+          <td style="font-size:11px;color:var(--text3)">${esc(p.by||'—')}</td>
+        </tr>`).join('')}</tbody>
+      </table></div>`:'<div style="color:var(--text3);font-size:13px;text-align:center;padding:16px">No payments recorded yet.</div>'}
+    </div>`;
 }
-
-async function recordSupplierDeposit(id){
-  const s=STATE.suppliers?.[id];if(!s)return;
-  const amt=parseFloat(document.getElementById('sd-amt')?.value)||0;
-  if(amt<=0){showToast('Enter amount.','error');return;}
-  const mode=document.getElementById('sd-mode')?.value||'cash';
-  const note=document.getElementById('sd-note')?.value.trim()||'';
-  const now=new Date();const date=now.toLocaleDateString();const month=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
-  setSyncStatus('saving');
-  try{
-    const cfId=uid();
-    await fsSave(COLS.CASHFLOW,cfId,{id:cfId,type:'out',cat:'Supplier Deposit',desc:`Deposit to ${s.name}${note?' — '+note:''}`,amount:amt,payMode:mode,supplierId:id,date,month,by:STATE.user?.name});
-    if(!STATE.cashflow)STATE.cashflow={};STATE.cashflow[cfId]={id:cfId,_id:cfId,type:'out',cat:'Supplier Deposit',amount:amt,date,month};
-    closeModal();setSyncStatus('synced');showToast(`Deposit of N${amt.toLocaleString()} recorded for ${s.name}.`,'success');
-  }catch(e){setSyncStatus('error');showToast('Failed.','error');}
-}
-
 // ── USERS FULL ────────────────────────────────────────────
 function renderUsersFull(){
   const el=document.getElementById('users-content');if(!el)return;
