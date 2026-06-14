@@ -3653,28 +3653,88 @@ function showInvoiceViewModal(invNum) {
 function _showPrintModeModal(invNum) {
   const existing = document.getElementById('_print_mode_overlay');
   if (existing) existing.remove();
+
+  // ── Smart size suggestion based on item count ──
+  const items = Object.values(STATE.sales||{}).filter(s=>s.invoiceNum===invNum && !s.voided);
+  const itemCount = items.length;
+
+  // Sizing rules:
+  // 1–3   items  → 80mm thermal (fast, compact)
+  // 4–8   items  → A5 (half page, neat)
+  // 9–14  items  → A4 (standard)
+  // 15+   items  → A4 (only option that fits)
+  let suggested, suggestedLabel;
+  if (itemCount <= 3)       { suggested='80mm'; suggestedLabel='80mm Thermal'; }
+  else if (itemCount <= 8)  { suggested='a5';   suggestedLabel='A5'; }
+  else                      { suggested='a4';   suggestedLabel='A4'; }
+
+  const sizeRanges = [
+    { mode:'80mm', icon:'🧾', label:'80mm Thermal', sub:'148×210mm — 1–3 items',  fits:'Best for 1–3 items', color:'#059669', range:'1–3' },
+    { mode:'a5',   icon:'📋', label:'A5',           sub:'148×210mm — 4–8 items',  fits:'Best for 4–8 items', color:'#1a237e', range:'4–8' },
+    { mode:'a4',   icon:'📄', label:'A4',           sub:'210×297mm — 9–14 items', fits:'Best for 9+ items',  color:'#7c3aed', range:'9+' },
+  ];
+
   const overlay = document.createElement('div');
   overlay.id = '_print_mode_overlay';
-  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:999999;display:flex;align-items:center;justify-content:center;padding:16px';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.65);z-index:999999;display:flex;align-items:center;justify-content:center;padding:16px;backdrop-filter:blur(4px)';
   overlay.innerHTML = `
-    <div style="background:#fff;border-radius:16px;padding:28px 32px;width:100%;max-width:420px;box-shadow:0 8px 40px rgba(0,0,0,0.25)">
-      <div style="font-size:17px;font-weight:700;margin-bottom:6px">🖨️ Print Invoice</div>
-      <div style="font-size:13px;color:#6b7280;margin-bottom:20px">Select print format for Invoice <b>#${invNum}</b></div>
-      <div style="display:flex;flex-direction:column;gap:10px">
-        <button onclick="_doPrint('${invNum}','a4')" style="display:flex;align-items:center;gap:14px;padding:14px 18px;border:2px solid #e5e7eb;border-radius:10px;background:#fff;cursor:pointer;text-align:left" onmouseover="this.style.borderColor='#1a237e'" onmouseout="this.style.borderColor='#e5e7eb'">
-          <span style="font-size:28px">📄</span><div><div style="font-size:14px;font-weight:700;color:#111">A4 <span style="font-size:11px;font-weight:400;color:#6b7280">210×297mm</span></div><div style="font-size:12px;color:#6b7280;margin-top:2px">Standard full-page — 15 item rows</div></div>
-        </button>
-        <button onclick="_doPrint('${invNum}','a5')" style="display:flex;align-items:center;gap:14px;padding:14px 18px;border:2px solid #e5e7eb;border-radius:10px;background:#fff;cursor:pointer;text-align:left" onmouseover="this.style.borderColor='#1a237e'" onmouseout="this.style.borderColor='#e5e7eb'">
-          <span style="font-size:28px">📋</span><div><div style="font-size:14px;font-weight:700;color:#111">A5 <span style="font-size:11px;font-weight:400;color:#6b7280">148×210mm</span></div><div style="font-size:12px;color:#6b7280;margin-top:2px">Half-page — 10 item rows, compact</div></div>
-        </button>
-        <button onclick="_doPrint('${invNum}','80mm')" style="display:flex;align-items:center;gap:14px;padding:14px 18px;border:2px solid #e5e7eb;border-radius:10px;background:#fff;cursor:pointer;text-align:left" onmouseover="this.style.borderColor='#1a237e'" onmouseout="this.style.borderColor='#e5e7eb'">
-          <span style="font-size:28px">🧾</span><div><div style="font-size:14px;font-weight:700;color:#111">80mm <span style="font-size:11px;font-weight:400;color:#6b7280">Thermal receipt</span></div><div style="font-size:12px;color:#6b7280;margin-top:2px">POS receipt printer — monospace font</div></div>
-        </button>
+    <div style="background:#13172a;border:1px solid rgba(255,255,255,.1);border-radius:18px;padding:26px 28px;width:100%;max-width:440px;box-shadow:0 24px 80px rgba(0,0,0,.8)">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px">
+        <span style="font-size:22px">🖨️</span>
+        <div style="font-size:17px;font-weight:700;color:#f1f5f9">Print Invoice</div>
       </div>
-      <button onclick="document.getElementById('_print_mode_overlay').remove()" style="width:100%;margin-top:16px;padding:10px;border:1px solid #e5e7eb;border-radius:8px;background:#f9fafb;cursor:pointer;font-size:13px;color:#6b7280">Cancel</button>
+      <div style="font-size:12.5px;color:#64748b;margin-bottom:6px">Invoice <b style="color:#94a3b8">#${invNum}</b> · <b style="color:#94a3b8">${itemCount}</b> line item${itemCount!==1?'s':''}</div>
+
+      <!-- Smart suggestion pill -->
+      <div style="background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.25);border-radius:8px;padding:8px 12px;margin-bottom:18px;display:flex;align-items:center;gap:8px">
+        <span style="font-size:14px">✨</span>
+        <div>
+          <div style="font-size:11.5px;font-weight:700;color:#22c55e">Suggested: ${suggestedLabel}</div>
+          <div style="font-size:11px;color:#64748b">${itemCount} item${itemCount!==1?'s':''} → ${suggestedLabel} gives the best fit</div>
+        </div>
+      </div>
+
+      <!-- Size options -->
+      <div style="display:flex;flex-direction:column;gap:8px">
+        ${sizeRanges.map(s=>{
+          const isRec = s.mode===suggested;
+          return `<button onclick="document.getElementById('_print_mode_overlay').remove();_doPrint('${invNum}','${s.mode}')"
+            style="display:flex;align-items:center;gap:14px;padding:12px 16px;
+                   border:${isRec?'2px solid '+s.color:'1px solid rgba(255,255,255,.08)'};
+                   border-radius:10px;
+                   background:${isRec?'rgba('+hexToRgb(s.color)+',.1)':'rgba(255,255,255,.03)'};
+                   cursor:pointer;text-align:left;width:100%;transition:all .15s;position:relative"
+            onmouseover="this.style.background='rgba(255,255,255,.06)'"
+            onmouseout="this.style.background='${isRec?'rgba('+hexToRgb(s.color)+',.1)':'rgba(255,255,255,.03)'}'">
+            <span style="font-size:26px;flex-shrink:0">${s.icon}</span>
+            <div style="flex:1;text-align:left">
+              <div style="font-size:14px;font-weight:700;color:#e2e8f0">${s.label}
+                ${isRec?`<span style="font-size:10px;background:${s.color};color:#fff;padding:2px 7px;border-radius:99px;margin-left:6px;font-weight:700">SUGGESTED</span>`:''}
+              </div>
+              <div style="font-size:11px;color:#64748b;margin-top:2px">${s.fits}</div>
+            </div>
+            <div style="font-size:10.5px;color:#475569;text-align:right;flex-shrink:0">
+              ${s.range} items<br>
+              <span style="font-size:9.5px">${s.sub.split('—')[0].trim()}</span>
+            </div>
+          </button>`;
+        }).join('')}
+      </div>
+
+      <button onclick="document.getElementById('_print_mode_overlay').remove()"
+        style="width:100%;margin-top:14px;padding:9px;border:1px solid rgba(255,255,255,.08);border-radius:8px;background:rgba(255,255,255,.04);cursor:pointer;font-size:13px;color:#64748b">
+        Cancel
+      </button>
     </div>`;
+
   document.body.appendChild(overlay);
   overlay.addEventListener('click', e=>{ if(e.target===overlay) overlay.remove(); });
+}
+
+// Helper: convert hex color to R,G,B string for rgba()
+function hexToRgb(hex) {
+  const r=parseInt(hex.slice(1,3),16),g=parseInt(hex.slice(3,5),16),b=parseInt(hex.slice(5,7),16);
+  return `${r},${g},${b}`;
 }
 
 // Commission from invoice → opens customer profile then shows commission modal
@@ -9874,7 +9934,8 @@ async function saveSigCanvas(){
   const uid2=STATE.user?._id||STATE.user?.id;if(!uid2)return;
   if(!STATE.signatures)STATE.signatures={};
   STATE.signatures[uid2]=dataUrl;
-  localStorage.setItem('gce_sig_'+uid2,dataUrl);
+  // Save to IndexedDB (primary) + Firestore (backup)
+  try{const s=_lfStore('v2_signatures');if(s)await s.setItem(uid2,{_id:uid2,sig:dataUrl,savedAt:new Date().toISOString()});}catch(e){}
   try{await fsSave('v2_signatures',uid2,{id:uid2,sig:dataUrl,savedAt:new Date().toISOString()});}catch(e){}
   showToast('✅ Signature saved.','success');
   logActivity('Signature saved',`${STATE.user?.name||''} saved signature`,'');
@@ -9898,7 +9959,7 @@ async function clearSavedSig(){
   if(!confirm('Remove your saved signature?'))return;
   const uid2=STATE.user?._id||STATE.user?.id;if(!uid2)return;
   if(STATE.signatures)delete STATE.signatures[uid2];
-  localStorage.removeItem('gce_sig_'+uid2);
+  try{const s=_lfStore('v2_signatures');if(s)await s.removeItem(uid2);}catch(e){}
   try{await fsDelete('v2_signatures',uid2);}catch(e){}
   showToast('Signature removed.','info');
   renderUsers();
@@ -9990,7 +10051,8 @@ function renderSettingsFull(){
   const inv=Object.values(STATE.inventory||{}).length;
   const sal=Object.values(STATE.sales||{}).length;
   const pur=Object.values(STATE.purchases||{}).length;
-  const lastSaved=STATE.lastSaved||localStorage.getItem('gce_lastSaved')||'—';
+  // Prefer IndexedDB-backed lastSaved from STATE, fallback to localStorage legacy value
+  const lastSaved=STATE.lastSaved||STATE.settings?.lastSaved||localStorage.getItem('gce_lastSaved')||'—';
 
   const transferRows=transferBanks.length?transferBanks.map(b=>`<tr>
     <td><b>${esc(b.name)}</b></td>
@@ -10292,10 +10354,31 @@ document.addEventListener('DOMContentLoaded', () => {
   // Start
   // Load signatures from localStorage
   if(!STATE.signatures)STATE.signatures={};
-  // Pre-load admin sig
+  // Load signatures from Firestore if not in IndexedDB (async IIFE)
+  (async()=>{
+    try{
+      const sigDocs=await _fsList('v2_signatures');
+      sigDocs.forEach(d=>{if(d._id&&d.sig&&!STATE.signatures[d._id])STATE.signatures[d._id]=d.sig;});
+    }catch(e){}
+  })();
+  // Pre-load admin sig constant
   if(ADMIN_SIG_DATAURL){const adminUser=Object.values(STATE.users||{}).find(u=>u.role==='admin');if(adminUser&&!(STATE.signatures[adminUser._id||adminUser.id]))STATE.signatures[adminUser._id||adminUser.id]=ADMIN_SIG_DATAURL;}
   const allUserIds=Object.keys(STATE.users||{});
-  allUserIds.forEach(uid2=>{const sig=localStorage.getItem('gce_sig_'+uid2);if(sig)STATE.signatures[uid2]=sig;});
+  // Load signatures from IndexedDB (preferred) with localStorage fallback (async IIFE)
+  (async()=>{
+    for(const uid2 of allUserIds){
+      try{
+        const s=_lfStore('v2_signatures');
+        if(s){const d=await s.getItem(uid2);if(d?.sig){STATE.signatures[uid2]=d.sig;continue;}}
+      }catch(e){}
+      // Fallback to localStorage for backward compat
+      const lsSig=localStorage.getItem('gce_sig_'+uid2);
+      if(lsSig){STATE.signatures[uid2]=lsSig;
+        // Migrate to IndexedDB
+        try{const s=_lfStore('v2_signatures');if(s)s.setItem(uid2,{_id:uid2,sig:lsSig});}catch(e){}
+      }
+    }
+  })();
   // Record login time
   if(!STATE._loginTime)STATE._loginTime=new Date().toLocaleString();
   initAuth();
