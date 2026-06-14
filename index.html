@@ -5863,7 +5863,9 @@ function setSyncStatus(status) {
 function fmt(n) {
   if (n === 'undefined' || n === undefined || n === null || n === '') n = 0;
   if (typeof n !== 'number') n = parseFloat(n)||0;
+  if (isNaN(n)) n = 0;
   if (n < 0) return '-₦' + Math.round(-n).toLocaleString('en-NG');
+  return '₦' + Math.round(n).toLocaleString('en-NG');
 }
 
 function esc(str) {
