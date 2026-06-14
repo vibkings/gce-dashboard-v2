@@ -2363,6 +2363,10 @@ function renderSales() {
         <label>Amount paid now (₦)</label>
         <input class="form-input" id="s-part-payment" type="number" min="0" placeholder="0">
       </div>
+      <div class="form-group" id="s-credit-due-wrap" style="margin:0;display:none">
+        <label>Payment Due Date <span style="font-size:10px;color:var(--text3)">(for credit/part)</span></label>
+        <input class="form-input" id="s-credit-due-date" type="date">
+      </div>
       <div class="form-group" id="s-change-wrap" style="margin:0;display:none">
         <label>Amount tendered by customer (₦)</label>
         <input class="form-input" id="s-change-tendered" type="number" min="0" placeholder="e.g. 70000" oninput="v2OnTenderedInput()">
@@ -2669,6 +2673,7 @@ function v2OnPayTypeChange() {
   show('s-bank-wrap',    pt==='transfer');
   show('s-pos-wrap',     pt==='pos');
   show('s-part-wrap',    pt==='part');
+  show('s-credit-due-wrap', pt==='credit'||pt==='part');
   show('s-split-wrap',   pt==='split');
   show('s-change-wrap',  pt==='cash');
   if(pt==='transfer'){const s=document.getElementById('s-paymode');if(s)s.value='transfer';const b=document.getElementById('s-bank-name');if(b)b.innerHTML=bankSelectOpts('transfer');}
@@ -2832,6 +2837,7 @@ async function v2SaveSale(mode) {
         partPayment:pt==='part'?partAmt:0, bankName, posName,
         custId:invoiceCustomer?._id||null, custName:invoiceCustomer?.name||'Walk-in',
         printName, date, month, seller:STATE.user.name, deliveryAddr,
+        dueDate:(pt==='credit'||pt==='part')?(document.getElementById('s-credit-due-date')?.value||''):'',
         supplyStatus:document.getElementById('s-pending-supply')?.checked?'pending':'supplied',
         pendingSupply:document.getElementById('s-pending-supply')?.checked||false
       };
@@ -2955,7 +2961,10 @@ function _buildInvoiceHTML(invNum, mode='a4', invTypeOverride='sales') {
   const issueDate = `${day} ${['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][parseInt(mon,10)-1]||''} ${yr}`;
   // Due date = 7 days after issue
   let dueDate = '';
-  try{const dd=new Date(s0.date);dd.setDate(dd.getDate()+7);dueDate=dd.getDate()+' '+['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][dd.getMonth()]+' '+dd.getFullYear();}catch(e){}
+  try{
+    const dueSrc = s0.dueDate ? new Date(s0.dueDate) : (()=>{const dd=new Date(s0.date);dd.setDate(dd.getDate()+30);return dd;})();
+    if(!isNaN(dueSrc))dueDate=dueSrc.getDate()+' '+['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][dueSrc.getMonth()]+' '+dueSrc.getFullYear();
+  }catch(e){}
 
   // Payment
   const payMode=s0.payMode||'cash', payment=s0.payment||'paid';
@@ -3124,7 +3133,7 @@ function _buildInvoiceHTML(invNum, mode='a4', invTypeOverride='sales') {
       <div style="font-size:10.5px;color:#333;line-height:1.7">
         <div><b>Invoice Number:</b> ${invNum}</div>
         <div><b>Issue Date:</b> ${issueDate}</div>
-        <div><b>Due Date:</b> ${dueDate}</div>
+        ${payment==='credit'||payment==='part'?`<div><b>Due Date:</b> ${dueDate||'—'}</div>`:''}
         ${s0.seller?`<div><b>Served By:</b> ${esc(s0.seller)}</div>`:''}
       </div>
     </div>
@@ -6687,7 +6696,135 @@ function renderProformas(){
 
 async function cancelProforma(id){if(!confirm('Cancel this proforma?'))return;const p=STATE.proformas?.[id];if(!p)return;const upd={...p,status:'cancelled'};setSyncStatus('saving');try{await fsSave('v2_proformas',id,upd);STATE.proformas[id]={...upd,_id:id};setSyncStatus('synced');showToast('Proforma cancelled.','info');renderProformas();}catch(e){setSyncStatus('error');showToast('Failed.','error');}}
 async function convertProforma(id){showToast('Load this proforma in the Sales tab to convert it.','info');}
-function printProformaInvoice(id){const p=STATE.proformas?.[id];if(!p){showToast('Not found.','error');return;}const items=(p.items||[]).map((i,idx)=>`<tr><td>${idx+1}</td><td>${esc(i.name)}</td><td style="text-align:center">${i.qty}</td><td style="text-align:right">N${(i.price||0).toLocaleString()}</td><td style="text-align:right"><b>N${((i.price||0)*i.qty).toLocaleString()}</b></td></tr>`).join('');const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Proforma ${p.prfNum}</title><style>body{font-family:Arial;max-width:700px;margin:20px auto;padding:20px}table{width:100%;border-collapse:collapse}thead tr{background:#1a237e;color:#fff}thead th{padding:8px;font-size:11px;text-align:left}@media print{body{padding:4px}}</style></head><body><div style="text-align:center;border-bottom:3px solid #c0392b;padding-bottom:12px;margin-bottom:14px"><div style="font-size:20px;font-weight:900;color:#c0392b">GREAT CHID ELECTRO (NIG.)</div><div style="font-size:18px;font-weight:900;color:#1a237e">GLOBAL DOORS LTD</div><div style="font-size:10px;margin-top:4px">Ile-Bara Oke-Ado, Sabo Ilorin Rd, Ogbomoso - 08035158594</div><div style="display:inline-block;background:#7c3aed;color:#fff;padding:4px 30px;border-radius:4px;font-weight:800;letter-spacing:2px;margin-top:10px">PROFORMA INVOICE</div></div><div style="display:flex;justify-content:space-between;margin-bottom:14px;font-size:13px"><div><b>Customer:</b> ${esc(p.custName||'Walk-in')}</div><div style="text-align:right"><b>PRF #:</b> ${esc(p.prfNum||'')}<br><b>Date:</b> ${p.date||''}</div></div><table><thead><tr><th>#</th><th>Description</th><th style="text-align:center">Qty</th><th style="text-align:right">Price</th><th style="text-align:right">Total</th></tr></thead><tbody>${items}</tbody><tfoot><tr style="font-weight:800;border-top:2px solid #1a237e"><td colspan="4" style="padding:8px;text-align:right">GRAND TOTAL</td><td style="padding:8px;text-align:right;color:#c0392b;font-size:16px">N${(p.grandTotal||0).toLocaleString()}</td></tr></tfoot></table><div style="margin-top:16px;font-size:11px;color:#555">Valid for ${p.validDays||7} days. Quotation only — not an invoice.</div><script>setTimeout(()=>window.print(),400)<\/script></body></html>`;const w=window.open('','_blank','width=700,height=900');if(w){w.document.write(html);w.document.close();}}
+function printProformaInvoice(id){
+  const p=STATE.proformas?.[id];if(!p){showToast('Not found.','error');return;}
+  const banks=Object.values(STATE.banks||{}).filter(b=>!b._deleted);
+  const transferBanks=banks.filter(b=>b.type==='transfer'||b.type==='both'||!b.type);
+  const posBanks=banks.filter(b=>b.type==='pos'||b.type==='both');
+  const validUntil=(()=>{try{const d=new Date(p.date);d.setDate(d.getDate()+(p.validDays||7));return d.getDate()+' '+['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getMonth()]+' '+d.getFullYear();}catch(e){return '';}})();
+  const itemRows=(p.items||[]).map((i,idx)=>`<tr style="border-bottom:1px solid #eee">
+    <td style="padding:6px 8px;text-align:center;color:#666">${idx+1}</td>
+    <td style="padding:6px 8px;font-weight:600">${esc(i.name)}</td>
+    <td style="padding:6px 8px;text-align:center">${i.qty}</td>
+    <td style="padding:6px 8px;text-align:right">₦${(i.price||0).toLocaleString()}</td>
+    <td style="padding:6px 8px;text-align:center;color:#d97706">${(i.discPct||0)>0?i.discPct+'%':'—'}</td>
+    <td style="padding:6px 8px;text-align:right;font-weight:700">₦${(i.total||((i.price||0)*i.qty)).toLocaleString()}</td>
+  </tr>`).join('');
+  // Build 3-column bank table (up to 3 banks, one per column with category label)
+  // Group banks: split into up to 3 display groups
+  const bankCols = [];
+  const getBankLabel = (b) => b.acctLabel||b.name;
+  // Try to build 3 columns: first 3 distinct named banks
+  const allBanks = [...transferBanks, ...posBanks.filter(b=>!transferBanks.find(t=>t._id===b._id))];
+  const col1 = allBanks[0]||null, col2 = allBanks[1]||null, col3 = allBanks[2]||null;
+  const mkBankCol = (b, label) => b ? `<div style="flex:1;background:#f8f9ff;border:1px solid #c7d2fe;border-radius:6px;padding:10px 12px">
+    <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
+      <span style="font-size:14px">${b.type==='pos'?'🏧':'⚡'}</span>
+      <b style="font-size:11px;color:#1a237e;text-transform:uppercase">${esc(label||b.name)}</b>
+    </div>
+    <div style="font-size:12px;color:#333;line-height:1.7">
+      <div><b>Bank:</b> ${esc(b.name)}</div>
+      ${b.acct?`<div><b>Acc No:</b> ${esc(b.acct)}</div>`:''}
+      ${b.accountName?`<div><b>Name:</b> ${esc(b.accountName)}</div>`:''}
+    </div>
+  </div>` : '<div style="flex:1"></div>';
+  const bankSection = (col1||col2||col3) ? `
+  <div style="border:2px solid #7c3aed;border-radius:8px;padding:14px;margin-top:14px">
+    <div style="display:flex;align-items:center;gap:6px;margin-bottom:10px">
+      <span style="font-size:16px">💳</span>
+      <b style="font-size:13px;color:#7c3aed;text-transform:uppercase;letter-spacing:1px">Payment / Bank Details</b>
+    </div>
+    <div style="display:flex;gap:10px">
+      ${mkBankCol(col1, col1?.bankLabel||'')}
+      ${mkBankCol(col2, col2?.bankLabel||'')}
+      ${mkBankCol(col3, col3?.bankLabel||'')}
+    </div>
+    <div style="margin-top:10px;font-size:10px;color:#666;border-top:1px dashed #ccc;padding-top:8px;text-align:center;font-style:italic">
+      Goods remain the property of Great Chid Electro (Nig.) until full payment is confirmed.<br>
+      This document does not constitute a receipt. Please quote this reference number when making payment.
+    </div>
+  </div>` : '';
+  const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Proforma ${p.prfNum||''}</title>
+  <style>
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{font-family:Arial,sans-serif;font-size:12px;max-width:750px;margin:0 auto;padding:20px;color:#1a1a1a}
+    table{width:100%;border-collapse:collapse}
+    .wm{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%) rotate(-35deg);font-size:70px;font-weight:900;color:rgba(124,58,237,.05);pointer-events:none;white-space:nowrap;letter-spacing:6px;line-height:1.1;text-align:center}
+    @media print{body{padding:8mm}button{display:none!important}.wm{position:fixed}}
+  </style></head><body>
+  <div class="wm">GCE<br>PROFORMA<br>INVOICE</div>
+  <!-- Header -->
+  <div style="display:flex;align-items:flex-start;justify-content:space-between;padding-bottom:8px;border-bottom:3px solid #c0392b;margin-bottom:12px">
+    <div>
+      <div style="font-size:19px;font-weight:900;color:#c0392b;line-height:1.1">GREAT CHID ELECTRO (NIG.) |</div>
+      <div style="font-size:16px;font-weight:900;color:#1a237e">GLOBAL DOORS LTD</div>
+      <div style="font-size:8.5px;color:#555;margin-top:2px">A Subsidiary of DE-CHIDEX ELECTRIC INTERNATIONAL. Multi-Stockist of Electrical Materials, Fancy Well Brackets, Chandellers, and Home Furnitures.</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;margin-top:5px;font-size:8.5px">
+        <div><b style="color:#c0392b">OGBOMOSO OFFICE</b><br>Ile-Bara Cke-Ado, Sabo Ilorin Rd, Ogbomoso, Oyo State.<br>Tel: 08035158594, 08100170802</div>
+        <div><b style="color:#1a237e">ILORIN HEAD OFFICE</b><br>189, Ibrahim Taiwo Rd, beside UBA Bank, Horin, Kwara State.<br>Tel: 08033617798, 08000589040</div>
+      </div>
+    </div>
+    <div style="flex-shrink:0;margin-left:12px">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 95" width="60" height="71">
+        <defs><linearGradient id="sg" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" style="stop-color:#c0392b"/><stop offset="100%" style="stop-color:#7b241c"/></linearGradient><linearGradient id="gg" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" style="stop-color:#f9d835"/><stop offset="100%" style="stop-color:#c9a227"/></linearGradient></defs>
+        <path d="M40 2 L76 17 L76 50 C76 70 40 90 40 90 C40 90 4 70 4 50 L4 17 Z" fill="url(#sg)" stroke="url(#gg)" stroke-width="3.5"/>
+        <text x="40" y="35" text-anchor="middle" font-family="Arial Black" font-size="13" font-weight="900" fill="#f9d835" letter-spacing="2">GCE</text>
+        <rect x="29" y="46" width="22" height="26" rx="2" fill="none" stroke="#f9d835" stroke-width="1.8"/><rect x="35" y="57" width="10" height="15" rx="1" fill="#f9d835"/><circle cx="40" cy="52" r="3.5" fill="#f9d835"/>
+        <text x="40" y="80" text-anchor="middle" font-family="Arial" font-size="7" font-weight="700" fill="#f9d835" letter-spacing="1.5">ELECTRO</text>
+      </svg>
+    </div>
+  </div>
+  <!-- Bill To / Invoice Details -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
+    <div style="border:1px solid #ccc;border-radius:4px;padding:8px 10px">
+      <div style="font-size:11px;font-weight:700;color:#555;margin-bottom:4px">Bill To:</div>
+      <div style="font-size:13px;font-weight:700">${esc(p.custName||'Walk-in')}</div>
+    </div>
+    <div style="border:1px solid #ccc;border-radius:4px;padding:8px 10px">
+      <div style="font-size:11px;font-weight:700;color:#555;margin-bottom:4px">Proforma Details:</div>
+      <div style="font-size:10.5px;line-height:1.7">
+        <div><b>PRF #:</b> ${esc(p.prfNum||'')}</div>
+        <div><b>Issue Date:</b> ${p.date||''}</div>
+        <div><b>Valid Until:</b> ${validUntil} (${p.validDays||7} days from issue date)</div>
+        ${p.by?`<div><b>Prepared By:</b> ${esc(p.by)}</div>`:''}
+      </div>
+    </div>
+  </div>
+  <!-- Badge -->
+  <div style="text-align:center;margin-bottom:10px">
+    <div style="display:inline-block;background:#7c3aed;color:#fff;font-size:16px;font-weight:900;padding:5px 40px;border-radius:4px;letter-spacing:3px">PROFORMA INVOICE</div>
+  </div>
+  <!-- Note -->
+  <div style="background:#faf5ff;border:1px solid #ddd6fe;border-radius:4px;padding:6px 10px;margin-bottom:8px;font-size:10.5px;color:#6b21a8">
+    ℹ️ This is a proforma invoice only — not a receipt. Goods will be released upon full payment confirmation.
+    <b>This proforma is valid until: ${validUntil} (/ days from issue date)</b>
+  </div>
+  <!-- Items table -->
+  <table style="border:1px solid #ccc;border-radius:4px;overflow:hidden;margin-bottom:8px">
+    <thead><tr style="background:#1a237e;color:#fff">
+      <th style="padding:7px 8px;width:28px;text-align:center;font-size:9.5px;font-weight:800;border-right:1px solid rgba(255,255,255,.2)">#</th>
+      <th style="padding:7px 8px;text-align:left;font-size:9.5px;font-weight:800;border-right:1px solid rgba(255,255,255,.2)">Description</th>
+      <th style="padding:7px 6px;width:44px;text-align:center;font-size:9.5px;font-weight:800;border-right:1px solid rgba(255,255,255,.2)">Qty</th>
+      <th style="padding:7px 6px;width:110px;text-align:right;font-size:9.5px;font-weight:800;border-right:1px solid rgba(255,255,255,.2)">Unit Price</th>
+      <th style="padding:7px 6px;width:50px;text-align:center;font-size:9.5px;font-weight:800;border-right:1px solid rgba(255,255,255,.2)">Disc%</th>
+      <th style="padding:7px 6px;width:110px;text-align:right;font-size:9.5px;font-weight:800">Total</th>
+    </tr></thead>
+    <tbody style="border-bottom:2px solid #1a237e">${itemRows}</tbody>
+    <tfoot>
+      <tr style="border-top:2px solid #1a237e;background:#f0f4ff">
+        <td colspan="5" style="padding:8px;text-align:right;font-size:13px;font-weight:800">GRAND TOTAL</td>
+        <td style="padding:8px;text-align:right;font-size:15px;font-weight:900;color:#c0392b">₦${(p.grandTotal||0).toLocaleString()}</td>
+      </tr>
+    </tfoot>
+  </table>
+  ${bankSection}
+  <div style="margin-top:12px;font-size:10px;color:#555;border-top:1px solid #eee;padding-top:8px;text-align:center">
+    Thank you for choosing Great Chid Electro (Nig.) | Come again!
+  </div>
+  <script>setTimeout(()=>window.print(),400)<\/sc`+`ript>
+  </body></html>`;
+  const w=window.open('','_blank','width=800,height=1000');if(w){w.document.write(html);w.document.close();}
+}
 
 // ── DEMO SALES ────────────────────────────────────────────
 function renderDemoSales(){
