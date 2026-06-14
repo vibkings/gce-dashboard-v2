@@ -470,24 +470,26 @@ input[type=number]::-webkit-inner-spin-button{opacity:.25}
    LIGHT MODE  [data-theme="light"]
 ══════════════════════════════════════════════ */
 [data-theme="light"]{
-  --bg:        #f0f2f5;
-  --bg2:       #e8eaed;
-  --surface:   #e8eaed;
-  --surface2:  #f0f2f5;
-  --white:     #f0f2f5;
-  --card:      rgba(240,242,245,0.95);
-  --border:    rgba(0,0,0,.09);
-  --border2:   rgba(0,0,0,.15);
-  --text1:     #1a1f2e;
-  --text2:     #374151;
-  --text3:     #6b7280;
-  --text4:     #9ca3af;
-  --brand:     #2563eb;
-  --brand-dk:  #1d4ed8;
-  --success:   #16a34a;
-  --warning:   #d97706;
-  --danger:    #dc2626;
-  --info:      #0284c7;
+  --bg:        #edf1f5;
+  --bg2:       #e8ecf0;
+  --surface:   #e8ecf0;
+  --surface2:  #edf1f5;
+  --white:     #edf1f5;
+  --card:      rgba(237,241,245,0.95);
+  --border:    rgba(0,0,0,.08);
+  --border2:   rgba(0,0,0,.13);
+  --text1:     #1a2535;
+  --text2:     #2d3f55;
+  --text3:     #6b7e96;
+  --text4:     #94a6b8;
+  --brand:     #00b4b4;
+  --brand-dk:  #009999;
+  --success:   #00a878;
+  --warning:   #e08c00;
+  --danger:    #e05555;
+  --info:      #00b4b4;
+  --primary:   #00b4b4;
+  --primary-dk:#009999;
 }
 [data-theme="light"] .header{background:rgba(240,242,245,.97)}
 [data-theme="light"] .sidebar{background:#e4e6ea}
@@ -515,107 +517,220 @@ input[type=number]::-webkit-inner-spin-button{opacity:.25}
 
 /* ══════════════════════════════════════════════
    NEUMORPHIC MODE  [data-neumorphic="1"]
-   Soft inset/raised surfaces — eye-friendly
+   Teal/cyan accent — matching reference image
+   White-grey base, soft raised/inset shadows
 ══════════════════════════════════════════════ */
-/* Dark neumorphic (default dark + neumorph) */
-[data-neumorphic="1"]{
-  --nm-bg:     #12151f;
-  --nm-light:  rgba(255,255,255,.06);
-  --nm-dark:   rgba(0,0,0,.5);
-  --nm-in1:    inset 3px 3px 8px rgba(0,0,0,.5),inset -3px -3px 8px rgba(255,255,255,.04);
-  --nm-out:    6px 6px 14px rgba(0,0,0,.5),-4px -4px 10px rgba(255,255,255,.04);
-  --nm-out-sm: 3px 3px 8px rgba(0,0,0,.45),-2px -2px 6px rgba(255,255,255,.04);
-  --nm-press:  inset 4px 4px 10px rgba(0,0,0,.55),inset -2px -2px 6px rgba(255,255,255,.03);
-  --bg:        #12151f;
-  --surface:   #12151f;
-  --white:     #12151f;
-  --card:      #12151f;
-  --border:    transparent;
+
+/* ── Neumorphic LIGHT (primary — matches screenshot) ── */
+[data-neumorphic="1"],
+[data-theme="light"][data-neumorphic="1"] {
+  /* Base surface — soft white-grey */
+  --nm-bg:       #e8edf2;
+  --nm-bg2:      #edf1f5;
+
+  /* Teal accent from the reference image */
+  --brand:       #00b4b4;
+  --brand-dk:    #009999;
+  --brand-lt:    rgba(0,180,180,.12);
+  --primary:     #00b4b4;
+  --primary-dk:  #009999;
+  --accent:      #00c9c9;
+  --accent2:     #00d4d4;
+  --info:        #00b4b4;
+  --success:     #00a878;
+  --success-bg:  rgba(0,168,120,.1);
+
+  /* Shadow pair — light top-left, dark bottom-right */
+  --nm-light:    rgba(255,255,255,0.92);
+  --nm-dark:     rgba(166,180,200,0.65);
+
+  /* Shadows */
+  --nm-out:      8px 8px 18px rgba(166,180,200,.65), -6px -6px 14px rgba(255,255,255,.92);
+  --nm-out-sm:   4px 4px 10px rgba(166,180,200,.6),  -3px -3px 8px  rgba(255,255,255,.88);
+  --nm-out-xs:   2px 2px 6px  rgba(166,180,200,.5),  -2px -2px 5px  rgba(255,255,255,.85);
+  --nm-in1:      inset 4px 4px 10px rgba(166,180,200,.55), inset -4px -4px 10px rgba(255,255,255,.88);
+  --nm-in-sm:    inset 2px 2px 6px  rgba(166,180,200,.5),  inset -2px -2px 6px  rgba(255,255,255,.85);
+  --nm-press:    inset 5px 5px 14px rgba(166,180,200,.65), inset -3px -3px 8px  rgba(255,255,255,.75);
+  --nm-glow:     0 0 0 2px rgba(0,180,180,.25);
+
+  /* Override colours for light neumorph */
+  --bg:          #e8edf2;
+  --bg2:         #edf1f5;
+  --surface:     #e8edf2;
+  --surface2:    #edf1f5;
+  --white:       #e8edf2;
+  --card:        #e8edf2;
+  --border:      transparent;
+  --border2:     rgba(0,180,180,.2);
+  --text1:       #1a2535;
+  --text2:       #2d3f55;
+  --text3:       #6b7e96;
+  --text4:       #94a6b8;
+  --danger:      #e05555;
+  --danger-bg:   rgba(224,85,85,.1);
+  --warning:     #e08c00;
+  --warning-bg:  rgba(224,140,0,.1);
 }
-/* Light neumorphic */
-[data-theme="light"][data-neumorphic="1"]{
-  --nm-bg:     #e8ecf0;
-  --nm-light:  rgba(255,255,255,.85);
-  --nm-dark:   rgba(163,177,198,.6);
-  --nm-in1:    inset 4px 4px 10px rgba(163,177,198,.6),inset -4px -4px 10px rgba(255,255,255,.85);
-  --nm-out:    6px 6px 16px rgba(163,177,198,.6),-6px -6px 16px rgba(255,255,255,.85);
-  --nm-out-sm: 3px 3px 8px rgba(163,177,198,.5),-3px -3px 8px rgba(255,255,255,.8);
-  --nm-press:  inset 5px 5px 12px rgba(163,177,198,.65),inset -3px -3px 8px rgba(255,255,255,.75);
-  --bg:        #e8ecf0;
-  --surface:   #e8ecf0;
-  --white:     #e8ecf0;
-  --card:      #e8ecf0;
-  --border:    transparent;
-  --text1:     #2d3748;
-  --text2:     #4a5568;
-  --text3:     #718096;
+
+/* ── Neumorphic DARK (dark base + neumorph) ── */
+[data-theme="dark"][data-neumorphic="1"],
+[data-neumorphic="1"]:not([data-theme="light"]) {
+  --nm-bg:       #1a1f2e;
+  --nm-light:    rgba(255,255,255,.055);
+  --nm-dark:     rgba(0,0,0,.55);
+  --nm-out:      6px 6px 16px rgba(0,0,0,.55), -4px -4px 10px rgba(255,255,255,.05);
+  --nm-out-sm:   3px 3px 9px  rgba(0,0,0,.5),  -2px -2px 6px  rgba(255,255,255,.04);
+  --nm-out-xs:   2px 2px 5px  rgba(0,0,0,.45), -1px -1px 4px  rgba(255,255,255,.03);
+  --nm-in1:      inset 4px 4px 10px rgba(0,0,0,.55), inset -3px -3px 8px rgba(255,255,255,.045);
+  --nm-in-sm:    inset 2px 2px 6px  rgba(0,0,0,.5),  inset -2px -2px 5px rgba(255,255,255,.04);
+  --nm-press:    inset 5px 5px 12px rgba(0,0,0,.6),   inset -2px -2px 6px rgba(255,255,255,.03);
+  --nm-glow:     0 0 0 2px rgba(0,180,180,.3);
+  --bg:          #1a1f2e;
+  --surface:     #1a1f2e;
+  --white:       #1a1f2e;
+  --card:        #1a1f2e;
+  --border:      transparent;
+  --brand:       #00c9c9;
+  --primary:     #00c9c9;
 }
-/* Apply neumorphic to components */
+/* ══════════════════════════════════════════════
+   NEUMORPHIC COMPONENT OVERRIDES
+══════════════════════════════════════════════ */
+/* Cards — raised */
 [data-neumorphic="1"] .kpi-card{
-  background:var(--nm-bg);box-shadow:var(--nm-out);border:none;transition:all .2s;
+  background:var(--nm-bg);box-shadow:var(--nm-out);border:none;transition:all .22s;
 }
 [data-neumorphic="1"] .kpi-card:hover{
-  box-shadow:var(--nm-out),0 0 0 1px rgba(59,130,246,.2);transform:translateY(-1px);
+  box-shadow:var(--nm-out),var(--nm-glow);transform:translateY(-2px);
 }
+[data-neumorphic="1"] .kpi-card::before{opacity:0}
+[data-neumorphic="1"] .kpi-card:hover::before{opacity:1}
+
+/* Teal left accent on KPI hover in light neumorph */
+[data-theme="light"][data-neumorphic="1"] .kpi-card[style*="border-left"]::before{
+  background:linear-gradient(180deg,#00b4b4,#00d4d4);opacity:1;
+}
+
+/* Table — inset (feels like a well/tray) */
 [data-neumorphic="1"] .tbl-wrap{
   background:var(--nm-bg);box-shadow:var(--nm-in1);border:none;border-radius:var(--radius-lg);
 }
-[data-neumorphic="1"] .form-card{
-  background:var(--nm-bg);box-shadow:var(--nm-out);border:none;
-}
+[data-neumorphic="1"] thead{background:rgba(0,180,180,.04)}
+[data-neumorphic="1"] th{color:var(--text3);border-bottom:1px solid rgba(0,180,180,.1)}
+[data-neumorphic="1"] td{border-bottom:1px solid rgba(0,0,0,.04)}
+[data-theme="light"][data-neumorphic="1"] td{border-bottom:1px solid rgba(166,180,200,.18)}
+[data-neumorphic="1"] tr:hover td{background:rgba(0,180,180,.04)}
+
+/* Form card — raised */
+[data-neumorphic="1"] .form-card{background:var(--nm-bg);box-shadow:var(--nm-out);border:none}
+
+/* Inputs — inset wells */
 [data-neumorphic="1"] .form-input{
-  background:var(--nm-bg);box-shadow:var(--nm-in1);border:none;color:var(--text1);
+  background:var(--nm-bg);box-shadow:var(--nm-in-sm);
+  border:none;color:var(--text1);border-radius:var(--radius);
 }
 [data-neumorphic="1"] .form-input:focus{
-  box-shadow:var(--nm-in1),0 0 0 2px rgba(59,130,246,.3);outline:none;
+  box-shadow:var(--nm-in1),var(--nm-glow);outline:none;border:none;
 }
+[data-neumorphic="1"] .form-input::placeholder{color:var(--text4)}
+
+/* Buttons — raised pill */
 [data-neumorphic="1"] .btn{
-  background:var(--nm-bg);box-shadow:var(--nm-out-sm);border:none;color:var(--text2);
+  background:var(--nm-bg);box-shadow:var(--nm-out-sm);
+  border:none;color:var(--text2);transition:all .15s;
 }
 [data-neumorphic="1"] .btn:hover{
   box-shadow:var(--nm-out);color:var(--text1);transform:translateY(-1px);
 }
-[data-neumorphic="1"] .btn:active{
-  box-shadow:var(--nm-press);transform:translateY(0);
-}
+[data-neumorphic="1"] .btn:active{box-shadow:var(--nm-press);transform:translateY(0)}
+
+/* Primary button — teal gradient raised */
 [data-neumorphic="1"] .btn-primary{
-  background:linear-gradient(135deg,#1d4ed8,#3b82f6);
-  box-shadow:var(--nm-out-sm),0 4px 14px rgba(59,130,246,.35);border:none;color:#fff;
+  background:linear-gradient(135deg,#009999,#00b4b4);
+  box-shadow:var(--nm-out-sm),0 4px 14px rgba(0,180,180,.4);
+  border:none;color:#fff;
 }
 [data-neumorphic="1"] .btn-primary:hover{
-  box-shadow:var(--nm-out),0 6px 20px rgba(59,130,246,.45);
+  background:linear-gradient(135deg,#00b4b4,#00c9c9);
+  box-shadow:var(--nm-out),0 6px 20px rgba(0,180,180,.5);transform:translateY(-1px);
 }
-[data-neumorphic="1"] .btn-primary:active{
-  box-shadow:var(--nm-press);
-}
-[data-neumorphic="1"] .card{
-  background:var(--nm-bg);box-shadow:var(--nm-out);border:none;
-}
+[data-neumorphic="1"] .btn-primary:active{box-shadow:var(--nm-press);transform:translateY(0)}
+
+/* Cards */
+[data-neumorphic="1"] .card{background:var(--nm-bg);box-shadow:var(--nm-out);border:none}
+
+/* Modal */
 [data-neumorphic="1"] .modal{
-  background:var(--nm-bg);box-shadow:var(--nm-out),0 0 60px rgba(0,0,0,.5);border:none;
+  background:var(--nm-bg);box-shadow:var(--nm-out),0 0 60px rgba(0,0,0,.3);border:none;
 }
-[data-neumorphic="1"] .modal-header{background:var(--nm-bg)}
+[data-neumorphic="1"] .modal-header{background:var(--nm-bg);border-bottom:1px solid rgba(0,180,180,.1)}
+
+/* Header */
 [data-neumorphic="1"] .header{
-  background:var(--nm-bg);box-shadow:0 2px 12px rgba(0,0,0,.4);border-bottom:none;
+  background:var(--nm-bg);
+  box-shadow:0 3px 12px rgba(166,180,200,.5);border-bottom:none;
 }
+[data-theme="dark"][data-neumorphic="1"] .header,
+[data-neumorphic="1"]:not([data-theme="light"]) .header{
+  box-shadow:0 3px 12px rgba(0,0,0,.5);
+}
+
+/* Sidebar */
 [data-neumorphic="1"] .sidebar{
-  background:var(--nm-bg);box-shadow:inset -4px 0 10px rgba(0,0,0,.3);border-right:none;
+  background:var(--nm-bg);
+  box-shadow:inset -3px 0 8px rgba(166,180,200,.4);border-right:none;
+}
+
+/* Nav items */
+[data-neumorphic="1"] .nav-item:hover{
+  background:var(--nm-bg);box-shadow:var(--nm-out-xs);border-radius:8px;
 }
 [data-neumorphic="1"] .nav-item.active{
-  box-shadow:var(--nm-in1);background:var(--nm-bg);border-left:2px solid #3b82f6;
+  background:var(--nm-bg);box-shadow:var(--nm-in-sm);
+  border-left:2px solid var(--brand);color:var(--brand);border-radius:8px;
 }
-[data-neumorphic="1"] .nav-item:hover{
-  box-shadow:var(--nm-out-sm);background:var(--nm-bg);
-}
-[data-neumorphic="1"] .subtab.active{
-  box-shadow:var(--nm-in1);border-bottom:2px solid #3b82f6;
-}
+[data-neumorphic="1"] .nav-item.active .nav-icon{opacity:1;filter:drop-shadow(0 0 3px rgba(0,180,180,.6))}
+
+/* Subtabs */
+[data-neumorphic="1"] .subtab.active{border-bottom:2px solid var(--brand)}
+
+/* Overview hero */
 [data-neumorphic="1"] .overview-hero{
+  background:linear-gradient(135deg,rgba(0,180,180,.35),rgba(0,180,180,.12));
   box-shadow:var(--nm-out);border:none;
 }
-[data-neumorphic="1"] .chip-ok,[data-neumorphic="1"] .chip-low,[data-neumorphic="1"] .chip-out{
-  box-shadow:var(--nm-out-sm);border:none;
+
+/* Chips */
+[data-neumorphic="1"] .chip-ok,
+[data-neumorphic="1"] .chip-low,
+[data-neumorphic="1"] .chip-out{box-shadow:var(--nm-out-xs);border:none}
+
+/* Toggle wrap in header */
+[data-neumorphic="1"] .toggle-wrap{background:var(--nm-bg);box-shadow:var(--nm-in-sm);border:none}
+[data-neumorphic="1"] .toggle-track{box-shadow:var(--nm-in-sm)}
+[data-neumorphic="1"] .toggle-track.on{background:linear-gradient(135deg,#009999,#00b4b4)}
+
+/* Signout btn */
+[data-neumorphic="1"] .signout-btn{background:var(--nm-bg);box-shadow:var(--nm-out-xs);border:none;color:var(--danger)}
+
+/* Badges */
+[data-theme="light"][data-neumorphic="1"] .badge-success{background:rgba(0,168,120,.12);color:#00a878}
+[data-theme="light"][data-neumorphic="1"] .badge-info{background:rgba(0,180,180,.12);color:#00b4b4}
+
+/* Header user pill */
+[data-neumorphic="1"] .header-user{background:var(--nm-bg);box-shadow:var(--nm-out-xs);border:none}
+[data-neumorphic="1"] .header-avatar{background:linear-gradient(135deg,#009999,#00b4b4)}
+
+/* Search */
+[data-neumorphic="1"] .search-wrap input{background:var(--nm-bg);box-shadow:var(--nm-in-sm);border:none}
+
+/* Tbl wrap in light neumorph — slightly different inset depth */
+[data-theme="light"][data-neumorphic="1"] .tbl-wrap{
+  box-shadow:inset 4px 4px 12px rgba(166,180,200,.55),inset -4px -4px 12px rgba(255,255,255,.9);
 }
+/* KPI in light neumorph — teal tint on value */
+[data-theme="light"][data-neumorphic="1"] .kpi-value{color:#1a2535}
+[data-theme="light"][data-neumorphic="1"] .kpi-label{color:#00b4b4}
 
 /* ══════════════════════════════════════════════
    THEME TOGGLE SWITCH
