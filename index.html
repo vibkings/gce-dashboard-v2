@@ -11,7 +11,7 @@
    GCE DASHBOARD v2 — Crypto UI (NexDex-inspired)
    Deep navy dark mode, blue accent, glassmorphism
 ═══════════════════════════════════════════════════════════ */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Inter+Tight:wght@500;600;700;800&display=swap');
 
 :root {
   /* Core brand — electric blue like the design */
@@ -70,7 +70,8 @@
   --sidebar-w:    220px;
   --header-h:     54px;
   --font:         'Inter', sans-serif;
-  --font-mono:    'JetBrains Mono', monospace;
+  --font-mono:    'Inter Tight', 'Inter', sans-serif;
+  --font-num:     'Inter Tight', 'Inter', sans-serif; /* tabular financial numbers */
 }
 
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
@@ -276,7 +277,7 @@ input,select,textarea{font-family:var(--font)}
 .kpi-card.info::before{background:var(--info);opacity:1}
 .kpi-card.danger::before{background:var(--danger);opacity:1}
 .kpi-label{font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--text3);margin-bottom:7px}
-.kpi-value{font-size:21px;font-weight:700;color:var(--text1);line-height:1;margin-bottom:4px}
+.kpi-value{font-size:21px;font-weight:700;color:var(--text1);line-height:1;margin-bottom:4px;font-variant-numeric:tabular-nums;font-family:'Inter Tight','Inter',sans-serif}
 .kpi-sub{font-size:10.5px;color:var(--text3)}
 .kpi-icon{position:absolute;top:1rem;right:1rem;font-size:20px;opacity:.1}
 .kpi-grid{display:grid;gap:10px}
@@ -298,7 +299,7 @@ tr:last-child td{border-bottom:none}
 tr:hover td{background:rgba(59,130,246,.04)}
 .td-center{text-align:center}
 .td-right{text-align:right}
-.td-mono{font-family:var(--font-mono);font-size:11.5px}
+.td-mono{font-family:var(--font-num);font-size:12px;font-weight:600;font-variant-numeric:tabular-nums}
 
 /* ══════════════════════════════════════════════
    BADGES
@@ -472,7 +473,12 @@ select.form-input option{background:#1c2130;color:var(--text1)}
 [data-neumorphic="1"] .hdr-tool-btn:hover{box-shadow:var(--nm-out-sm)}
 [data-neumorphic="1"] .hdr-tool-btn:active{box-shadow:var(--nm-press)}
 
-/* ── Page routing ── */
+/* ── Financial number styling ── */
+.num{font-family:'Inter Tight','Inter',sans-serif;font-weight:600;font-variant-numeric:tabular-nums}
+.num-lg{font-family:'Inter Tight','Inter',sans-serif;font-weight:700;font-variant-numeric:tabular-nums}
+/* All td-right cells with currency/number values */
+td.td-right,td.td-mono{font-family:'Inter Tight','Inter',sans-serif;font-weight:600;font-variant-numeric:tabular-nums}
+/* Page routing */
 .page{display:none}
 .page.active{display:block}
 input[type=number]::-webkit-inner-spin-button{opacity:.25}
@@ -785,13 +791,13 @@ input[type=number]::-webkit-inner-spin-button{opacity:.25}
 }
 [data-theme="light"] .calc-display{background:rgba(0,0,0,.08)}
 [data-neumorphic="1"] .calc-display{background:var(--nm-bg);box-shadow:var(--nm-in1)}
-.calc-expr{font-size:10.5px;color:#64748b;min-height:14px;font-family:var(--font-mono)}
-.calc-result{font-size:22px;font-weight:700;color:#f1f5f9;font-family:var(--font-mono);letter-spacing:.02em}
+.calc-expr{font-size:10.5px;color:#64748b;min-height:14px;font-family:'Courier New',monospace}
+.calc-result{font-size:22px;font-weight:700;color:#f1f5f9;font-family:'Courier New',monospace;letter-spacing:.02em}
 [data-theme="light"] .calc-result{color:#1a1f2e}
 .calc-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
 .calc-btn{
   padding:10px 4px;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;
-  transition:all .12s;font-family:var(--font-mono);
+  transition:all .12s;font-family:'Courier New',monospace;
 }
 [data-neumorphic="1"] .calc-btn{box-shadow:var(--nm-out-sm)}
 [data-neumorphic="1"] .calc-btn:active{box-shadow:var(--nm-press)}
@@ -926,7 +932,7 @@ input[type=number]::-webkit-inner-spin-button{opacity:.25}
         <div style="display:flex;align-items:center;gap:6px;font-size:12.5px;font-weight:700;color:var(--text1);margin-bottom:6px">
           <span>☁️</span> Google Drive <span id="gdrive-status-badge" style="font-size:10px;padding:2px 7px;border-radius:99px;background:var(--success-bg);color:var(--success);font-weight:700">connected</span>
         </div>
-        <div id="gdrive-path" style="font-size:11.5px;color:var(--brand);margin-bottom:2px">Drive/GCE Backups/</div>
+        <div id="gdrive-path" style="font-size:11.5px;color:var(--brand);margin-bottom:2px">Drive/GCE- backup-v2/</div>
         <div id="gdrive-last" style="font-size:11px;color:var(--text3);margin-bottom:10px">Last backup: —</div>
         <div style="display:flex;gap:6px">
           <button onclick="uploadToDrive()" class="btn btn-success btn-sm" id="drive-upload-btn" style="flex:1">☁️ Upload Now</button>
@@ -11444,7 +11450,10 @@ async function uploadToDrive() {
   }
 
   const data     = _buildBackupPayload();
-  const filename = `GCE-Backup-${new Date().toISOString().slice(0,10)}_${new Date().getHours()}h.json`;
+  const d = new Date();
+  const dateStr = d.toISOString().slice(0,10);
+  const timeStr = String(d.getHours()).padStart(2,'0')+'h'+String(d.getMinutes()).padStart(2,'0');
+  const filename = `GCE-Backup-v2_${dateStr}_${timeStr}.json`;
   const content  = JSON.stringify(data);
 
   const r = await fetch(`${GDRIVE_WORKER}/gdrive/upload`, {
@@ -11481,6 +11490,27 @@ async function uploadToDrive() {
   if (gdPanel) gdPanel.textContent = `Last Google Drive: ${t}`;
 
   return result;
+}
+
+// ── Find or use Drive folder by name ─────────────────────
+async function _getDriveFolderId(token, folderName) {
+  // Search for folder with this exact name in Drive
+  const q = encodeURIComponent(`name='${folderName}' and mimeType='application/vnd.google-apps.folder' and trashed=false`);
+  const r = await fetch(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name)`, {
+    headers: { 'Authorization': `Bearer ${token}` }
+  });
+  if (!r.ok) return null;
+  const data = await r.json();
+  if (data.files?.length) return data.files[0].id;
+  // Folder not found — create it
+  const cr = await fetch('https://www.googleapis.com/drive/v3/files', {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: folderName, mimeType: 'application/vnd.google-apps.folder' })
+  });
+  if (!cr.ok) return null;
+  const folder = await cr.json();
+  return folder.id || null;
 }
 
 // ── List Drive backups via Worker ─────────────────────────
