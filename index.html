@@ -3,9 +3,10 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>Great Chid Electro — Dashboard v2</title>
+<title>GCE Dashboard v2</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%231d4ed8'/><text y='22' x='16' text-anchor='middle' font-family='Arial Black' font-size='14' font-weight='900' fill='%23f9d835'>GCE</text></svg>">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/localforage/1.10.0/localforage.min.js"></script>
-<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<!-- Inter + Inter Tight loaded via @import in CSS -->
 <style>
 /* ═══════════════════════════════════════════════════════════
    GCE DASHBOARD v2 — Crypto UI (NexDex-inspired)
@@ -843,15 +844,17 @@ input[type=number]::-webkit-inner-spin-button{opacity:.25}
     <div class="auth-logo">GCE</div>
     <div class="auth-title">Great Chid Electro</div>
     <div class="auth-sub">Business Dashboard v2 — Sign in to continue</div>
-    <div class="auth-field">
-      <label>Username</label>
-      <input type="text" id="auth-user" placeholder="Enter your username" autocomplete="username">
-    </div>
-    <div class="auth-field">
-      <label>Password</label>
-      <input type="password" id="auth-pass" placeholder="Enter your password" autocomplete="current-password">
-    </div>
-    <button class="auth-btn" id="auth-btn">Sign in</button>
+    <form id="auth-form" onsubmit="event.preventDefault();doLogin()" autocomplete="on">
+      <div class="auth-field">
+        <label for="auth-user">Username</label>
+        <input type="text" id="auth-user" name="username" placeholder="Enter your username" autocomplete="username" required>
+      </div>
+      <div class="auth-field">
+        <label for="auth-pass">Password</label>
+        <input type="password" id="auth-pass" name="password" placeholder="Enter your password" autocomplete="current-password" required>
+      </div>
+      <button type="submit" class="auth-btn" id="auth-btn">Sign in →</button>
+    </form>
     <div class="auth-error" id="auth-error"></div>
   </div>
 </div>
@@ -2286,19 +2289,24 @@ async function doLogin() {
   const btn = document.getElementById('auth-btn');
   const errEl = document.getElementById('auth-error');
   errEl.style.display = 'none';
-  if (!username || !password) { showAuthError('Please enter username and password.'); return; }
-  btn.textContent = 'Signing in...';
+
+  if (!username) { showAuthError('Please enter your username.'); document.getElementById('auth-user').focus(); return; }
+  if (!password) { showAuthError('Please enter your password.'); document.getElementById('auth-pass').focus(); return; }
+
+  btn.textContent = '⏳ Signing in...';
   btn.disabled = true;
 
   let user = null;
 
-  // 1. Check hardcoded default users FIRST — instant, no network
+  // 1. Check hardcoded default users FIRST — instant, no network needed
   const def = DEFAULT_USERS[username];
-  if (def && def.password === password) user = def;
+  if (def && def.password === password) { user = def; }
 
-  // 2. Check STATE.users if already loaded from IndexedDB
+  // 2. Check STATE.users from IndexedDB (already loaded on page load)
   if (!user) {
-    const stateUser = Object.values(STATE.users||{}).find(u=>(u.username||u.id||'').toLowerCase()===username);
+    const stateUser = Object.values(STATE.users||{}).find(u =>
+      (u.username||u.id||'').toLowerCase() === username
+    );
     if (stateUser) {
       const matchPlain = stateUser.password === password;
       let matchB64 = false;
@@ -2307,23 +2315,45 @@ async function doLogin() {
     }
   }
 
+  // 3. Firestore fallback — fetch users if not found locally
   if (!user) {
-    showAuthError('Invalid username or password.');
-    btn.textContent = 'Sign in';
+    try {
+      btn.textContent = '🔍 Checking credentials...';
+      const docs = await _fsList(COLS.USERS);
+      for (const d of docs) {
+        if (!STATE.users) STATE.users = {};
+        STATE.users[d._id] = d;
+        const uname = (d.username||d.id||'').toLowerCase();
+        if (uname === username) {
+          const matchPlain = d.password === password;
+          let matchB64 = false;
+          try { matchB64 = atob(d.password) === password; } catch(e){}
+          if (matchPlain || matchB64) { user = d; break; }
+        }
+      }
+    } catch(e) { /* Firestore unavailable — continue */ }
+  }
+
+  if (!user) {
+    showAuthError('❌ Invalid username or password.');
+    btn.textContent = 'Sign in →';
     btn.disabled = false;
+    document.getElementById('auth-pass').value = '';
+    document.getElementById('auth-pass').focus();
     return;
   }
 
-  // Authenticated — save session and go
+  // ✅ Authenticated
+  btn.textContent = '✅ Loading dashboard...';
   STATE.user = user;
   localStorage.setItem('gce_v2_session', JSON.stringify(user));
 
   try {
-    await initApp(); // initApp calls initDataLayer internally
+    await initApp();
   } catch(e) {
     console.error('initApp error:', e);
-    showAuthError('Login succeeded but app failed to load. Please refresh.');
-    btn.textContent = 'Sign in';
+    showAuthError('Login succeeded but app failed to load. Please refresh the page.');
+    btn.textContent = 'Sign in →';
     btn.disabled = false;
   }
 }
@@ -11711,10 +11741,8 @@ async function _workerDriveBackup() {
 
 document.addEventListener('DOMContentLoaded', () => {
   // Auth form handlers
-  document.getElementById('auth-btn').onclick = doLogin;
-  document.getElementById('auth-pass').onkeydown = (e) => {
-    if (e.key === 'Enter') doLogin();
-  };
+  // Auth handled by form onsubmit — no duplicate listeners needed
+  // (prevents double-fire on Enter key)
   document.getElementById('auth-user').onkeydown = (e) => {
     if (e.key === 'Enter') document.getElementById('auth-pass').focus();
   };
