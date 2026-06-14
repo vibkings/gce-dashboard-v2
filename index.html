@@ -2932,11 +2932,18 @@ function v2ViewInvoice(invNum) {
 
 // ── Invoice print modes ─────────────────────────────────
 // mode: 'a4' | 'a5' | '80mm'
-function _buildInvoiceHTML(invNum, mode='a4') {
+function _buildInvoiceHTML(invNum, mode='a4', invTypeOverride='sales') {
   const items = Object.values(STATE.sales||{}).filter(s=>s.invoiceNum===invNum && !s.voided);
   if (!items.length) return null;
   const s0 = items[0];
   const gt = items.reduce((a,s)=>a+(s.total||0),0);
+  const totalDisc = items.reduce((a,s)=>a+(s.discAmt||0),0);
+  const subtotal = gt + totalDisc; // before discount
+
+  // Determine invoice type and badge label
+  const invType = invTypeOverride || 'sales';
+  const badgeLabel = invType==='proforma' ? 'PROFORMA' : invType==='demo' ? 'INVOICE' : invType==='purchase' ? 'PURCHASE ORDER' : 'SALES INVOICE';
+  const badgeColor = invType==='proforma' ? '#7c3aed' : invType==='demo' ? '#f59e0b' : invType==='purchase' ? '#1a237e' : '#c0392b';
 
   // Date
   let day='',mon='',yr='';
@@ -2945,32 +2952,46 @@ function _buildInvoiceHTML(invNum, mode='a4') {
     if(!isNaN(d)){day=String(d.getDate()).padStart(2,'0');mon=String(d.getMonth()+1).padStart(2,'0');yr=d.getFullYear();}
     else{const p=(s0.date||'').split('/');if(p.length===3){mon=p[0];day=p[1];yr=p[2];}}
   }catch(e){}
+  const issueDate = `${day} ${['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][parseInt(mon,10)-1]||''} ${yr}`;
+  // Due date = 7 days after issue
+  let dueDate = '';
+  try{const dd=new Date(s0.date);dd.setDate(dd.getDate()+7);dueDate=dd.getDate()+' '+['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][dd.getMonth()]+' '+dd.getFullYear();}catch(e){}
 
   // Payment
   const payMode=s0.payMode||'cash', payment=s0.payment||'paid';
-  let payTypeLabel='CASH SALE';
-  if(payment==='credit')payTypeLabel='CREDIT SALE';
-  else if(payment==='part')payTypeLabel='PART PAYMENT';
-  else if(payMode==='pos')payTypeLabel='POS SALE';
-  else if(payMode==='split')payTypeLabel='SPLIT PAYMENT';
   let payModeLabel='Cash';
-  if(payMode==='transfer')payModeLabel=s0.bankName||'Bank transfer';
-  else if(payMode==='pos')payModeLabel=s0.posName||'POS Terminal';
-  else if(payMode==='split'&&s0.splitPayment){const sp=s0.splitPayment;payModeLabel=`${sp.mode1||'Cash'}: ₦${(sp.amt1||0).toLocaleString()} + ${sp.mode2||'Transfer'}: ₦${(sp.amt2||0).toLocaleString()}`;}
+  if(payMode==='transfer')payModeLabel=`Bank Transfer (${s0.bankName||'Transfer'})`;
+  else if(payMode==='pos')payModeLabel=`POS (${s0.posName||'POS Terminal'})`;
+  else if(payMode==='split'&&s0.splitPayment){
+    const sp=s0.splitPayment;
+    payModeLabel=`${sp.mode1||'Cash'}${sp.bank1?' ('+sp.bank1+')':''}: ₦${(sp.amt1||0).toLocaleString()} + ${sp.mode2||'Transfer'}${sp.bank2?' ('+sp.bank2+')':''}: ₦${(sp.amt2||0).toLocaleString()}`;
+  }
   let amountPaid=gt;
   if(payment==='credit')amountPaid=0;
   else if(payment==='part')amountPaid=s0.partPayment||0;
+  const balance=Math.max(0,gt-amountPaid);
+  const tendered=s0.tenderedAmt||amountPaid;
+  const change=Math.max(0,tendered-gt);
 
   const custName=s0.printName||s0.custName||'Walk-in customer';
-  const address=s0.deliveryAddr||s0.address||'';
+  const address=s0.deliveryAddr||s0.address||'(leave space)';
   const qrUrl=`https://api.qrserver.com/v1/create-qr-code/?size=80x80&data=https://greatchidelectro.com`;
 
-  // SVG shield (scalable)
+  // Pending supply
+  const isPending = items.some(s=>s.pendingSupply||s.supplyStatus==='pending');
+  const suppliedDate = s0.suppliedDate || s0.date || '';
+
+  // Seller signature
+  const sellerName=s0.seller||STATE.user?.name||'';
+  const sellerUser=Object.values(STATE.users||{}).find(u=>u.name===sellerName);
+  const sellerSigId=sellerUser?._id||sellerUser?.id;
+  const sigDataUrl=(STATE.user?.role==='admin'&&ADMIN_SIG_DATAURL)?ADMIN_SIG_DATAURL:(sellerSigId&&STATE.signatures?.[sellerSigId])||'';
+
+  // Shield SVG
   const shield=(sz)=>`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 95" width="${sz}" height="${Math.round(sz*95/80)}">
     <defs><linearGradient id="sg" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" style="stop-color:#c0392b"/><stop offset="100%" style="stop-color:#7b241c"/></linearGradient>
     <linearGradient id="gg" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" style="stop-color:#f9d835"/><stop offset="100%" style="stop-color:#c9a227"/></linearGradient></defs>
     <path d="M40 2 L76 17 L76 50 C76 70 40 90 40 90 C40 90 4 70 4 50 L4 17 Z" fill="url(#sg)" stroke="url(#gg)" stroke-width="3.5"/>
-    <path d="M40 11 L68 24 L68 50 C68 66 40 82 40 82 C40 82 12 66 12 50 L12 24 Z" fill="none" stroke="url(#gg)" stroke-width="1.5" opacity="0.5"/>
     <text x="40" y="35" text-anchor="middle" font-family="Arial Black,sans-serif" font-size="13" font-weight="900" fill="#f9d835" letter-spacing="2">GCE</text>
     <line x1="14" y1="41" x2="66" y2="41" stroke="#f9d835" stroke-width="1.2" opacity="0.6"/>
     <rect x="29" y="46" width="22" height="26" rx="2" fill="none" stroke="#f9d835" stroke-width="1.8"/>
@@ -2979,483 +3000,259 @@ function _buildInvoiceHTML(invNum, mode='a4') {
     <text x="40" y="80" text-anchor="middle" font-family="Arial,sans-serif" font-size="7" font-weight="700" fill="#f9d835" letter-spacing="1.5">ELECTRO</text>
   </svg>`;
 
-  // Part payment extra row
-  const partRow = payment==='part'
-    ? `<tr style="background:#fef2f2"><td colspan="5" style="text-align:right;padding:5px 10px;font-size:11px;font-weight:700;color:#c0392b">BALANCE DUE</td><td style="text-align:right;padding:5px 10px;font-size:12px;font-weight:900;color:#c0392b">₦${Math.max(0,gt-amountPaid).toLocaleString()}</td></tr>` : '';
-
-  // ── 80mm RECEIPT MODE ────────────────────────────────
-  if (mode === '80mm') {
-    const itemRows80 = items.map(s=>`
-      <tr>
-        <td style="padding:3px 0;font-size:12px">${esc(s.name)}</td>
-        <td style="text-align:center;font-size:12px">${s.qty}</td>
-        <td style="text-align:right;font-size:12px">₦${(s.salePrice||0).toLocaleString()}</td>
-        <td style="text-align:right;font-size:12px;font-weight:700">₦${(s.total||0).toLocaleString()}</td>
-      </tr>`).join('');
+  // ── 80mm RECEIPT ──────────────────────────────────────────
+  if (mode==='80mm') {
+    const itemRows80=items.map(s=>`<tr>
+      <td style="padding:3px 0;font-size:12px">${esc(s.name)}</td>
+      <td style="text-align:center;font-size:12px">${s.qty}</td>
+      <td style="text-align:right;font-size:12px">₦${(s.salePrice||s.unitPrice||0).toLocaleString()}</td>
+      <td style="text-align:right;font-size:12px;font-weight:700">₦${(s.total||0).toLocaleString()}</td>
+    </tr>`).join('');
     return `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Receipt #${invNum}</title>
-    <style>
-      *{margin:0;padding:0;box-sizing:border-box}
-      body{font-family:'Courier New',monospace;font-size:12px;width:80mm;margin:0 auto;padding:4mm;color:#000;background:#fff}
-      .divider{border-top:1px dashed #000;margin:6px 0}
-      table{width:100%;border-collapse:collapse}
-      .center{text-align:center} .right{text-align:right}
-      @media print{body{width:80mm;padding:2mm}button{display:none!important}}
-    </style></head><body>
+    <style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:'Courier New',monospace;font-size:12px;width:80mm;margin:0 auto;padding:4mm;color:#000;background:#fff}.divider{border-top:1px dashed #000;margin:6px 0}table{width:100%;border-collapse:collapse}.center{text-align:center}.right{text-align:right}@media print{body{width:80mm;padding:2mm}button{display:none!important}}</style>
+    </head><body>
     <div class="center" style="margin-bottom:6px">
       <div style="font-size:14px;font-weight:900">GREAT CHID ELECTRO</div>
       <div style="font-size:12px;font-weight:700">GLOBAL DOORS LTD</div>
-      <div style="font-size:10px">Ile-Bara Oke-Ado, Sabo Ilorin Rd</div>
-      <div style="font-size:10px">Ogbomoso, Oyo State</div>
+      <div style="font-size:10px">Ile-Bara Oke-Ado, Sabo Ilorin Rd, Ogbomoso</div>
       <div style="font-size:10px">Tel: 08035158594 / 08100170802</div>
     </div>
     <div class="divider"></div>
-    <div class="center" style="font-size:12px;font-weight:900;letter-spacing:2px;margin:4px 0">SALES RECEIPT</div>
+    <div class="center" style="font-size:12px;font-weight:900;letter-spacing:2px;margin:4px 0">${badgeLabel}</div>
     <div class="divider"></div>
     <div style="font-size:11px;margin-bottom:4px">
       <div><b>Invoice#:</b> ${invNum}</div>
-      <div><b>Date:</b> ${day}/${mon}/${yr}</div>
+      <div><b>Date:</b> ${issueDate}</div>
       <div><b>Customer:</b> ${esc(custName)}</div>
-      ${address?`<div><b>Address:</b> ${esc(address)}</div>`:''}
+      ${address&&address!=='(leave space)'?`<div><b>Address:</b> ${esc(address)}</div>`:''}
     </div>
     <div class="divider"></div>
-    <table>
-      <thead><tr style="border-bottom:1px solid #000">
-        <th style="text-align:left;font-size:11px;padding:2px 0">Item</th>
-        <th style="text-align:center;font-size:11px">Qty</th>
-        <th style="text-align:right;font-size:11px">Rate</th>
-        <th style="text-align:right;font-size:11px">Amt</th>
-      </tr></thead>
-      <tbody>${itemRows80}</tbody>
-    </table>
+    <table><thead><tr style="border-bottom:1px solid #000">
+      <th style="text-align:left;font-size:11px;padding:2px 0">Item</th>
+      <th style="text-align:center;font-size:11px">Qty</th>
+      <th style="text-align:right;font-size:11px">Rate</th>
+      <th style="text-align:right;font-size:11px">Amt</th>
+    </tr></thead><tbody>${itemRows80}</tbody></table>
     <div class="divider"></div>
-    <div style="display:flex;justify-content:space-between;font-size:13px;font-weight:700;margin-bottom:3px">
-      <span>TOTAL</span><span>₦${gt.toLocaleString()}</span>
-    </div>
-    <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px">
-      <span>Amount Paid</span><span>₦${amountPaid.toLocaleString()}</span>
-    </div>
-    ${payment==='part'?`<div style="display:flex;justify-content:space-between;font-size:12px;font-weight:700;color:#c0392b"><span>Balance Due</span><span>₦${Math.max(0,gt-amountPaid).toLocaleString()}</span></div>`:''}
+    ${totalDisc>0?`<div style="display:flex;justify-content:space-between;font-size:11px"><span>Subtotal</span><span>₦${subtotal.toLocaleString()}</span></div><div style="display:flex;justify-content:space-between;font-size:11px"><span>Discount</span><span>-₦${totalDisc.toLocaleString()}</span></div>`:''}
+    <div style="display:flex;justify-content:space-between;font-size:13px;font-weight:700;margin-bottom:3px"><span>TOTAL</span><span>₦${gt.toLocaleString()}</span></div>
+    <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px"><span>Amount Paid</span><span>₦${amountPaid.toLocaleString()}</span></div>
+    ${change>0?`<div style="display:flex;justify-content:space-between;font-size:12px"><span>Change</span><span>₦${change.toLocaleString()}</span></div>`:''}
+    ${balance>0?`<div style="display:flex;justify-content:space-between;font-size:12px;font-weight:700;color:#c0392b"><span>Balance Due</span><span>₦${balance.toLocaleString()}</span></div>`:''}
     <div class="divider"></div>
     <div style="font-size:11px;margin-bottom:3px">
-      <div><b>Pay Type:</b> ${payTypeLabel}</div>
-      <div><b>Pay Mode:</b> ${esc(payModeLabel)}</div>
-      <div><b>Served by:</b> ${esc(s0.seller||'')}</div>
+      <div><b>Payment Method:</b> ${esc(payModeLabel)}</div>
+      <div><b>Served by:</b> ${esc(sellerName)}</div>
     </div>
     <div class="divider"></div>
     <div class="center" style="font-size:10px;margin-bottom:4px">
-      <div style="font-style:italic;color:#555">Examine goods well. No refund after payment.</div>
-      <div style="margin-top:3px;font-weight:700">Thank you! Come again!</div>
+      <div style="font-style:italic">Examine goods. No refund after payment.</div>
+      <div style="font-weight:700;margin-top:3px">Thank you for patronizing GCE!</div>
     </div>
     <div class="center" style="margin-top:6px">
-      <img src="${qrUrl}" width="70" height="70" alt="QR">
-      <div style="font-size:9px;color:#888">greatchidelectro.com</div>
+      <img src="${qrUrl}" width="70" height="70" alt="QR"><div style="font-size:9px">scan me</div>
     </div>
     <script>const img=document.querySelector('img');function go(){window.print();}if(img.complete)setTimeout(go,400);else{img.onload=()=>setTimeout(go,400);img.onerror=()=>setTimeout(go,400);}<\/script>
     </body></html>`;
   }
 
-  // ── A5 / A4 SHARED LAYOUT ───────────────────────────
-  const isA5 = mode === 'a5';
-  const pageW = isA5 ? '148mm' : '210mm';
-  const padH  = isA5 ? '16px 20px' : '20px 28px';
-  const shieldSz = isA5 ? 52 : 70;
-  const h1 = isA5 ? '17px' : '22px';
-  const h2 = isA5 ? '15px' : '20px';
-  const hSub = isA5 ? '8.5px' : '10px';
-  const tbl_rows = isA5 ? 10 : 15;
-  const bodyFont = isA5 ? '12px' : '13px';
+  // ── A4 / A5 LAYOUT ────────────────────────────────────────
+  const isA5=mode==='a5';
+  const pageW=isA5?'148mm':'210mm';
+  const pageH=isA5?'210mm':'297mm';
+  const pad=isA5?'10mm':'14mm';
+  const h1=isA5?'15px':'19px';
+  const hSub=isA5?'8px':'9.5px';
+  const shieldSz=isA5?50:65;
+  const maxRows=isA5?10:15;
 
-  const itemRowsFull = items.map((s,i)=>`
-    <tr>
-      <td style="padding:4px 6px;border-right:1px solid #ddd;font-size:11px;color:#555;text-align:center">${i+1}</td>
-      <td style="padding:4px 8px;border-right:1px solid #ddd;font-size:${bodyFont}">${esc(s.name)}</td>
-      <td style="padding:4px 6px;border-right:1px solid #ddd;text-align:center;font-size:${bodyFont}">${s.qty}</td>
-      <td style="padding:4px 6px;border-right:1px solid #ddd;text-align:right;font-size:${bodyFont}">₦${(s.salePrice||0).toLocaleString()}</td>
-      <td style="padding:4px 6px;border-right:1px solid #ddd;text-align:center;font-size:11px;color:#aaa">—</td>
-      <td style="padding:4px 6px;text-align:right;font-size:${bodyFont};font-weight:600">₦${(s.total||0).toLocaleString()}</td>
-    </tr>`).join('');
-
-  const emptyRows = Array(Math.max(0,tbl_rows-items.length)).fill(`
-    <tr style="height:${isA5?'20px':'24px'}">
-      <td style="border-right:1px solid #ddd"></td><td style="border-right:1px solid #ddd"></td>
-      <td style="border-right:1px solid #ddd"></td><td style="border-right:1px solid #ddd"></td>
-      <td style="border-right:1px solid #ddd"></td><td></td>
-    </tr>`).join('');
+  const itemRowsFull=items.map((s,i)=>`<tr style="border-bottom:1px solid #eee">
+    <td style="padding:5px 6px;text-align:center;font-size:${isA5?'11px':'12px'};color:#666">${i+1}</td>
+    <td style="padding:5px 8px;font-size:${isA5?'11px':'12px'};font-weight:600">${esc(s.name)}</td>
+    <td style="padding:5px 6px;text-align:center;font-size:${isA5?'11px':'12px'}">${s.qty}</td>
+    <td style="padding:5px 6px;text-align:right;font-size:${isA5?'11px':'12px'}">₦${(s.salePrice||s.unitPrice||0).toLocaleString()}</td>
+    <td style="padding:5px 6px;text-align:center;font-size:${isA5?'10px':'11px'};color:#d97706">${(s.discPct||0)>0?s.discPct+'%':'—'}</td>
+    <td style="padding:5px 8px;text-align:right;font-size:${isA5?'12px':'13px'};font-weight:700">₦${(s.total||0).toLocaleString()}</td>
+  </tr>`).join('');
+  const blank=items.length<maxRows?Array(maxRows-items.length).fill(`<tr style="border-bottom:1px solid #f5f5f5"><td colspan="6" style="height:${isA5?'18px':'20px'}">&nbsp;</td></tr>`).join(''):'';
 
   return `<!DOCTYPE html><html><head><meta charset="UTF-8">
-  <title>Invoice #${invNum}</title>
+  <title>${badgeLabel} #${invNum}</title>
   <style>
     *{margin:0;padding:0;box-sizing:border-box}
-    body{font-family:'Arial',sans-serif;background:#fff;color:#111;padding:${padH};max-width:${pageW};margin:0 auto}
-    .wm{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%) rotate(-32deg);font-size:${isA5?'60px':'80px'};font-weight:900;color:rgba(192,57,43,.06);white-space:nowrap;pointer-events:none;z-index:0;letter-spacing:4px;line-height:1.2;text-align:center}
+    body{font-family:Arial,sans-serif;font-size:12px;color:#1a1a1a;background:#fff;
+      width:${pageW};min-height:${pageH};margin:0 auto;padding:${pad};position:relative}
+    .wm{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%) rotate(-35deg);
+      font-size:64px;font-weight:900;color:rgba(192,57,43,.06);pointer-events:none;
+      white-space:nowrap;z-index:0;letter-spacing:6px;line-height:1.1;text-align:center}
     table{width:100%;border-collapse:collapse}
-    @media print{body{padding:${isA5?'6px 8px':'8px 12px'};}button{display:none!important}.wm,.sup-box *{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
+    @media print{body{padding:8mm}button{display:none!important}.wm{position:fixed}}
   </style></head><body>
-
   <div class="wm">GCE<br>ORIGINAL<br>INVOICE</div>
-  <div style="position:relative;z-index:1">
 
-  <!-- Invoice# -->
-  <div style="text-align:center;font-size:10px;color:#888;margin-bottom:4px">Invoice #${invNum}</div>
-
-  <!-- Header -->
-  <div style="display:flex;align-items:flex-start;gap:10px;border-bottom:3px solid #c0392b;padding-bottom:10px;margin-bottom:10px">
-    <div style="flex-shrink:0">${shield(shieldSz)}</div>
-    <div style="flex:1;text-align:center">
-      <div style="font-size:${h1};font-weight:900;color:#c0392b;letter-spacing:.5px;line-height:1.1">GREAT CHID ELECTRO (NIG.)</div>
-      <div style="font-size:${h2};font-weight:900;color:#1a237e;letter-spacing:.5px;margin:2px 0">GLOBAL DOORS LTD</div>
-      <div style="font-size:${hSub};font-weight:700;color:#1a237e;text-transform:uppercase;letter-spacing:.5px">A Subsidiary of De-Chdex Electrics International</div>
-      <div style="font-size:${hSub};color:#555;margin-top:2px">Multi-Stockist of all Electrical Materials, Fancy Wall Brackets, Chandeliers and Home Furnitures</div>
-      <div style="font-size:${hSub};color:#c0392b;font-weight:600;margin-top:1px"><b>OGBOMOSO OFFICE:</b> Ile-Bara Oke-Ado, Sabo Ilorin Rd, Ogbomoso, Oyo State. Tel: 08035158594, 08100170802</div>
-      <div style="font-size:${hSub};color:#333;font-weight:600"><b>ILORIN HEAD OFFICE:</b> 189, Ibrahim Taiwo Rd, beside UBA Bank, Ilorin, Kwara State. Tel: 08033617798, 08060960040</div>
+  <!-- HEADER -->
+  <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:10px;padding-bottom:8px;border-bottom:3px solid #c0392b">
+    <div style="flex:1;margin-right:10px">
+      <div style="font-size:${isA5?'15px':'19px'};font-weight:900;color:#c0392b;line-height:1.1">GREAT CHID ELECTRO (NIG.) |</div>
+      <div style="font-size:${isA5?'13px':'17px'};font-weight:900;color:#1a237e;line-height:1.1">GLOBAL DOORS LTD</div>
+      <div style="font-size:${hSub};font-weight:600;color:#555;margin-top:3px">A Subsidiary of DE-CHIDEX ELECTRIC INTERNATIONAL. Multi-Stockist of Electrical Materials, Fancy Well Brackets, Chandellers, and Home Furnitures.</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;margin-top:5px">
+        <div style="font-size:${hSub}">
+          <div style="font-weight:700;color:#c0392b">OGBOMOSO OFFICE</div>
+          <div style="color:#555"><b>Address:</b> Ile-Bara Cke-Ado, Sabo Ilorin Rd, Ogbomoso, Oyo State.</div>
+          <div style="color:#555"><b>Tel:</b> 08035158594, 08100170802</div>
+        </div>
+        <div style="font-size:${hSub}">
+          <div style="font-weight:700;color:#1a237e">ILORIN HEAD OFFICE</div>
+          <div style="color:#555"><b>Address:</b> 189, Ibrahim Taiwo Rd, beside UBA Bank, Horin, Kwara State.</div>
+          <div style="color:#555"><b>Tel:</b> 08033617798, 08000589040</div>
+        </div>
+      </div>
     </div>
     <div style="flex-shrink:0">${shield(shieldSz)}</div>
   </div>
 
-  <!-- Single badge -->
-  <div style="text-align:center;margin-bottom:10px">
-    <span style="display:inline-block;background:#c0392b;color:#fff;font-size:${isA5?'11px':'13px'};font-weight:800;padding:4px 32px;border-radius:4px;letter-spacing:2px">SALES INVOICE</span>
-  </div>
-
-  <!-- Customer + Date -->
-  <div style="display:grid;grid-template-columns:1fr auto;border:1px solid #ccc;margin-bottom:10px">
-    <div style="padding:8px 10px;border-right:1px solid #ccc">
-      <div style="font-size:9px;color:#888;margin-bottom:2px">Name:</div>
-      <div style="font-size:${isA5?'12px':'14px'};font-weight:700;margin-bottom:6px">${esc(custName)}</div>
-      <div style="font-size:9px;color:#888;margin-bottom:2px">Address:</div>
-      <div style="font-size:12px;min-height:16px;border-bottom:1px solid #eee;padding-bottom:3px">${esc(address)}</div>
+  <!-- BILL TO + INVOICE DETAILS side by side -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
+    <div style="border:1px solid #ccc;border-radius:4px;padding:8px 10px">
+      <div style="font-size:11px;font-weight:700;color:#555;margin-bottom:4px">Bill To:</div>
+      <div style="font-size:${isA5?'12px':'13px'};font-weight:700;margin-bottom:3px">${esc(custName)}</div>
+      <div style="font-size:10px;color:#777">Address: ${esc(address)}</div>
     </div>
-    <div style="padding:8px 10px;min-width:${isA5?'160px':'190px'}">
-      <div style="font-size:12px;margin-bottom:6px;text-align:right"><span style="color:#888">No:</span> <b style="font-size:${isA5?'13px':'15px'};color:#c0392b">${invNum}</b></div>
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;border:1px solid #ccc;border-radius:3px;overflow:hidden;text-align:center;width:${isA5?'140px':'160px'};margin-left:auto">
-        <div style="background:#c0392b;color:#fff;font-size:8px;font-weight:700;padding:3px">DAY</div>
-        <div style="background:#c0392b;color:#fff;font-size:8px;font-weight:700;padding:3px;border-left:1px solid rgba(255,255,255,.3)">MONTH</div>
-        <div style="background:#c0392b;color:#fff;font-size:8px;font-weight:700;padding:3px;border-left:1px solid rgba(255,255,255,.3)">YEAR</div>
-        <div style="font-size:${isA5?'14px':'17px'};font-weight:800;padding:4px 3px;border-right:1px solid #ccc;border-top:1px solid #ccc">${day}</div>
-        <div style="font-size:${isA5?'14px':'17px'};font-weight:800;padding:4px 3px;border-right:1px solid #ccc;border-top:1px solid #ccc">${mon}</div>
-        <div style="font-size:${isA5?'14px':'17px'};font-weight:800;padding:4px 3px;border-top:1px solid #ccc">${yr}</div>
+    <div style="border:1px solid #ccc;border-radius:4px;padding:8px 10px">
+      <div style="font-size:11px;font-weight:700;color:#555;margin-bottom:4px">Invoice Details:</div>
+      <div style="font-size:10.5px;color:#333;line-height:1.7">
+        <div><b>Invoice Number:</b> ${invNum}</div>
+        <div><b>Issue Date:</b> ${issueDate}</div>
+        <div><b>Due Date:</b> ${dueDate}</div>
+        ${s0.seller?`<div><b>Served By:</b> ${esc(s0.seller)}</div>`:''}
       </div>
     </div>
   </div>
 
-  <!-- Items table -->
-  <table style="border:1px solid #ccc;margin-bottom:0">
+  <!-- BADGE -->
+  <div style="text-align:center;margin-bottom:10px">
+    <div style="display:inline-block;background:${badgeColor};color:#fff;font-size:${isA5?'14px':'17px'};font-weight:900;padding:5px 40px;border-radius:4px;letter-spacing:3px">${badgeLabel}</div>
+  </div>
+
+  <!-- ITEMS TABLE -->
+  <table style="border:1px solid #ccc;border-radius:4px;overflow:hidden;margin-bottom:0">
     <thead>
-      <tr style="background:#c0392b;color:#fff">
-        <th style="padding:6px 6px;width:28px;text-align:center;font-size:9.5px;font-weight:800;border-right:1px solid rgba(255,255,255,.25)">#</th>
-        <th style="padding:6px 8px;text-align:left;font-size:9.5px;font-weight:800;border-right:1px solid rgba(255,255,255,.25)">DESCRIPTION OF GOODS</th>
-        <th style="padding:6px 6px;width:48px;text-align:center;font-size:9.5px;font-weight:800;border-right:1px solid rgba(255,255,255,.25)">QTY.</th>
-        <th style="padding:6px 6px;width:${isA5?'90px':'110px'};text-align:right;font-size:9.5px;font-weight:800;border-right:1px solid rgba(255,255,255,.25)">RATE</th>
-        <th style="padding:6px 6px;width:56px;text-align:center;font-size:9.5px;font-weight:800;border-right:1px solid rgba(255,255,255,.25)">DISC.</th>
-        <th style="padding:6px 6px;width:${isA5?'95px':'115px'};text-align:right;font-size:9.5px;font-weight:800">AMOUNT</th>
+      <tr style="background:#1a237e;color:#fff">
+        <th style="padding:7px 6px;width:28px;text-align:center;font-size:9.5px;font-weight:800;border-right:1px solid rgba(255,255,255,.2)">Item</th>
+        <th style="padding:7px 8px;text-align:left;font-size:9.5px;font-weight:800;border-right:1px solid rgba(255,255,255,.2)">Description</th>
+        <th style="padding:7px 6px;width:44px;text-align:center;font-size:9.5px;font-weight:800;border-right:1px solid rgba(255,255,255,.2)">Qty</th>
+        <th style="padding:7px 6px;width:${isA5?'85px':'105px'};text-align:right;font-size:9.5px;font-weight:800;border-right:1px solid rgba(255,255,255,.2)">Unit Price</th>
+        <th style="padding:7px 6px;width:50px;text-align:center;font-size:9.5px;font-weight:800;border-right:1px solid rgba(255,255,255,.2)">Discount</th>
+        <th style="padding:7px 6px;width:${isA5?'90px':'110px'};text-align:right;font-size:9.5px;font-weight:800">Total</th>
       </tr>
     </thead>
-    <tbody style="border-bottom:2px solid #c0392b">
-      ${itemRowsFull}${emptyRows}
-    </tbody>
+    <tbody style="border-bottom:2px solid #1a237e">${itemRowsFull}${blank}</tbody>
     <tfoot>
-      <tr style="border-top:2px solid #c0392b">
-        <td colspan="5" style="padding:6px 8px;text-align:right;font-size:12px;font-weight:700;color:#555">TOTAL</td>
-        <td style="padding:6px 8px;text-align:right;font-size:13px;font-weight:800">₦${gt.toLocaleString()}</td>
-      </tr>
+      <!-- Subtotal / Discount / Tax / Total block aligned right -->
       <tr>
-        <td colspan="5" style="padding:5px 8px;text-align:right;font-size:11px;font-weight:600;color:#555">AMOUNT PAID</td>
-        <td style="padding:5px 8px;text-align:right;font-size:12px;font-weight:700">₦${amountPaid.toLocaleString()}</td>
+        <td colspan="3"></td>
+        <td colspan="3" style="padding:0">
+          <table style="width:100%;border-collapse:collapse;border-left:1px solid #ccc">
+            ${totalDisc>0?`
+            <tr style="border-bottom:1px solid #eee">
+              <td style="padding:4px 8px;font-size:11px;color:#555">Subtotal:</td>
+              <td style="padding:4px 8px;text-align:right;font-size:11px">₦${subtotal.toLocaleString()}</td>
+            </tr>
+            <tr style="border-bottom:1px solid #eee">
+              <td style="padding:4px 8px;font-size:11px;color:#d97706">Discount:</td>
+              <td style="padding:4px 8px;text-align:right;font-size:11px;color:#d97706">-₦${totalDisc.toLocaleString()}</td>
+            </tr>`:`
+            <tr style="border-bottom:1px solid #eee">
+              <td style="padding:4px 8px;font-size:11px;color:#555">Subtotal:</td>
+              <td style="padding:4px 8px;text-align:right;font-size:11px">₦${gt.toLocaleString()}</td>
+            </tr>
+            <tr style="border-bottom:1px solid #eee">
+              <td style="padding:4px 8px;font-size:11px;color:#555">Discount:</td>
+              <td style="padding:4px 8px;text-align:right;font-size:11px">₦0</td>
+            </tr>`}
+            <tr style="border-bottom:1px solid #eee">
+              <td style="padding:4px 8px;font-size:11px;color:#555">Tax:</td>
+              <td style="padding:4px 8px;text-align:right;font-size:11px">₦0</td>
+            </tr>
+            <tr style="border-bottom:1px solid #eee;background:#f9f9f9">
+              <td style="padding:5px 8px;font-size:13px;font-weight:800">Total:</td>
+              <td style="padding:5px 8px;text-align:right;font-size:13px;font-weight:900">₦${gt.toLocaleString()}</td>
+            </tr>
+            <tr style="border-bottom:1px solid #eee">
+              <td style="padding:4px 8px;font-size:11px;color:#555">Amount Paid:</td>
+              <td style="padding:4px 8px;text-align:right;font-size:11px;font-weight:700">₦${amountPaid.toLocaleString()}</td>
+            </tr>
+            <tr>
+              <td style="padding:4px 8px;font-size:11px;${balance>0?'color:#c0392b;font-weight:700':'color:#555'}">Balance:</td>
+              <td style="padding:4px 8px;text-align:right;font-size:11px;${balance>0?'color:#c0392b;font-weight:800':''}">₦${balance.toLocaleString()}</td>
+            </tr>
+          </table>
+        </td>
       </tr>
-      ${partRow}
     </tfoot>
   </table>
 
-  <!-- Payment footer -->
-  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;margin-top:12px;margin-bottom:8px;gap:6px">
-    <div>
-      <div style="font-size:8.5px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:.05em;margin-bottom:2px">Payment Type</div>
-      <div style="font-size:${isA5?'13px':'15px'};font-weight:900;color:#1a237e">${payTypeLabel}</div>
-    </div>
-    <div>
-      <div style="font-size:8.5px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:.05em;margin-bottom:2px">Payment Mode</div>
-      <div style="font-size:12px;font-weight:700">${esc(payModeLabel)}</div>
-    </div>
-    <div>
-      <div style="font-size:8.5px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:.05em;margin-bottom:2px">Served By</div>
-      <div style="font-size:13px;font-weight:900">${esc(s0.seller||'')}</div>
-    </div>
+  <!-- PAYMENT METHOD BOX -->
+  <div style="border:1px solid #ccc;border-radius:4px;padding:8px 12px;margin-top:8px;margin-bottom:8px;font-size:${isA5?'10.5px':'11.5px'}">
+    <div style="margin-bottom:3px"><b>Payment Method:</b> ${esc(payModeLabel)}</div>
+    <div style="margin-bottom:3px"><b>Tendered Amount:</b> ₦${(tendered||gt).toLocaleString()}</div>
+    <div><b>Change:</b> ₦${change.toLocaleString()}</div>
   </div>
 
-  <!-- Disclaimer -->
-  <div style="border:1px solid #e5e7eb;padding:6px 10px;margin-bottom:8px">
-    <span style="font-size:10px;color:#c0392b;font-style:italic;font-weight:600">Examine well and receive the above goods in good condition.</span>
-    <span style="font-size:10px;color:#555"> No refund of money or exchange after payment.</span>
-    <div style="font-size:10px;color:#c0392b;font-style:italic;margin-top:2px">...thanks for your patronage</div>
+  <!-- NOTES -->
+  <div style="border:1px solid #e5e7eb;padding:6px 10px;margin-bottom:8px;border-radius:4px">
+    <span style="font-size:10px;color:#c0392b;font-style:italic;font-weight:600">Notes:</span>
+    <span style="font-size:10px;color:#555"> No refunds after payment. Examine goods in good condition. Thanks for your patronage.</span>
+    <div style="font-size:10px;color:#c0392b;font-style:italic;margin-top:2px">Thank you for patronizing Great Chid Electro (Nig.) | Come again!</div>
   </div>
 
-  <!-- Thank you -->
-  <div style="text-align:center;font-size:10.5px;color:#555;font-style:italic;margin-bottom:${isA5?'12px':'18px'}">
-    Thank you for patronizing <b>Great Chid Electro (Nig.)</b> | Come again!
-  </div>
-
-  <!-- Signatures -->
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:30px;margin-bottom:${isA5?'12px':'18px'}">
+  <!-- SIGNATURES -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:30px;margin-bottom:12px">
     <div style="text-align:center">
-      <div style="border-top:1px solid #333;padding-top:4px;font-size:10px;color:#555">Customer Signature</div>
-    </div>
-    <div style="text-align:center">
-      <div style="font-size:${isA5?'26px':'32px'};color:#555;margin-bottom:2px;font-family:serif;opacity:.6;line-height:1">&#x2133;</div>
-      <div style="border-top:1px solid #333;padding-top:4px;font-size:10px;color:#555">Authorized Signature</div>
-    </div>
-  </div>
-
-  <!-- SUPPLIED box + QR -->
-  <div class="sup-box" style="display:flex;align-items:stretch;border:2px solid #16a34a;border-radius:4px;overflow:hidden">
-    <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:${isA5?'8px':'12px'};background:#f0fdf4">
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px">
-        <span style="display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;background:#16a34a;border-radius:3px;color:#fff;font-size:13px">✓</span>
-        <span style="font-size:${isA5?'15px':'18px'};font-weight:900;color:#16a34a;letter-spacing:2px">SUPPLIED</span>
+      <div style="height:50px;border-bottom:1px solid #333;margin-bottom:4px;display:flex;align-items:center;justify-content:center">
+        <span style="font-size:10px;color:#aaa;font-style:italic">[ Sign here for receipt ]</span>
       </div>
-      <div style="font-size:10px;color:#16a34a;font-style:italic">Goods collected by customer.</div>
+      <div style="font-size:10px;color:#555">Customer Signature</div>
     </div>
-    <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;padding:8px 12px;border-left:2px solid #16a34a;background:#fff">
-      <img id="qrimg" src="${qrUrl}" width="${isA5?'65':'80'}" height="${isA5?'65':'80'}" alt="QR" style="display:block;margin-bottom:3px">
-      <div style="font-size:8px;color:#555;font-weight:600;text-align:center">SCAN ME</div>
-      <div style="font-size:7px;color:#999;text-align:center">greatchidelectro.com</div>
+    <div style="text-align:center">
+      <div style="height:50px;border-bottom:1px solid #333;margin-bottom:4px;display:flex;align-items:center;justify-content:center">
+        ${sigDataUrl?`<img src="${sigDataUrl}" style="max-height:46px;max-width:150px;object-fit:contain" />`:''}
+      </div>
+      <div style="font-size:10px;color:#555">Authorized Signature</div>
     </div>
   </div>
 
+  <!-- SUPPLIED / NOT YET SUPPLIED BOX + QR -->
+  <div style="display:flex;align-items:stretch;border:2px solid ${isPending?'#f59e0b':'#16a34a'};border-radius:4px;overflow:hidden">
+    <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:${isA5?'8px':'12px'};background:${isPending?'#fffbeb':'#f0fdf4'}">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px">
+        ${isPending
+          ?`<span style="display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;background:#f59e0b;border-radius:3px;color:#fff;font-size:14px">⏳</span>
+            <span style="font-size:${isA5?'14px':'17px'};font-weight:900;color:#92400e;letter-spacing:2px">NOT YET SUPPLIED</span>`
+          :`<span style="display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;background:#16a34a;border-radius:3px;color:#fff;font-size:14px">✓</span>
+            <span style="font-size:${isA5?'14px':'17px'};font-weight:900;color:#16a34a;letter-spacing:2px">SUPPLIED</span>`}
+      </div>
+      <div style="font-size:10px;color:${isPending?'#92400e':'#16a34a'};font-style:italic">
+        ${isPending?'Awaiting supply — stock not yet deducted.':'Goods collected by customer.'}
+      </div>
+      ${!isPending&&suppliedDate?`<div style="font-size:9.5px;color:#16a34a;margin-top:2px">Supplied Date: ${suppliedDate}</div>`:''}
+    </div>
+    <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;padding:8px 12px;border-left:2px solid ${isPending?'#f59e0b':'#16a34a'};background:#fff">
+      <img id="qrimg" src="${qrUrl}" width="${isA5?'65':'80'}" height="${isA5?'65':'80'}" alt="QR" style="display:block;margin-bottom:3px">
+      <div style="font-size:8px;color:#555;font-weight:600;text-align:center">scan me</div>
+    </div>
   </div>
-  <script>
+
+  <sc` + `ript>
     const img=document.getElementById('qrimg');
     function go(){window.print();}
     if(img&&img.complete)setTimeout(go,500);
     else if(img){img.onload=()=>setTimeout(go,500);img.onerror=()=>setTimeout(go,500);}
     else setTimeout(go,500);
-  <\/script>
-  </body></html>`;
+  <\/sc` + `ript>
+  </div></body></html>`;
 }
-
-
-function printSaleInvoice(invNum) {
-  _showPrintModeModal(invNum);
-}
-
-function reprintSaleInvoice(invNum) {
-  showInvoiceViewModal(invNum);
-}
-
-function showInvoiceViewModal(invNum) {
-  const items = Object.values(STATE.sales||{}).filter(s=>s.invoiceNum===invNum);
-  if (!items.length) { showToast('Invoice not found.','error'); return; }
-  const first = items[0];
-  const custName = first.custName || first.printName || 'Walk-in customer';
-  const date = first.date || '—';
-  const seller = first.seller || '—';
-  const payment = first.payment || 'cash';
-  const payMode = first.payMode || first.payment || 'cash';
-  const bankName = first.bankName || first.posName || '';
-  const splitPayment = first.splitPayment || null;
-  const partPayment = first.partPayment || 0;
-  const discount = items.reduce((a,s)=>a+(s.discount||0),0);
-  const grandTotal = items.reduce((a,s)=>a+(s.total||0),0);
-  const grossProfit = items.reduce((a,s)=>a+(s.profit||0),0);
-
-  // Payment label
-  let payLabel = '';
-  if (payment==='credit') payLabel = '<span style="color:#dc2626;font-weight:700">Credit</span>';
-  else if (payment==='part') payLabel = `<span style="color:#d97706;font-weight:700">Part payment</span>`;
-  else if (payment==='split') payLabel = '<span style="color:#7c3aed;font-weight:700">Split payment</span>';
-  else payLabel = '<span style="color:#15803d;font-weight:700">Fully paid</span>';
-
-  let modeStr = '';
-  if (payMode==='split' && splitPayment) {
-    modeStr = `${splitPayment.mode1}${splitPayment.bank1?' → '+splitPayment.bank1:''}: ${fmt(splitPayment.amt1||0)} + ${splitPayment.mode2}${splitPayment.bank2?' → '+splitPayment.bank2:''}: ${fmt(splitPayment.amt2||0)}`;
-  } else if (payMode==='transfer' && bankName) {
-    modeStr = `Transfer → ${bankName}`;
-  } else if (payMode==='pos' && bankName) {
-    modeStr = `POS (${bankName})`;
-  } else {
-    modeStr = payMode ? (payMode.charAt(0).toUpperCase()+payMode.slice(1)) : 'Cash';
-  }
-
-  const itemRows = items.map((s,i) => {
-    const disc = s.discount||0;
-    return `<tr style="border-bottom:1px solid #f0f0f0">
-      <td style="padding:8px 10px;color:#666;font-size:13px">${i+1}</td>
-      <td style="padding:8px 10px;font-weight:600;font-size:13px">${esc(s.name||'')}</td>
-      <td style="padding:8px 10px;text-align:center;font-size:13px">${s.qty||1}</td>
-      <td style="padding:8px 10px;text-align:right;font-size:13px">${fmt(s.salePrice||s.unitPrice||0)}</td>
-      <td style="padding:8px 10px;text-align:right;font-size:13px;color:${disc>0?'#d97706':'#999'}">${disc>0?'-'+fmt(disc):'—'}</td>
-      <td style="padding:8px 10px;text-align:right;font-weight:700;font-size:13px">${fmt(s.total||0)}</td>
-      <td style="padding:8px 10px;text-align:right;font-size:12px;color:#16a34a">${fmt(s.profit||0)}</td>
-    </tr>`;
-  }).join('');
-
-  const existing = document.getElementById('_inv_view_overlay');
-  if (existing) existing.remove();
-
-  const overlay = document.createElement('div');
-  overlay.id = '_inv_view_overlay';
-  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:99999;display:flex;align-items:center;justify-content:center;padding:16px;overflow-y:auto';
-  overlay.innerHTML = `
-    <div style="background:#fff;border-radius:16px;width:100%;max-width:760px;max-height:92vh;overflow-y:auto;box-shadow:0 8px 40px rgba(0,0,0,0.25)">
-      <!-- Header -->
-      <div style="padding:18px 24px 14px;border-bottom:1px solid #f0f0f0;display:flex;justify-content:space-between;align-items:flex-start;position:sticky;top:0;background:#fff;border-radius:16px 16px 0 0;z-index:1">
-        <div>
-          <div style="font-size:18px;font-weight:800;color:#111">Invoice #${esc(invNum)}</div>
-          <div style="font-size:13px;color:#666;margin-top:2px">${date} · ${esc(custName)} · Served by: ${esc(seller)}</div>
-        </div>
-        <button onclick="document.getElementById('_inv_view_overlay').remove()" style="background:none;border:1px solid #e5e7eb;border-radius:8px;padding:6px 10px;cursor:pointer;font-size:16px;color:#666;line-height:1">✕</button>
-      </div>
-
-      <!-- Items table -->
-      <div style="padding:0 24px">
-        <table style="width:100%;border-collapse:collapse;margin-top:4px">
-          <thead>
-            <tr style="background:#f9fafb">
-              <th style="padding:8px 10px;text-align:left;font-size:11px;font-weight:700;color:#9ca3af;text-transform:uppercase">#</th>
-              <th style="padding:8px 10px;text-align:left;font-size:11px;font-weight:700;color:#9ca3af;text-transform:uppercase">ITEM</th>
-              <th style="padding:8px 10px;text-align:center;font-size:11px;font-weight:700;color:#9ca3af;text-transform:uppercase">QTY</th>
-              <th style="padding:8px 10px;text-align:right;font-size:11px;font-weight:700;color:#9ca3af;text-transform:uppercase">PRICE</th>
-              <th style="padding:8px 10px;text-align:right;font-size:11px;font-weight:700;color:#9ca3af;text-transform:uppercase">DISCOUNT</th>
-              <th style="padding:8px 10px;text-align:right;font-size:11px;font-weight:700;color:#9ca3af;text-transform:uppercase">TOTAL</th>
-              <th style="padding:8px 10px;text-align:right;font-size:11px;font-weight:700;color:#9ca3af;text-transform:uppercase">PROFIT</th>
-            </tr>
-          </thead>
-          <tbody>${itemRows}</tbody>
-        </table>
-      </div>
-
-      <!-- Payment summary -->
-      <div style="padding:14px 24px 0;display:grid;grid-template-columns:1fr 1fr;gap:16px">
-        <div style="background:#f9fafb;border-radius:10px;padding:14px 16px;font-size:13px">
-          <div style="color:#666;margin-bottom:6px">Payment type: ${payLabel}</div>
-          <div style="color:#666;margin-bottom:6px">Payment mode: <b>${modeStr}</b></div>
-          ${payment==='part'?`<div style="color:#666">Paid now: <b style="color:#d97706">${fmt(partPayment)}</b></div>`:''}
-          ${payment==='credit'?`<div style="color:#dc2626;font-size:12px;margin-top:4px">⚠️ Not yet collected</div>`:''}
-        </div>
-        <div style="background:#f9fafb;border-radius:10px;padding:14px 16px;text-align:right">
-          ${discount>0?`<div style="font-size:13px;color:#d97706;margin-bottom:4px">Discount: -${fmt(discount)}</div>`:''}
-          <div style="font-size:18px;font-weight:800;color:#15803d">Grand total: ${fmt(grandTotal)}</div>
-          <div style="font-size:14px;font-weight:700;color:#7c3aed;margin-top:4px">Gross profit: ${fmt(grossProfit)}</div>
-        </div>
-      </div>
-
-      <!-- Action buttons -->
-      <div style="padding:16px 24px 20px;display:flex;gap:8px;flex-wrap:wrap;border-top:1px solid #f0f0f0;margin-top:14px">
-        <button onclick="document.getElementById('_inv_view_overlay').remove();_showPrintModeModal('${invNum}')" style="background:#1a237e;color:#fff;border:none;border-radius:8px;padding:10px 18px;cursor:pointer;font-size:13px;font-weight:600;display:flex;align-items:center;gap:6px">🖨️ Print invoice</button>
-        <button onclick="_shareInvoiceWhatsApp('${invNum}')" style="background:#25d366;color:#fff;border:none;border-radius:8px;padding:10px 18px;cursor:pointer;font-size:13px;font-weight:600;display:flex;align-items:center;gap:6px">📱 Share via WhatsApp</button>
-        <button onclick="document.getElementById('_inv_view_overlay').remove();showEditInvoiceModal('${invNum}')" style="background:#f9fafb;color:#374151;border:1px solid #e5e7eb;border-radius:8px;padding:10px 18px;cursor:pointer;font-size:13px;font-weight:600">✏️ Edit invoice</button>
-        <button onclick="document.getElementById('_inv_view_overlay').remove();showAddNoteModal('${invNum}')" style="background:#f9fafb;color:#374151;border:1px solid #e5e7eb;border-radius:8px;padding:10px 18px;cursor:pointer;font-size:13px;font-weight:600">📝 Add note</button>
-        <button onclick="document.getElementById('_inv_view_overlay').remove();showAddCommissionModal('${invNum}')" style="background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:8px;padding:10px 18px;cursor:pointer;font-size:13px;font-weight:600">🎯 Add Commission</button>
-      </div>
-    </div>`;
-
-  document.body.appendChild(overlay);
-  overlay.addEventListener('click', e=>{ if(e.target===overlay) overlay.remove(); });
-}
-
-function _shareInvoiceWhatsApp(invNum) {
-  const items = Object.values(STATE.sales||{}).filter(s=>s.invoiceNum===invNum);
-  if (!items.length) return;
-  const first = items[0];
-  const total = items.reduce((a,s)=>a+(s.total||0),0);
-  const custName = first.custName || 'Customer';
-  const bizName = (STATE.settings?.bizName || 'Great Chid Electro').split('/')[0].trim();
-  const itemList = items.map((s,i)=>`${i+1}. ${s.name} x${s.qty||1} = ₦${(s.total||0).toLocaleString()}`).join('\n');
-  const msg = `🧾 *${bizName}*\n`+
-    `Invoice #${invNum}\n`+
-    `Date: ${first.date||new Date().toLocaleDateString()}\n`+
-    `Customer: ${custName}\n\n`+
-    `${itemList}\n\n`+
-    `*TOTAL: ₦${total.toLocaleString()}*\n`+
-    `Payment: ${first.payment||'Cash'}\n\n`+
-    `Thank you for your business! 🙏`;
-  window.open('https://wa.me/?text='+encodeURIComponent(msg),'_blank');
-}
-
-function showAddNoteModal(invNum) {
-  showModal(`📝 Add Note — Invoice #${invNum}`,`<div class="form-group"><label>Note</label><textarea class="form-input" id="inv-note-text" rows="3" placeholder="Add a note to this invoice..."></textarea></div>`,[
-    {label:'Cancel',action:'close',style:''},
-    {label:'Save Note',action:`saveInvoiceNote('${invNum}')`,style:'btn-primary'}]);
-}
-
-async function saveInvoiceNote(invNum){
-  const note=document.getElementById('inv-note-text')?.value.trim();
-  if(!note)return;
-  const items=Object.values(STATE.sales||{}).filter(s=>s.invoiceNum===invNum);
-  for(const s of items){const upd={...s,note};await fsSave(COLS.SALES,s._id,upd);STATE.sales[s._id]=upd;}
-  closeModal();showToast('Note saved.','success');
-  logActivity('Invoice note',`Note added to Invoice #${invNum}`,note.slice(0,40));
-}
-
-function showAddCommissionModal(invNum){
-  showModal(`🎯 Add Commission — Invoice #${invNum}`,`<div class="form-grid c2">
-    <div class="form-group"><label>Customer (recipient)</label><input class="form-input" id="comm-cust" placeholder="Customer name receiving commission"></div>
-    <div class="form-group"><label>Commission Amount (₦)</label><input class="form-input" id="comm-amt" type="number" min="0" placeholder="0"></div>
-    <div class="form-group" style="grid-column:1/-1"><label>Note</label><input class="form-input" id="comm-note" placeholder="e.g. panel doors"></div>
-  </div>`,[{label:'Cancel',action:'close',style:''},{label:'Add Commission',action:`saveCommission('${invNum}')`,style:'btn-primary'}]);
-}
-
-async function saveCommission(invNum){
-  const custName=document.getElementById('comm-cust')?.value.trim();
-  const amt=parseFloat(document.getElementById('comm-amt')?.value)||0;
-  const note=document.getElementById('comm-note')?.value.trim()||'';
-  if(!custName||amt<=0){showToast('Enter customer and amount.','error');return;}
-  const now=new Date();const date=now.toLocaleDateString();const month=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
-  // Find customer
-  const cust=Object.values(STATE.customers||{}).find(c=>(c.name||'').toLowerCase()===custName.toLowerCase());
-  const custId=cust?._id||cust?.id||null;
-  const cfId=uid();
-  const cf={id:cfId,type:'in',cat:'Commission',commType:'earned',desc:`Commission earned — Invoice #${invNum}${note?' ('+note+')':''}`,amount:amt,custId,custName,invoiceNum:invNum,date,month,by:STATE.user?.name};
-  setSyncStatus('saving');
-  try{
-    await fsSave(COLS.CASHFLOW,cfId,cf);
-    if(!STATE.cashflow)STATE.cashflow={};STATE.cashflow[cfId]={...cf,_id:cfId};
-    closeModal();setSyncStatus('synced');showToast(`Commission of ${fmt(amt)} added for ${custName}.`,'success');
-    logActivity('Commission added',`${fmt(amt)} commission for ${custName} — Invoice #${invNum}`,note);
-  }catch(e){setSyncStatus('error');showToast('Failed.','error');}
-}
-
-function _showPrintModeModal(invNum) {
-  // Remove any existing modal first
-  const existing = document.getElementById('_print_mode_overlay');
-  if (existing) existing.remove();
-
-  const overlay = document.createElement('div');
-  overlay.id = '_print_mode_overlay';
-  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:99999;display:flex;align-items:center;justify-content:center;padding:16px';
-  overlay.innerHTML = `
-    <div style="background:#fff;border-radius:16px;padding:28px 32px;width:100%;max-width:420px;box-shadow:0 8px 40px rgba(0,0,0,0.25)">
-      <div style="font-size:17px;font-weight:700;margin-bottom:6px">🖨️ Print Invoice</div>
-      <div style="font-size:13px;color:#6b7280;margin-bottom:20px">Select print format for Invoice <b>#${invNum}</b></div>
-      <div style="display:flex;flex-direction:column;gap:10px">
-        <button onclick="_doPrint('${invNum}','a4')" style="display:flex;align-items:center;gap:14px;padding:14px 18px;border:2px solid #e5e7eb;border-radius:10px;background:#fff;cursor:pointer;text-align:left;transition:border-color .15s" onmouseover="this.style.borderColor='#1a237e'" onmouseout="this.style.borderColor='#e5e7eb'">
-          <span style="font-size:28px">📄</span>
-          <div>
-            <div style="font-size:14px;font-weight:700;color:#111">A4 &nbsp;<span style="font-size:11px;font-weight:400;color:#6b7280">210 × 297 mm</span></div>
-            <div style="font-size:12px;color:#6b7280;margin-top:2px">Standard full-page — 15 item rows</div>
-          </div>
-        </button>
-        <button onclick="_doPrint('${invNum}','a5')" style="display:flex;align-items:center;gap:14px;padding:14px 18px;border:2px solid #e5e7eb;border-radius:10px;background:#fff;cursor:pointer;text-align:left;transition:border-color .15s" onmouseover="this.style.borderColor='#1a237e'" onmouseout="this.style.borderColor='#e5e7eb'">
-          <span style="font-size:28px">📋</span>
-          <div>
-            <div style="font-size:14px;font-weight:700;color:#111">A5 &nbsp;<span style="font-size:11px;font-weight:400;color:#6b7280">148 × 210 mm</span></div>
-            <div style="font-size:12px;color:#6b7280;margin-top:2px">Half-page — 10 item rows, compact</div>
-          </div>
-        </button>
-        <button onclick="_doPrint('${invNum}','80mm')" style="display:flex;align-items:center;gap:14px;padding:14px 18px;border:2px solid #e5e7eb;border-radius:10px;background:#fff;cursor:pointer;text-align:left;transition:border-color .15s" onmouseover="this.style.borderColor='#1a237e'" onmouseout="this.style.borderColor='#e5e7eb'">
-          <span style="font-size:28px">🧾</span>
-          <div>
-            <div style="font-size:14px;font-weight:700;color:#111">80mm &nbsp;<span style="font-size:11px;font-weight:400;color:#6b7280">Thermal receipt</span></div>
-            <div style="font-size:12px;color:#6b7280;margin-top:2px">POS receipt printer — monospace font</div>
-          </div>
-        </button>
-      </div>
-      <button onclick="document.getElementById('_print_mode_overlay').remove()" style="width:100%;margin-top:16px;padding:10px;border:1px solid #e5e7eb;border-radius:8px;background:#f9fafb;cursor:pointer;font-size:13px;color:#6b7280">Cancel</button>
-    </div>`;
-  document.body.appendChild(overlay);
-  // Close on backdrop click
-  overlay.addEventListener('click', e => { if(e.target===overlay) overlay.remove(); });
-}
-
 function _doPrint(invNum, mode) {
   const overlay = document.getElementById('_print_mode_overlay');
   if (overlay) overlay.remove();
