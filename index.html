@@ -6951,47 +6951,228 @@ function renderCustomerOverview() {
 function renderInvValuation() {
   const el=document.getElementById('invvaluation-content'); if(!el)return;
   const filter=window._invValFilter||'all';
+  const searchTerm=(window._invValSearch||'').toLowerCase();
+
   const items=Object.values(STATE.inventory||{}).map(i=>{
-    const cost=i.costPrice||i.cost||0; const sell=i.sellPrice||i.sell||0;
-    const costVal=(i.qty||0)*cost; const sellVal=(i.qty||0)*sell;
-    const potProfit=sellVal-costVal; const margin=sellVal>0?Math.round(potProfit/sellVal*100):0;
-    const status=i.qty<=0?'out':i.qty<=(i.minQty||5)?'low':i.qty>=5*(i.minQty||5)?'over':'ok';
-    return {...i,costVal,sellVal,potProfit,margin,status,cost,sell};
+    const cost=i.costPrice||i.cost||0;
+    const sell=i.sellPrice||i.sell||0;
+    const qty=i.qty||0;
+    const costVal=qty*cost; const sellVal=qty*sell;
+    const potProfit=sellVal-costVal;
+    const margin=sellVal>0?Math.round(potProfit/sellVal*100):0;
+    const status=qty<=0?'out':qty<=(i.minQty||5)?'low':qty>=5*(i.minQty||5)?'over':'ok';
+    return{...i,cost,sell,qty,costVal,sellVal,potProfit,margin,status};
   });
-  const filtered=filter==='all'?items:items.filter(i=>i.status===filter);
+
+  // KPI totals (always from ALL items)
+  const totalSKUs=items.length;
+  const totalUnits=items.reduce((a,i)=>a+i.qty,0);
   const totalCostVal=items.reduce((a,i)=>a+i.costVal,0);
   const totalSellVal=items.reduce((a,i)=>a+i.sellVal,0);
   const totalProfit=totalSellVal-totalCostVal;
   const totalMargin=totalSellVal>0?Math.round(totalProfit/totalSellVal*100):0;
   const outCount=items.filter(i=>i.status==='out').length;
   const lowCount=items.filter(i=>i.status==='low').length;
-  const catMap={};
-  items.forEach(i=>{const cat=i.cat||'Uncategorized';if(!catMap[cat])catMap[cat]={cat,costVal:0,sellVal:0,skus:0};catMap[cat].costVal+=i.costVal;catMap[cat].sellVal+=i.sellVal;catMap[cat].skus++;});
-  const catArr=Object.values(catMap).sort((a,b)=>b.sellVal-a.sellVal).slice(0,6);
-  const maxSell=catArr[0]?.sellVal||1;
-  const barColors=['#6366f1','#8b5cf6','#06b6d4','#10b981','#f59e0b','#ef4444'];
-  const catBars=catArr.map((c,i)=>{const pct=Math.round(c.sellVal/maxSell*100);return`<div style="margin-bottom:9px"><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px"><span style="font-weight:600">${c.cat} <span style="color:#9ca3af;font-weight:400">(${c.skus} SKUs)</span></span><span style="color:#6b7280">${fmt(c.sellVal)}</span></div><div style="background:var(--surface);border-radius:6px;height:10px;overflow:hidden"><div style="width:${pct}%;height:100%;background:${barColors[i%barColors.length]};border-radius:6px"></div></div></div>`;}).join('');
-  const statusBadges={out:'<span style="background:#fee2e2;color:#dc2626;padding:2px 7px;border-radius:20px;font-size:10px;font-weight:700">OUT</span>',low:'<span style="background:#fef3c7;color:#92400e;padding:2px 7px;border-radius:20px;font-size:10px;font-weight:700">LOW</span>',over:'<span style="background:#eff6ff;color:#1d4ed8;padding:2px 7px;border-radius:20px;font-size:10px;font-weight:700">OVER</span>',ok:'<span style="background:#d1fae5;color:#065f46;padding:2px 7px;border-radius:20px;font-size:10px;font-weight:700">OK</span>'};
-  const rows=filtered.map(i=>`<tr><td><b>${esc(i.name)}</b></td><td style="color:#6b7280;font-size:12px">${esc(i.cat||'—')}</td><td style="text-align:center">${i.qty||0}</td><td class="td-right">${fmt(i.cost)}</td><td class="td-right">${fmt(i.sell)}</td><td class="td-right" style="color:#0ea5e9">${fmt(i.costVal)}</td><td class="td-right" style="color:#6366f1">${fmt(i.sellVal)}</td><td class="td-right" style="color:#10b981;font-weight:700">${fmt(i.potProfit)}</td><td style="text-align:center"><span style="font-weight:700;color:${i.margin>=30?'#15803d':i.margin>=15?'#92400e':'#dc2626'}">${i.margin}%</span></td><td>${statusBadges[i.status]||''}</td></tr>`).join('');
-  el.innerHTML=`
-    <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:1.25rem">
-      ${kpiCard('info','Total SKUs',items.length,'In inventory')}
-      ${kpiCard('danger','Cost Value',fmt(totalCostVal),'At purchase price')}
-      ${kpiCard('brand','Retail Value',fmt(totalSellVal),'At sell price')}
-      ${kpiCard('success','Potential Profit',fmt(totalProfit),totalMargin+'% avg margin')}
-    </div>
-    ${catBars?`<div class="card" style="padding:1rem;margin-bottom:1.25rem"><div class="sec-title" style="margin-bottom:.75rem">Value by Category (Retail)</div>${catBars}</div>`:''}
-    <div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap">
-      ${['all','low','out','over'].map(f=>`<button class="btn btn-sm ${filter===f?'btn-primary':''}" onclick="window._invValFilter='${f}';renderInvValuation()">${f==='all'?'All Items':f==='low'?`Low (${lowCount})`:f==='out'?`Out (${outCount})`:'Overstocked'}</button>`).join('')}
-      <span style="align-self:center;font-size:12px;color:var(--text3)">Showing ${filtered.length} items</span>
-    </div>
-    <div class="tbl-wrap"><table>
-      <thead><tr><th>Item</th><th>Category</th><th style="text-align:center">Qty</th><th class="td-right">Cost/Unit</th><th class="td-right">Sell/Unit</th><th class="td-right">Cost Value</th><th class="td-right">Retail Value</th><th class="td-right">Pot. Profit</th><th style="text-align:center">Margin</th><th>Status</th></tr></thead>
-      <tbody>${rows||'<tr><td colspan="10"><div class="empty-state"><div class="empty-state-icon">📦</div><div>No items found</div></div></td></tr>'}</tbody>
-      <tfoot><tr style="font-weight:700;background:var(--surface)"><td colspan="5" style="text-align:right;padding:8px">TOTALS</td><td class="td-right" style="color:#0ea5e9">${fmt(filtered.reduce((a,i)=>a+i.costVal,0))}</td><td class="td-right" style="color:#6366f1">${fmt(filtered.reduce((a,i)=>a+i.sellVal,0))}</td><td class="td-right" style="color:#10b981">${fmt(filtered.reduce((a,i)=>a+i.potProfit,0))}</td><td colspan="2"></td></tr></tfoot>
-    </table></div>`;
-}
+  const overCount=items.filter(i=>i.status==='over').length;
 
+  // Category bars
+  const catMap={};
+  items.forEach(i=>{
+    const cat=i.cat||'Uncategorized';
+    if(!catMap[cat])catMap[cat]={cat,costVal:0,sellVal:0,skus:0};
+    catMap[cat].costVal+=i.costVal; catMap[cat].sellVal+=i.sellVal; catMap[cat].skus++;
+  });
+  const catArr=Object.values(catMap).sort((a,b)=>b.sellVal-a.sellVal);
+  const maxSell=catArr[0]?.sellVal||1;
+  const barColors=['#6366f1','#8b5cf6','#06b6d4','#10b981','#f59e0b','#ef4444','#ec4899','#14b8a6'];
+  const catBars=catArr.map((c,i)=>{
+    const pct=Math.round(c.sellVal/maxSell*100);
+    return`<div style="margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px">
+        <span style="font-weight:700;text-transform:uppercase;letter-spacing:.03em">${esc(c.cat)} <span style="color:var(--text3);font-weight:400">(${c.skus} SKUs)</span></span>
+        <span style="color:${barColors[i%barColors.length]};font-weight:700">${fmt(c.sellVal)}</span>
+      </div>
+      <div style="background:var(--border);border-radius:6px;height:10px;overflow:hidden">
+        <div style="width:${pct}%;height:100%;background:${barColors[i%barColors.length]};border-radius:6px"></div>
+      </div>
+    </div>`;
+  }).join('');
+
+  // Alerts lists
+  const outItems=items.filter(i=>i.status==='out').map(i=>`${esc(i.name)}`).join(', ');
+  const lowItems=items.filter(i=>i.status==='low').map(i=>`${esc(i.name)} (${i.qty} left)`).join(', ');
+
+  // Filtered + searched items for table
+  let tableItems=items;
+  if(filter==='low') tableItems=items.filter(i=>i.status==='low');
+  else if(filter==='out') tableItems=items.filter(i=>i.status==='out');
+  else if(filter==='over') tableItems=items.filter(i=>i.status==='over');
+  if(searchTerm) tableItems=tableItems.filter(i=>(i.name||'').toLowerCase().includes(searchTerm)||(i.cat||'').toLowerCase().includes(searchTerm));
+
+  const statusBadges={
+    out:'<span class="chip chip-out">OUT</span>',
+    low:'<span class="chip chip-low">LOW</span>',
+    over:'<span style="background:#eff6ff;color:#1d4ed8;padding:2px 8px;border-radius:20px;font-size:10px;font-weight:700">OVER</span>',
+    ok:'<span class="chip chip-ok">OK</span>'
+  };
+
+  const rows=tableItems.map(i=>`<tr>
+    <td><b>${esc(i.name)}</b></td>
+    <td style="font-size:12px;color:var(--text3)">${esc(i.cat||'—')}</td>
+    <td style="text-align:center;font-weight:700">${i.qty}</td>
+    <td class="td-right" style="text-decoration:line-through;color:var(--text3)">${fmt(i.cost)}</td>
+    <td class="td-right" style="text-decoration:line-through;color:var(--text3)">${fmt(i.sell)}</td>
+    <td class="td-right" style="color:#0ea5e9;font-weight:600">${fmt(i.costVal)}</td>
+    <td class="td-right" style="color:#6366f1;font-weight:600">${fmt(i.sellVal)}</td>
+    <td class="td-right" style="color:var(--success);font-weight:700">${fmt(i.potProfit)}</td>
+    <td style="text-align:center;font-weight:700;color:${i.margin>=30?'#15803d':i.margin>=15?'#92400e':'#dc2626'}">${i.margin}%</td>
+    <td>${statusBadges[i.status]||''}</td>
+  </tr>`).join('');
+
+  const filtCostVal=tableItems.reduce((a,i)=>a+i.costVal,0);
+  const filtSellVal=tableItems.reduce((a,i)=>a+i.sellVal,0);
+  const filtProfit=tableItems.reduce((a,i)=>a+i.potProfit,0);
+
+  el.innerHTML=`
+    <!-- 6 KPI cards matching v1 -->
+    <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:1rem">
+      <div class="kpi-card" style="border-left:3px solid #8b5cf6">
+        <div class="kpi-label" style="color:#8b5cf6">📦 TOTAL SKUS</div>
+        <div class="kpi-value" style="font-size:26px;font-weight:800">${totalSKUs.toLocaleString()}</div>
+        <div class="kpi-sub">In inventory</div>
+      </div>
+      <div class="kpi-card" style="border-left:3px solid var(--info)">
+        <div class="kpi-label" style="color:var(--info)">🔢 TOTAL UNITS</div>
+        <div class="kpi-value" style="font-size:22px;font-weight:800;color:var(--info)">${totalUnits.toLocaleString()}</div>
+        <div class="kpi-sub">All items combined</div>
+      </div>
+      <div class="kpi-card" style="border-left:3px solid var(--danger)">
+        <div class="kpi-label" style="color:var(--danger)">💰 STOCK VALUE (COST)</div>
+        <div class="kpi-value" style="font-size:18px;font-weight:800;color:var(--danger)">${fmt(totalCostVal)}</div>
+        <div class="kpi-sub">At purchase price</div>
+      </div>
+      <div class="kpi-card" style="border-left:3px solid var(--brand)">
+        <div class="kpi-label" style="color:var(--brand)">🏷️ STOCK VALUE (SELL)</div>
+        <div class="kpi-value" style="font-size:18px;font-weight:800;color:var(--brand)">${fmt(totalSellVal)}</div>
+        <div class="kpi-sub">At sell price</div>
+      </div>
+      <div class="kpi-card" style="border-left:3px solid var(--success)">
+        <div class="kpi-label" style="color:var(--success)">📈 POTENTIAL PROFIT</div>
+        <div class="kpi-value" style="font-size:18px;font-weight:800;color:var(--success)">${fmt(totalProfit)}</div>
+        <div class="kpi-sub">If all sold at sell price</div>
+      </div>
+      <div class="kpi-card" style="border-left:3px solid #06b6d4">
+        <div class="kpi-label" style="color:#06b6d4">📊 AVG MARGIN</div>
+        <div class="kpi-value" style="font-size:26px;font-weight:800;color:#06b6d4">${totalMargin}%</div>
+        <div class="kpi-sub">Across all stock</div>
+      </div>
+    </div>
+
+    <!-- Out of Stock + Low Stock alert cards -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:1.25rem">
+      <div style="background:#fff5f5;border:1.5px solid #fca5a5;border-left:4px solid var(--danger);border-radius:var(--radius-lg);padding:14px 16px">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+          <span style="color:var(--danger);font-size:18px">🔴</span>
+          <span style="font-size:12px;font-weight:700;text-transform:uppercase;color:var(--danger);letter-spacing:.05em">OUT OF STOCK ⚠️</span>
+        </div>
+        <div style="font-size:32px;font-weight:800;color:var(--danger);margin-bottom:6px">${outCount}</div>
+        ${outCount>0?`<div style="font-size:11px;color:var(--danger);line-height:1.6">${outItems}</div>`:'<div style="font-size:12px;color:var(--text3)">All items in stock ✓</div>'}
+      </div>
+      <div style="background:#fffbeb;border:1.5px solid #fcd34d;border-left:4px solid var(--warning);border-radius:var(--radius-lg);padding:14px 16px">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+          <span style="color:var(--warning);font-size:18px">🟡</span>
+          <span style="font-size:12px;font-weight:700;text-transform:uppercase;color:var(--warning);letter-spacing:.05em">LOW STOCK ⚠️</span>
+        </div>
+        <div style="font-size:32px;font-weight:800;color:var(--warning);margin-bottom:6px">${lowCount}</div>
+        ${lowCount>0?`<div style="font-size:11px;color:#92400e;line-height:1.6">${lowItems}</div>`:'<div style="font-size:12px;color:var(--text3)">No low stock items ✓</div>'}
+      </div>
+    </div>
+
+    <!-- Two-column: Category bars + Profit summary -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:1.25rem">
+      <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px 16px">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--brand);margin-bottom:14px;display:flex;align-items:center;gap:6px">
+          <span style="width:3px;height:14px;background:var(--brand);border-radius:2px;display:inline-block"></span>
+          📂 STOCK VALUE BY CATEGORY
+        </div>
+        ${catBars||'<div style="color:var(--text3);text-align:center;padding:20px">No items yet</div>'}
+      </div>
+      <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px 16px">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--success);margin-bottom:14px;display:flex;align-items:center;gap:6px">
+          <span style="width:3px;height:14px;background:var(--success);border-radius:2px;display:inline-block"></span>
+          💹 PROFIT SUMMARY
+        </div>
+        <div style="display:flex;flex-direction:column;gap:10px">
+          <div style="display:flex;justify-content:space-between;padding:10px 14px;background:var(--surface);border-radius:var(--radius)">
+            <span style="font-size:13px;color:var(--text2)">Cost invested:</span>
+            <b style="color:var(--danger)">${fmt(totalCostVal)}</b>
+          </div>
+          <div style="display:flex;justify-content:space-between;padding:10px 14px;background:var(--surface);border-radius:var(--radius)">
+            <span style="font-size:13px;color:var(--text2)">If all sold at sell price:</span>
+            <b style="color:var(--brand)">${fmt(totalSellVal)}</b>
+          </div>
+          <div style="display:flex;justify-content:space-between;padding:12px 14px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:var(--radius)">
+            <span style="font-size:13px;font-weight:700;color:var(--success)">Potential profit:</span>
+            <b style="color:var(--success);font-size:16px">${fmt(totalProfit)}</b>
+          </div>
+          <div style="display:flex;justify-content:space-between;padding:10px 14px;background:var(--surface);border-radius:var(--radius)">
+            <span style="font-size:13px;color:var(--text2)">Average margin:</span>
+            <b style="color:#06b6d4">${totalMargin}%</b>
+          </div>
+          <div style="display:flex;justify-content:space-between;padding:10px 14px;background:var(--surface);border-radius:var(--radius)">
+            <span style="font-size:13px;color:var(--text2)">Out of stock items:</span>
+            <b style="color:${outCount>0?'var(--danger)':'var(--success)'}">${outCount}</b>
+          </div>
+          <div style="display:flex;justify-content:space-between;padding:10px 14px;background:var(--surface);border-radius:var(--radius)">
+            <span style="font-size:13px;color:var(--text2)">Low stock items:</span>
+            <b style="color:${lowCount>0?'var(--warning)':'var(--success)'}">${lowCount}</b>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Item Valuation Table -->
+    <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px 16px">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:12px">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--brand);display:flex;align-items:center;gap:6px">
+          <span style="width:3px;height:14px;background:var(--brand);border-radius:2px;display:inline-block"></span>
+          📋 ITEM VALUATION TABLE <span style="color:var(--text3);font-weight:400">(${tableItems.length} items)</span>
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+          ${['all','low','out','over'].map(f=>`<button class="btn btn-sm ${filter===f?'btn-primary':''}" onclick="window._invValFilter='${f}';renderInvValuation()">${f==='all'?'All':f==='low'?`Low Stock`:f==='out'?`Out of Stock`:'Overstocked'}</button>`).join('')}
+          <div class="search-wrap" style="max-width:200px">
+            <span class="search-icon">🔍</span>
+            <input class="form-input" placeholder="Search items..." value="${window._invValSearch||''}" oninput="window._invValSearch=this.value;renderInvValuation()" style="font-size:12px">
+          </div>
+        </div>
+      </div>
+      <div class="tbl-wrap" style="border-radius:var(--radius);border:1px solid var(--border)">
+        <table>
+          <thead><tr>
+            <th>ITEM</th><th>CATEGORY</th>
+            <th style="text-align:center">QTY</th>
+            <th class="td-right">COST PRICE</th>
+            <th class="td-right">SELL PRICE</th>
+            <th class="td-right">STOCK @ COST</th>
+            <th class="td-right">STOCK @ SELL</th>
+            <th class="td-right">POT. PROFIT</th>
+            <th style="text-align:center">MARGIN</th>
+            <th>STATUS</th>
+          </tr></thead>
+          <tbody>${rows||'<tr><td colspan="10"><div class="empty-state"><div class="empty-state-icon">📦</div><div>No items found</div></div></td></tr>'}</tbody>
+          <tfoot>
+            <tr style="font-weight:700;background:var(--surface)">
+              <td colspan="5" style="padding:8px 12px;text-align:right;text-transform:uppercase;font-size:12px">TOTALS</td>
+              <td class="td-right" style="padding:8px 12px;color:#0ea5e9">${fmt(filtCostVal)}</td>
+              <td class="td-right" style="padding:8px 12px;color:#6366f1">${fmt(filtSellVal)}</td>
+              <td class="td-right" style="padding:8px 12px;color:var(--success)">${fmt(filtProfit)}</td>
+              <td colspan="2"></td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </div>`;
+}
 // ── PROFIT & LOSS ────────────────────────────────────────
 function renderPandL() {
   const el=document.getElementById('pandl-content'); if(!el)return;
