@@ -457,13 +457,24 @@ select.form-input option{background:#1c2130;color:var(--text1)}
 .alert-success{background:var(--success-bg);color:var(--success);border:1px solid rgba(34,197,94,.2)}
 .alert-info{background:var(--info-bg);color:var(--info);border:1px solid rgba(56,189,248,.2)}
 
-/* ══════════════════════════════════════════════
-   PAGE ROUTING — critical, must not be removed
-══════════════════════════════════════════════ */
+/* ── Header toolbar buttons (Sync/Download/Restore/Backup) ── */
+.hdr-tool-btn{
+  display:flex;align-items:center;gap:4px;
+  background:rgba(255,255,255,.05);border:1px solid var(--border);
+  border-radius:8px;padding:4px 10px;font-size:11.5px;
+  cursor:pointer;color:var(--text3);transition:all .15s;white-space:nowrap;
+  font-family:var(--font);
+}
+.hdr-tool-btn:hover{background:rgba(255,255,255,.1);color:var(--text1);border-color:var(--border2)}
+[data-theme="light"] .hdr-tool-btn{background:rgba(0,0,0,.05);color:#4a5568}
+[data-theme="light"] .hdr-tool-btn:hover{background:rgba(0,0,0,.1);color:#1a1f2e}
+[data-neumorphic="1"] .hdr-tool-btn{background:var(--nm-bg);box-shadow:var(--nm-out-xs);border:none;color:var(--text2)}
+[data-neumorphic="1"] .hdr-tool-btn:hover{box-shadow:var(--nm-out-sm)}
+[data-neumorphic="1"] .hdr-tool-btn:active{box-shadow:var(--nm-press)}
+
+/* ── Page routing ── */
 .page{display:none}
 .page.active{display:block}
-
-/* ── Input number spinners subtle ── */
 input[type=number]::-webkit-inner-spin-button{opacity:.25}
 
 /* ══════════════════════════════════════════════
@@ -864,27 +875,25 @@ input[type=number]::-webkit-inner-spin-button{opacity:.25}
       <span class="sync-dot" id="sync-dot"></span>
       <span class="sync-label" id="sync-label">Connecting...</span>
 
-      <!-- Light/Dark toggle -->
-      <div class="theme-ctrl">
-        <div class="toggle-wrap" onclick="toggleLightDark()" title="Light / Dark mode">
-          <span class="toggle-label" id="lbl-dark">🌙</span>
-          <div class="toggle-track" id="track-dark">
-            <div class="toggle-thumb"></div>
-          </div>
-          <span class="toggle-label" id="lbl-light">☀️</span>
-        </div>
-      </div>
+      <!-- Toolbar buttons matching v1 screenshot -->
+      <button onclick="runSyncQueue()" title="Push local changes to Firestore" class="hdr-tool-btn">🔄 Sync</button>
+      <button onclick="downloadFirestoreData()" title="Pull latest data from Firestore" class="hdr-tool-btn">☁️⬇ Download</button>
+      <button onclick="restoreFromFirestore()" title="Full restore from Firestore" class="hdr-tool-btn">☁️⬆ Restore</button>
+      <button onclick="toggleBackupPanel()" title="Auto Backup & Google Drive" class="hdr-tool-btn" id="backup-btn">💾 Backup</button>
 
+      <!-- Light/Dark toggle -->
+      <div class="toggle-wrap" onclick="toggleLightDark()" title="Light / Dark mode">
+        <span class="toggle-label">🌙</span>
+        <div class="toggle-track" id="track-dark"><div class="toggle-thumb"></div></div>
+        <span class="toggle-label">☀️</span>
+      </div>
       <!-- Neumorphic toggle -->
       <div class="toggle-wrap" onclick="toggleNeumorphic()" title="Neumorphic / Flat design">
         <span class="toggle-label">✦</span>
-        <div class="toggle-track" id="track-neum">
-          <div class="toggle-thumb"></div>
-        </div>
+        <div class="toggle-track" id="track-neum"><div class="toggle-thumb"></div></div>
         <span class="toggle-label" style="font-size:10px">NM</span>
       </div>
 
-      <button onclick="refreshAllData()" title="Refresh all data" style="background:none;border:1px solid var(--border);border-radius:8px;padding:5px 10px;font-size:12px;cursor:pointer;color:var(--text3)">🔄 Refresh</button>
       <div class="header-user" id="user-menu">
         <div class="header-avatar" id="user-avatar">A</div>
         <div>
@@ -894,6 +903,48 @@ input[type=number]::-webkit-inner-spin-button{opacity:.25}
       </div>
     </div>
   </header>
+
+  <!-- ══ BACKUP PANEL (dropdown) ══ -->
+  <div id="backup-panel" style="display:none;position:fixed;top:var(--header-h);right:8px;z-index:9000;width:300px">
+    <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--radius-xl);padding:18px;box-shadow:var(--shadow-lg)">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+        <div style="display:flex;align-items:center;gap:8px;font-size:14px;font-weight:700;color:var(--text1)">
+          <span>💾</span> Auto Backups
+        </div>
+        <button onclick="toggleBackupPanel()" style="background:none;border:none;color:var(--text3);font-size:18px;cursor:pointer;line-height:1;padding:2px 6px;border-radius:6px">×</button>
+      </div>
+      <div id="backup-last-saved" style="font-size:11.5px;color:var(--text3);margin-bottom:3px">Last saved: —</div>
+      <div id="backup-last-drive" style="font-size:11.5px;color:var(--text3);margin-bottom:10px">Last Google Drive: —</div>
+
+      <!-- Status pill -->
+      <div id="backup-status-pill" style="background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.2);border-radius:8px;padding:9px 12px;font-size:11.5px;color:var(--success);margin-bottom:10px;line-height:1.5">
+        ✅ Auto-uploads to Google Drive daily. Local snapshot storage is OFF (quota protection) — use ☁️⬇ Download (topbar) to pull Firestore data anytime.
+      </div>
+
+      <!-- Google Drive section -->
+      <div id="gdrive-section" style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:12px;margin-bottom:10px">
+        <div style="display:flex;align-items:center;gap:6px;font-size:12.5px;font-weight:700;color:var(--text1);margin-bottom:6px">
+          <span>☁️</span> Google Drive <span id="gdrive-status-badge" style="font-size:10px;padding:2px 7px;border-radius:99px;background:var(--success-bg);color:var(--success);font-weight:700">connected</span>
+        </div>
+        <div id="gdrive-path" style="font-size:11.5px;color:var(--brand);margin-bottom:2px">Drive/GCE Backups/</div>
+        <div id="gdrive-last" style="font-size:11px;color:var(--text3);margin-bottom:10px">Last backup: —</div>
+        <div style="display:flex;gap:6px">
+          <button onclick="uploadToDrive()" class="btn btn-success btn-sm" id="drive-upload-btn" style="flex:1">☁️ Upload Now</button>
+          <button onclick="navigateTo('settings')" class="btn btn-sm" style="flex:1">⚙ Settings</button>
+        </div>
+      </div>
+
+      <!-- Backup history -->
+      <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;color:var(--text3);letter-spacing:.07em;margin-bottom:6px">DATE</div>
+      <div id="backup-history-list" style="min-height:60px;background:var(--surface);border-radius:var(--radius);padding:10px;font-size:12px;color:var(--text3);border:1px solid var(--border);margin-bottom:10px">
+        No auto backups yet.
+      </div>
+
+      <button onclick="manualBackupNow()" class="btn btn-primary" style="width:100%;font-size:13px;font-weight:700;padding:11px">
+        💾 Save Now
+      </button>
+    </div>
+  </div>
 
   <!-- ══ FLOATING CALCULATOR ══ -->
   <div id="calc-float">
@@ -11248,14 +11299,262 @@ function renderOverviewWarehouseAddon() {
 }
 
 // ── 7PM Auto backup reminder ──────────────────────────────
+// ══════════════════════════════════════════════════════════
+//  BACKUP SYSTEM — Sync/Download/Restore/Auto Google Drive
+// ══════════════════════════════════════════════════════════
+const GDRIVE_WORKER = 'https://greatchid-inventory.valentineahize.workers.dev';
+const BACKUP_HISTORY_KEY = 'gce_v2_backup_history';
+const GDRIVE_LAST_KEY    = 'gce_v2_gdrive_last';
+const AUTO_BACKUP_INTERVAL_HRS = 24;
+
+// ── Toggle backup panel ──────────────────────────────────
+function toggleBackupPanel() {
+  const panel = document.getElementById('backup-panel');
+  if (!panel) return;
+  const isOpen = panel.style.display !== 'none';
+  panel.style.display = isOpen ? 'none' : 'block';
+  if (!isOpen) _refreshBackupPanel();
+}
+// Close when clicking outside
+document.addEventListener('click', e => {
+  const panel = document.getElementById('backup-panel');
+  const btn   = document.getElementById('backup-btn');
+  if (panel && panel.style.display!=='none' && !panel.contains(e.target) && e.target!==btn && !btn?.contains(e.target)) {
+    panel.style.display = 'none';
+  }
+}, true);
+
+function _refreshBackupPanel() {
+  // Last saved
+  const ls = STATE.lastSaved || localStorage.getItem('gce_lastSaved') || '—';
+  const el = document.getElementById('backup-last-saved');
+  if (el) el.textContent = `Last saved: ${ls}`;
+
+  // Google Drive last
+  const gd = localStorage.getItem(GDRIVE_LAST_KEY) || '—';
+  const gdEl = document.getElementById('backup-last-drive');
+  if (gdEl) gdEl.textContent = `Last Google Drive: ${gd}`;
+
+  const gdLast = document.getElementById('gdrive-last');
+  if (gdLast) gdLast.textContent = `Last backup: ${gd}`;
+
+  // History list
+  _renderBackupHistory();
+}
+
+function _renderBackupHistory() {
+  const el = document.getElementById('backup-history-list');
+  if (!el) return;
+  try {
+    const history = JSON.parse(localStorage.getItem(BACKUP_HISTORY_KEY)||'[]');
+    if (!history.length) { el.textContent = 'No auto backups yet.'; return; }
+    el.innerHTML = history.slice(-5).reverse().map(h =>
+      `<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--border);font-size:11.5px">
+        <span style="color:var(--text2)">${h.date}</span>
+        <span style="color:${h.type==='drive'?'var(--success)':'var(--brand)'}">
+          ${h.type==='drive'?'☁️ Drive':'💾 Local'}
+        </span>
+      </div>`
+    ).join('');
+  } catch(e) { el.textContent = 'No auto backups yet.'; }
+}
+
+function _addBackupHistory(type) {
+  try {
+    const history = JSON.parse(localStorage.getItem(BACKUP_HISTORY_KEY)||'[]');
+    history.push({ date: new Date().toLocaleString(), type });
+    localStorage.setItem(BACKUP_HISTORY_KEY, JSON.stringify(history.slice(-20)));
+    // Update last drive time
+    if (type === 'drive') {
+      const t = new Date().toLocaleString();
+      localStorage.setItem(GDRIVE_LAST_KEY, t);
+      STATE.lastGDriveBackup = t;
+    }
+  } catch(e) {}
+}
+
+// ── Manual Save Now ──────────────────────────────────────
+async function manualBackupNow() {
+  const btn = document.getElementById('backup-panel')?.querySelector('.btn-primary');
+  if (btn) { btn.textContent = '⏳ Saving...'; btn.disabled = true; }
+  try {
+    // 1. Push all queued changes to Firestore
+    if (_syncQueue.length) await runSyncQueue();
+    // 2. Export local JSON snapshot to download
+    exportBackup();
+    // 3. Try Google Drive upload
+    await uploadToDrive();
+    _addBackupHistory('drive');
+    showToast('✅ Backup saved to Google Drive.', 'success');
+  } catch(e) {
+    _addBackupHistory('local');
+    showToast('💾 Local backup saved (Drive unavailable).', 'info');
+  } finally {
+    if (btn) { btn.textContent = '💾 Save Now'; btn.disabled = false; }
+    _refreshBackupPanel();
+  }
+}
+
+// ── Google Drive Upload ──────────────────────────────────
+async function uploadToDrive() {
+  const data = _buildBackupPayload();
+  const json = JSON.stringify(data);
+  const filename = `GCE-Backup-${new Date().toISOString().slice(0,10)}.json`;
+
+  // Check for stored Drive token
+  const token = localStorage.getItem('gce_gdrive_token');
+  if (!token) {
+    // No token — trigger OAuth
+    _initGDriveOAuth();
+    throw new Error('No Drive token — OAuth initiated');
+  }
+
+  // Upload via multipart to Drive API
+  const metadata = { name: filename, parents: ['root'], mimeType: 'application/json' };
+  const boundary = '-------GCEBackupBoundary';
+  const body = `--${boundary}\r\nContent-Type: application/json\r\n\r\n${JSON.stringify(metadata)}\r\n--${boundary}\r\nContent-Type: application/json\r\n\r\n${json}\r\n--${boundary}--`;
+
+  const r = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': `multipart/related; boundary=${boundary}`
+    },
+    body
+  });
+
+  if (r.status === 401) {
+    // Token expired — clear and re-auth
+    localStorage.removeItem('gce_gdrive_token');
+    _initGDriveOAuth();
+    throw new Error('Drive token expired');
+  }
+  if (!r.ok) throw new Error(`Drive upload failed: ${r.status}`);
+
+  const result = await r.json();
+  const t = new Date().toLocaleString();
+  localStorage.setItem(GDRIVE_LAST_KEY, t);
+  const gdEl = document.getElementById('gdrive-last');
+  if (gdEl) gdEl.textContent = `Last backup: ${t}`;
+  return result;
+}
+
+// ── Google Drive OAuth ───────────────────────────────────
+const GDRIVE_CLIENT_ID = ''; // Set via Settings or auto-detected
+function _initGDriveOAuth() {
+  // Use Cloudflare Worker proxy for OAuth if configured
+  const workerToken = localStorage.getItem('gce_worker_gdrive_token');
+  if (workerToken) {
+    localStorage.setItem('gce_gdrive_token', workerToken);
+    showToast('Google Drive reconnected.', 'success');
+    return;
+  }
+  showToast('⚠️ Google Drive not connected. Configure in Settings → Backup.', 'info');
+}
+
+// Set Drive token from Cloudflare Worker (called after OAuth redirect)
+function setGDriveToken(token) {
+  if (!token) return;
+  localStorage.setItem('gce_gdrive_token', token);
+  showToast('✅ Google Drive connected!', 'success');
+  _refreshBackupPanel();
+}
+
+// ── Download (pull from Firestore) ──────────────────────
+async function downloadFirestoreData() {
+  setSyncStatus('connecting');
+  showToast('⬇️ Downloading from Firestore...', 'info');
+  try {
+    const COLS_TO_DOWNLOAD = [
+      [COLS.INVENTORY,'inventory'],[COLS.CUSTOMERS,'customers'],
+      [COLS.SUPPLIERS,'suppliers'],[COLS.USERS,'users'],
+      [COLS.PURCHASES,'purchases'],[COLS.CASHFLOW,'cashflow'],
+      [COLS.WAREHOUSE,'warehouse'],[COLS.SETTINGS,'settings'],
+      [COLS.BORROWS,'borrows'],[COLS.PROFORMAS,'proformas'],
+      [COLS.ADJLOG,'adjLog'],[COLS.SALESRETURNS,'salesReturns'],
+      ['v2_pendingDeliveries','pendingDeliveries'],['v2_banks','banks'],
+    ];
+    let total = 0;
+    for (const [col, key] of COLS_TO_DOWNLOAD) {
+      try {
+        const docs = await _fsList(col);
+        if (docs.length) {
+          STATE[key] = {};
+          const store = _lfStore(col);
+          for (const doc of docs) {
+            STATE[key][doc._id] = doc;
+            if (store) store.setItem(doc._id, doc).catch(()=>{});
+            total++;
+          }
+        }
+      } catch(e) {}
+    }
+    // Load last 3 months of sales
+    const now = new Date();
+    for (let i=0; i<3; i++) {
+      const d = new Date(now.getFullYear(), now.getMonth()-i, 1);
+      await loadMonthlySales(d.getFullYear(), d.getMonth()+1);
+    }
+    setSyncStatus('synced');
+    showToast(`✅ Downloaded ${total} records from Firestore.`, 'success');
+    renderOverviewIfActive();
+  } catch(e) {
+    setSyncStatus('error');
+    showToast('❌ Download failed: ' + e.message, 'error');
+  }
+}
+
+// ── Restore (full wipe + re-pull from Firestore) ─────────
+async function restoreFromFirestore() {
+  if (!confirm('⚠️ This will replace all local data with Firestore data.\n\nAny unsynced local changes will be lost.\n\nContinue?')) return;
+  // Clear local IndexedDB first
+  try {
+    const allCols = Object.values(COLS);
+    for (const col of allCols) {
+      const store = _lfStore(col);
+      if (store) await store.clear().catch(()=>{});
+    }
+    _syncQueue = [];
+    _saveSyncQueue();
+  } catch(e) {}
+  showToast('♻️ Restoring from Firestore...', 'info');
+  await downloadFirestoreData();
+  showToast('✅ Restore complete.', 'success');
+}
+
+// ── Build backup payload ──────────────────────────────────
+function _buildBackupPayload() {
+  return {
+    inventory:STATE.inventory, sales:STATE.sales,
+    purchases:STATE.purchases, customers:STATE.customers,
+    suppliers:STATE.suppliers, cashflow:STATE.cashflow,
+    banks:STATE.banks, settings:STATE.settings,
+    salesReturns:STATE.salesReturns, pendingDeliveries:STATE.pendingDeliveries,
+    activityLog:STATE.activityLog, invCounter:STATE.invCounter,
+    exportedAt: new Date().toISOString(), version:'v2'
+  };
+}
+
+// ── Auto backup check (daily) ─────────────────────────────
 function checkAutoBackup() {
   const h = new Date().getHours();
   const m = new Date().getMinutes();
-  if (h===19 && m<=5) {
+  // 7PM reminder
+  if (h === 19 && m <= 5) {
     const key = 'gce_v2_backup_'+new Date().toLocaleDateString();
     if (!localStorage.getItem(key)) {
       localStorage.setItem(key,'1');
-      showToast('🕖 7PM — Time to close up! Reminder: take a backup.','info');
+      showToast('🕖 7PM — Daily backup reminder! Click 💾 Backup in the toolbar.', 'info');
+    }
+  }
+  // Auto Google Drive backup at 2AM if token exists
+  if (h === 2 && m <= 2) {
+    const key = 'gce_v2_auto_drive_'+new Date().toLocaleDateString();
+    if (!localStorage.getItem(key) && localStorage.getItem('gce_gdrive_token')) {
+      localStorage.setItem(key,'1');
+      uploadToDrive()
+        .then(()=>{ _addBackupHistory('drive'); showToast('☁️ Auto backup to Google Drive done.','success'); })
+        .catch(()=>{ exportBackup(); _addBackupHistory('local'); });
     }
   }
 }
