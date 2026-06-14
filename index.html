@@ -7406,41 +7406,221 @@ function renderPandL() {
 function renderReturnsTracker() {
   const el=document.getElementById('returns-content'); if(!el)return;
   const allRet=Object.values(STATE.salesReturns||{});
-  const search=window._retSearch||''; const dateFrom=window._retDateFrom||''; const dateTo=window._retDateTo||'';
+  const search=(window._retSearch||'').toLowerCase();
+  const dateFrom=window._retDateFrom||'';
+  const dateTo=window._retDateTo||'';
+  const typeFilter=window._retTypeFilter||'all';
+
+  const now=new Date();
+  const curMonth=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
+
+  // Filtered list
   const filtered=allRet.filter(r=>{
-    if(search){const t=search.toLowerCase();if(!(r.itemName||'').toLowerCase().includes(t)&&!(r.custName||'').toLowerCase().includes(t)&&!(r.invoiceNum||'').toLowerCase().includes(t))return false;}
+    if(search&&!(r.itemName||'').toLowerCase().includes(search)&&!(r.custName||'').toLowerCase().includes(search)&&!(r.invoiceNum||'').toLowerCase().includes(search))return false;
     if(dateFrom){const d=new Date(r.date);const f=new Date(dateFrom);f.setHours(0,0,0,0);if(d<f)return false;}
     if(dateTo){const d=new Date(r.date);const t=new Date(dateTo);t.setHours(23,59,59,999);if(d>t)return false;}
+    if(typeFilter!=='all'&&r.refundType!==typeFilter)return false;
     return true;
   }).sort((a,b)=>(b.date||'').localeCompare(a.date||''));
-  const now=new Date(); const curMonth=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
-  const totalRefund=allRet.reduce((a,r)=>a+(r.refundAmt||0),0);
-  const monthRefund=allRet.filter(r=>(r.month||r.date?.slice(0,7)||'')===curMonth).reduce((a,r)=>a+(r.refundAmt||0),0);
+
+  // KPI totals
+  const totalReturns=allRet.length;
+  const totalRefundVal=allRet.reduce((a,r)=>a+(r.refundAmt||0),0);
+  const monthReturns=allRet.filter(r=>(r.month||r.date?.slice(0,7)||'')===curMonth).length;
+  const monthRefundVal=allRet.filter(r=>(r.month||r.date?.slice(0,7)||'')===curMonth).reduce((a,r)=>a+(r.refundAmt||0),0);
+  // Most returned item
   const itemMap={};
-  allRet.forEach(r=>{if(!itemMap[r.itemName])itemMap[r.itemName]={name:r.itemName,count:0,val:0};itemMap[r.itemName].count+=r.qty||1;itemMap[r.itemName].val+=r.refundAmt||0;});
-  const topItems=Object.values(itemMap).sort((a,b)=>b.count-a.count).slice(0,5);
-  const maxCount=topItems[0]?.count||1;
+  allRet.forEach(r=>{
+    const k=r.itemName||'Unknown';
+    if(!itemMap[k])itemMap[k]={name:k,count:0,val:0};
+    itemMap[k].count+=r.qty||1;
+    itemMap[k].val+=r.refundAmt||0;
+  });
+  const topItems=Object.values(itemMap).sort((a,b)=>b.count-a.count);
+  const mostReturned=topItems[0];
+
+  // Returns breakdown by type
+  const cashRefunds=allRet.filter(r=>r.refundType==='cash').reduce((a,r)=>a+(r.refundAmt||0),0);
+  const creditRefunds=allRet.filter(r=>r.refundType==='credit').reduce((a,r)=>a+(r.refundAmt||0),0);
+  const exchanges=allRet.filter(r=>r.refundType==='exchange').reduce((a,r)=>a+(r.refundAmt||0),0);
+  const breakdownTotal=cashRefunds+creditRefunds+exchanges||1;
+  const breakdownBars=[
+    {label:'Cash Refunds',val:cashRefunds,color:'#22c55e',pct:Math.round(cashRefunds/breakdownTotal*100)},
+    {label:'Store Credit',val:creditRefunds,color:'#6366f1',pct:Math.round(creditRefunds/breakdownTotal*100)},
+    {label:'Exchanges',val:exchanges,color:'#f59e0b',pct:Math.round(exchanges/breakdownTotal*100)},
+  ];
+
+  // Top 5 most returned items bars
+  const top5=topItems.slice(0,5);
+  const maxCount=top5[0]?.count||1;
   const topColors=['#ef4444','#f97316','#f59e0b','#8b5cf6','#6366f1'];
-  const topBars=topItems.map((item,i)=>{const pct=Math.round(item.count/maxCount*100);return`<div style="margin-bottom:9px"><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px"><span style="font-weight:600">${esc(item.name)}</span><span style="color:#6b7280">${item.count} units · ${fmt(item.val)}</span></div><div style="background:var(--surface);border-radius:6px;height:10px;overflow:hidden"><div style="width:${pct}%;height:100%;background:${topColors[i]};border-radius:6px"></div></div></div>`;}).join('');
-  const refundBadges={cash:'<span style="background:#d1fae5;color:#065f46;padding:2px 7px;border-radius:20px;font-size:10px;font-weight:700">CASH</span>',credit:'<span style="background:#eff6ff;color:#1d4ed8;padding:2px 7px;border-radius:20px;font-size:10px;font-weight:700">CREDIT</span>',exchange:'<span style="background:#fef3c7;color:#92400e;padding:2px 7px;border-radius:20px;font-size:10px;font-weight:700">EXCHANGE</span>'};
-  const rows=filtered.map(r=>`<tr><td style="font-size:12px">${r.date||'—'}</td><td><b>#${esc(r.invoiceNum||'—')}</b></td><td>${esc(r.custName||'Walk-in')}</td><td>${esc(r.itemName)} <span style="font-size:11px;color:var(--text3)">x${r.qty||1}</span></td><td class="td-right" style="color:var(--danger);font-weight:700">${fmt(r.refundAmt||0)}</td><td style="color:#6b7280;font-size:12px">${esc(r.reason||'—')}</td><td>${refundBadges[r.refundType]||refundBadges.cash}</td><td style="font-size:11px;color:var(--text3)">${esc(r.by||'—')}</td></tr>`).join('');
+  const top5Bars=top5.map((item,i)=>{
+    const pct=Math.round(item.count/maxCount*100);
+    return`<div style="margin-bottom:11px">
+      <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px;font-weight:700;text-transform:uppercase;letter-spacing:.03em">
+        <span>${esc(item.name)}</span>
+        <span style="color:${topColors[i]}">${item.count} units · ${fmt(item.val)}</span>
+      </div>
+      <div style="background:var(--border);border-radius:6px;height:10px;overflow:hidden">
+        <div style="width:${pct}%;height:100%;background:${topColors[i]};border-radius:6px"></div>
+      </div>
+    </div>`;
+  }).join('');
+
+  // Table rows
+  const refundBadges={
+    cash:'<span style="background:#d1fae5;color:#065f46;padding:3px 8px;border-radius:20px;font-size:10px;font-weight:700">CASH</span>',
+    credit:'<span style="background:#eff6ff;color:#1d4ed8;padding:3px 8px;border-radius:20px;font-size:10px;font-weight:700">CREDIT</span>',
+    exchange:'<span style="background:#fef3c7;color:#92400e;padding:3px 8px;border-radius:20px;font-size:10px;font-weight:700">EXCHANGE</span>'
+  };
+
+  const rows=filtered.map(r=>`<tr>
+    <td style="font-size:12px;white-space:nowrap;color:var(--text3)">${r.date||'—'}</td>
+    <td><b style="font-family:var(--font-mono)">#${esc(r.invoiceNum||'—')}</b></td>
+    <td style="font-size:12px">${esc(r.custName||'Walk-in')}</td>
+    <td><b>${esc(r.itemName||'—')}</b></td>
+    <td style="text-align:center;font-weight:700">${r.qty||1}</td>
+    <td class="td-right" style="color:var(--danger);font-weight:700">${fmt(r.refundAmt||0)}</td>
+    <td style="font-size:12px;color:var(--text3)">${esc(r.reason||'—')}</td>
+    <td>${refundBadges[r.refundType]||refundBadges.cash}</td>
+    <td style="font-size:11px;color:var(--text3)">${esc(r.by||'—')}</td>
+    <td>
+      ${STATE.user?.role==='admin'?`<button class="btn btn-sm" onclick="editReturn('${r._id||r.id}')" style="color:var(--brand);border-color:var(--brand);font-size:11px;padding:3px 8px">✏ Edit</button>`:''}
+    </td>
+  </tr>`).join('');
+
   el.innerHTML=`
-    <div class="kpi-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:1.25rem">
-      ${kpiCard('danger','Total Returns',allRet.length,'All records')}
-      ${kpiCard('warning','Total Refunded',fmt(totalRefund),'All time')}
-      ${kpiCard('info','This Month',fmt(monthRefund),'Refunded')}
+    <!-- 5 KPI cards matching v1 -->
+    <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:1.25rem">
+      <div class="kpi-card" style="border-left:3px solid var(--danger)">
+        <div class="kpi-label" style="color:var(--danger)">↩️ TOTAL RETURNS</div>
+        <div class="kpi-value" style="font-size:26px;font-weight:800">${totalReturns}</div>
+        <div class="kpi-sub">All records</div>
+      </div>
+      <div class="kpi-card" style="border-left:3px solid var(--warning)">
+        <div class="kpi-label" style="color:var(--warning)">💸 TOTAL REFUND VALUE</div>
+        <div class="kpi-value" style="font-size:18px;font-weight:800;color:var(--warning)">${fmt(totalRefundVal)}</div>
+        <div class="kpi-sub">All time</div>
+      </div>
+      <div class="kpi-card" style="border-left:3px solid #8b5cf6">
+        <div class="kpi-label" style="color:#8b5cf6">📅 THIS MONTH RETURNS</div>
+        <div class="kpi-value" style="font-size:26px;font-weight:800;color:#8b5cf6">${monthReturns}</div>
+        <div class="kpi-sub">Current month</div>
+      </div>
+      <div class="kpi-card" style="border-left:3px solid var(--brand)">
+        <div class="kpi-label" style="color:var(--brand)">📅 THIS MONTH VALUE</div>
+        <div class="kpi-value" style="font-size:18px;font-weight:800;color:var(--brand)">${fmt(monthRefundVal)}</div>
+        <div class="kpi-sub">Refunded this month</div>
+      </div>
+      <div class="kpi-card" style="border-left:3px solid var(--danger)">
+        <div class="kpi-label" style="color:var(--danger)">🔁 MOST RETURNED</div>
+        <div class="kpi-value" style="font-size:14px;font-weight:800;color:var(--danger);line-height:1.3">${mostReturned?esc(mostReturned.name)+' ('+mostReturned.count+'x)':'—'}</div>
+        <div class="kpi-sub">${mostReturned?fmt(mostReturned.val)+' total refunded':''}</div>
+      </div>
     </div>
-    ${topBars?`<div class="card" style="padding:1rem;margin-bottom:1.25rem"><div class="sec-title" style="margin-bottom:.75rem">Most Returned Items</div>${topBars}</div>`:''}
-    <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap">
-      <div style="position:relative;flex:1;max-width:300px"><span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--text3)">🔍</span><input class="form-input" style="padding-left:32px" placeholder="Search item, customer, invoice..." value="${search}" oninput="window._retSearch=this.value;renderReturnsTracker()"></div>
-      <input type="date" class="form-input" style="width:150px;padding:4px 8px;font-size:13px" value="${dateFrom}" onchange="window._retDateFrom=this.value;renderReturnsTracker()">
-      <span style="align-self:center;color:var(--text3)">to</span>
-      <input type="date" class="form-input" style="width:150px;padding:4px 8px;font-size:13px" value="${dateTo}" onchange="window._retDateTo=this.value;renderReturnsTracker()">
-      ${search||dateFrom||dateTo?`<button class="btn btn-sm" onclick="window._retSearch='';window._retDateFrom='';window._retDateTo='';renderReturnsTracker()" style="color:var(--danger)">Clear</button>`:''}
+
+    <!-- Two-column: Top 5 + Breakdown -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:1.25rem">
+      <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px 16px">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--brand);margin-bottom:14px;display:flex;align-items:center;gap:6px">
+          <span style="width:3px;height:14px;background:var(--brand);border-radius:2px;display:inline-block"></span>
+          🔁 TOP 5 MOST RETURNED ITEMS
+        </div>
+        ${top5Bars||'<div style="color:var(--text3);text-align:center;padding:20px">No returns recorded yet</div>'}
+      </div>
+      <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px 16px">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--brand);margin-bottom:14px;display:flex;align-items:center;gap:6px">
+          <span style="width:3px;height:14px;background:var(--brand);border-radius:2px;display:inline-block"></span>
+          📊 RETURNS BREAKDOWN
+        </div>
+        ${breakdownBars.map(b=>`
+          <div style="margin-bottom:14px">
+            <div style="display:flex;justify-content:space-between;font-size:12px;font-weight:700;margin-bottom:4px">
+              <span>${b.label}</span>
+              <span style="color:${b.color}">${fmt(b.val)} <span style="color:var(--text3);font-weight:400">(${b.pct}%)</span></span>
+            </div>
+            <div style="background:var(--border);border-radius:6px;height:10px;overflow:hidden">
+              <div style="width:${b.pct}%;height:100%;background:${b.color};border-radius:6px"></div>
+            </div>
+          </div>`).join('')}
+      </div>
     </div>
-    ${rows?`<div class="tbl-wrap"><table><thead><tr><th>Date</th><th>Invoice #</th><th>Customer</th><th>Item</th><th class="td-right">Refund Amt</th><th>Reason</th><th>Refund Type</th><th>By</th></tr></thead><tbody>${rows}</tbody></table></div>`:'<div class="empty-state"><div class="empty-state-icon">↩️</div><div>No returns recorded yet.</div></div>'}`;
+
+    <!-- Returns Log -->
+    <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px 16px">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:12px">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--brand);display:flex;align-items:center;gap:6px">
+          <span style="width:3px;height:14px;background:var(--brand);border-radius:2px;display:inline-block"></span>
+          📋 RETURNS LOG <span style="color:var(--text3);font-weight:400">(${filtered.length})</span>
+        </div>
+        <!-- Filters: type buttons + date range + search + clear -->
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+          ${['all','cash','credit','exchange'].map(t=>`<button class="btn btn-sm ${typeFilter===t?'btn-primary':''}" onclick="window._retTypeFilter='${t}';renderReturnsTracker()">${t==='all'?'All':t==='cash'?'Cash':t==='credit'?'Credit':'Exchange'}</button>`).join('')}
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;align-items:center">
+        <input type="date" class="form-input" style="width:150px;padding:5px 8px;font-size:12px" value="${dateFrom}" onchange="window._retDateFrom=this.value;renderReturnsTracker()">
+        <span style="color:var(--text3);font-size:12px">to</span>
+        <input type="date" class="form-input" style="width:150px;padding:5px 8px;font-size:12px" value="${dateTo}" onchange="window._retDateTo=this.value;renderReturnsTracker()">
+        <div class="search-wrap" style="flex:1;max-width:240px">
+          <span class="search-icon">🔍</span>
+          <input class="form-input" placeholder="Search item, customer, invoice..." value="${window._retSearch||''}" oninput="window._retSearch=this.value;renderReturnsTracker()">
+        </div>
+        ${search||dateFrom||dateTo||typeFilter!=='all'?`<button class="btn btn-sm" onclick="window._retSearch='';window._retDateFrom='';window._retDateTo='';window._retTypeFilter='all';renderReturnsTracker()" style="color:var(--danger);border-color:var(--danger)">Clear</button>`:''}
+      </div>
+      ${rows?`
+        <div class="tbl-wrap" style="border-radius:var(--radius);border:1px solid var(--border)">
+          <table>
+            <thead><tr>
+              <th>DATE</th><th>INVOICE #</th><th>CUSTOMER</th><th>ITEM</th>
+              <th style="text-align:center">QTY</th>
+              <th class="td-right">REFUND</th>
+              <th>REASON</th><th>TYPE</th><th>BY</th><th></th>
+            </tr></thead>
+            <tbody>${rows}</tbody>
+            <tfoot>
+              <tr style="font-weight:700;background:var(--surface)">
+                <td colspan="5" style="padding:8px 12px;text-align:right;text-transform:uppercase;font-size:12px">TOTAL REFUNDED</td>
+                <td class="td-right" style="padding:8px 12px;color:var(--danger)">${fmt(filtered.reduce((a,r)=>a+(r.refundAmt||0),0))}</td>
+                <td colspan="4"></td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>`
+      :'<div class="empty-state"><div class="empty-state-icon">↩️</div><div>No returns match filter.</div></div>'}
+    </div>`;
 }
 
+function editReturn(id) {
+  const r=STATE.salesReturns?.[id]; if(!r) return;
+  showModal(`✏ Edit Return — ${esc(r.itemName)}`,`
+    <div class="form-grid c2">
+      <div class="form-group"><label>Item Name</label><input class="form-input" id="er-item" value="${esc(r.itemName||'')}"></div>
+      <div class="form-group"><label>Qty</label><input class="form-input" id="er-qty" type="number" min="1" value="${r.qty||1}"></div>
+      <div class="form-group"><label>Refund Amount (₦)</label><input class="form-input" id="er-amt" type="number" min="0" value="${r.refundAmt||0}"></div>
+      <div class="form-group"><label>Refund Type</label><select class="form-input" id="er-type"><option value="cash" ${r.refundType==='cash'?'selected':''}>Cash</option><option value="credit" ${r.refundType==='credit'?'selected':''}>Store Credit</option><option value="exchange" ${r.refundType==='exchange'?'selected':''}>Exchange</option></select></div>
+      <div class="form-group" style="grid-column:1/-1"><label>Reason</label><input class="form-input" id="er-reason" value="${esc(r.reason||'')}"></div>
+    </div>
+  `,[{label:'Cancel',action:'close',style:''},{label:'💾 Save',action:`saveEditReturn('${id}')`,style:'btn-primary'}]);
+}
+async function saveEditReturn(id) {
+  const r=STATE.salesReturns?.[id]; if(!r) return;
+  const updated={...r,
+    itemName:document.getElementById('er-item')?.value.trim()||r.itemName,
+    qty:parseInt(document.getElementById('er-qty')?.value)||r.qty,
+    refundAmt:parseFloat(document.getElementById('er-amt')?.value)||r.refundAmt,
+    refundType:document.getElementById('er-type')?.value||r.refundType,
+    reason:document.getElementById('er-reason')?.value.trim()||r.reason,
+    editedBy:STATE.user?.name,editedAt:new Date().toISOString()
+  };
+  setSyncStatus('saving');
+  try{
+    await fsSave('v2_salesReturns',id,updated);
+    STATE.salesReturns[id]={...updated,_id:id};
+    closeModal();renderReturnsTracker();setSyncStatus('synced');
+    showToast('Return updated.','success');
+  }catch(e){setSyncStatus('error');showToast('Failed to save.','error');}
+}
 // ── PRODUCT REPORT ───────────────────────────────────────
 function renderProductReport() {
   const el=document.getElementById('productreport-content'); if(!el)return;
