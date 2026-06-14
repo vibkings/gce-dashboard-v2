@@ -1796,9 +1796,20 @@ function toggleCalc(){
 function _calcUpdateDisplay(){
   const r = document.getElementById('calc-result');
   const e = document.getElementById('calc-expr');
-  if(r) r.textContent = _calc.display.length > 12
-    ? parseFloat(_calc.display).toLocaleString('en',{maximumFractionDigits:6})
-    : parseFloat(_calc.display).toLocaleString('en',{maximumFractionDigits:8});
+  if(r){
+    // Show raw string while entering, formatted when result is computed
+    const num = parseFloat(_calc.display);
+    if(_calc.hasResult && !isNaN(num)){
+      // Format result with commas but keep decimal precision
+      const formatted = Number.isInteger(num)
+        ? num.toLocaleString('en')
+        : num.toLocaleString('en',{maximumFractionDigits:8});
+      r.textContent = formatted;
+    } else {
+      // Show what the user is typing as-is (no formatting mid-entry)
+      r.textContent = _calc.display;
+    }
+  }
   if(e) e.textContent = _calc.expr;
 }
 function calcNum(n){
@@ -1834,7 +1845,9 @@ function calcEquals(){
   const res = _calcCompute(_calc.prev, val, _calc.op);
   const opSym = _calc.op === '*' ? '×' : _calc.op === '/' ? '÷' : _calc.op;
   _calc.expr = `${_calc.prev} ${opSym} ${val} =`;
-  _calc.display = String(parseFloat(res.toFixed(10)));
+  // Clean result — remove floating point noise (e.g. 0.1+0.2 = 0.3 not 0.30000000004)
+  const cleaned = Math.abs(res) < 1e-10 && res !== 0 ? 0 : parseFloat(res.toPrecision(12));
+  _calc.display = String(cleaned);
   _calc.op = null; _calc.prev = null; _calc.waitNext = false; _calc.hasResult = true;
   _calcUpdateDisplay();
 }
@@ -1861,21 +1874,55 @@ function calcPct(){
   _calcUpdateDisplay();
 }
 
-// Keyboard support for calculator
+// Keyboard support for calculator — only when no input/textarea is focused
 document.addEventListener('keydown', e => {
   const calc = document.getElementById('calc-float');
-  if(!calc?.classList.contains('visible')) return;
-  if(e.key >= '0' && e.key <= '9') { calcNum(e.key); }
-  else if(e.key === '.') { calcDot(); }
-  else if(e.key === '+') { calcOp('+'); }
-  else if(e.key === '-') { calcOp('-'); }
-  else if(e.key === '*') { calcOp('*'); }
-  else if(e.key === '/') { e.preventDefault(); calcOp('/'); }
-  else if(e.key === 'Enter' || e.key === '=') { calcEquals(); }
-  else if(e.key === 'Escape') { toggleCalc(); }
-  else if(e.key === 'Backspace') {
-    _calc.display = _calc.display.length > 1 ? _calc.display.slice(0,-1) : '0';
+  if (!calc?.classList.contains('visible')) return;
+
+  // Don't intercept if user is typing in an input, textarea, or select
+  const tag = document.activeElement?.tagName?.toLowerCase();
+  if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+
+  const key = e.key;
+
+  // Numbers: 0–9 via key check
+  if (key.length === 1 && key >= '0' && key <= '9') {
+    e.preventDefault(); calcNum(key); return;
+  }
+  // Decimal
+  if (key === '.') { e.preventDefault(); calcDot(); return; }
+  // Operators
+  if (key === '+') { e.preventDefault(); calcOp('+'); return; }
+  if (key === '-') { e.preventDefault(); calcOp('-'); return; }
+  if (key === '*') { e.preventDefault(); calcOp('*'); return; }
+  if (key === '/') { e.preventDefault(); calcOp('/'); return; }
+  // Equals
+  if (key === 'Enter' || key === '=') { e.preventDefault(); calcEquals(); return; }
+  // Clear
+  if (key === 'Delete' || (key === 'c' && !e.ctrlKey && !e.metaKey)) { e.preventDefault(); calcClear(); return; }
+  // Backspace — delete last digit
+  if (key === 'Backspace') {
+    e.preventDefault();
+    if (_calc.display.length > 1 && !_calc.hasResult) {
+      _calc.display = _calc.display.slice(0, -1);
+    } else {
+      _calc.display = '0';
+    }
     _calcUpdateDisplay();
+    return;
+  }
+  // Escape — close calculator
+  if (key === 'Escape') { e.preventDefault(); toggleCalc(); return; }
+  // Numpad keys
+  if (key === 'Divide')   { e.preventDefault(); calcOp('/'); return; }
+  if (key === 'Multiply') { e.preventDefault(); calcOp('*'); return; }
+  if (key === 'Subtract') { e.preventDefault(); calcOp('-'); return; }
+  if (key === 'Add')      { e.preventDefault(); calcOp('+'); return; }
+  if (key === 'Decimal')  { e.preventDefault(); calcDot(); return; }
+  // Numpad 0–9
+  if (key.startsWith('Numpad') && key.length === 7) {
+    const n = key[6];
+    if (n >= '0' && n <= '9') { e.preventDefault(); calcNum(n); }
   }
 });
 
