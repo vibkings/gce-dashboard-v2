@@ -839,7 +839,7 @@ input[type=number]::-webkit-inner-spin-button{opacity:.25}
 <!-- ════════════════════════════════════════════════════════
      AUTH SCREEN
 ════════════════════════════════════════════════════════ -->
-<div id="auth-screen" class="auth-wrap">
+<div id="auth-screen" class="auth-wrap" style="display:flex">
   <div class="auth-card">
     <div class="auth-logo">GCE</div>
     <div class="auth-title">Great Chid Electro</div>
@@ -2249,8 +2249,7 @@ document.addEventListener('keydown', e => {
     }catch(e){}
     // Apply saved theme on load
     _applyTheme();
-    // One-time inventory data sanitization (cleans bad string 'undefined' values)
-    _sanitizeInventory();
+    // (inventory sanitization runs after login in initApp)
   });
 })();
 
@@ -2288,32 +2287,9 @@ function uid() {
 }
 
 async function initAuth() {
-  const saved = localStorage.getItem('gce_v2_session');
-  if (saved) {
-    try {
-      const session = JSON.parse(saved);
-      // Validate session has required fields
-      if (!session?.username && !session?.id) throw new Error('Invalid session');
-      // Session expiry — 24 hours
-      const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
-      const loginTime = parseInt(localStorage.getItem('gce_v2_login_time') || '0');
-      const expired = loginTime && (Date.now() - loginTime) > SESSION_TTL_MS;
-      if (expired) {
-        localStorage.removeItem('gce_v2_session');
+  // Always require fresh login on every page load — no session restore
+  localStorage.removeItem('gce_v2_session');
   localStorage.removeItem('gce_v2_login_time');
-        localStorage.removeItem('gce_v2_login_time');
-        showAuth();
-        showToast('Session expired — please sign in again.', 'info');
-        return;
-      }
-      STATE.user = session;
-      await initApp();
-      return;
-    } catch(e) {
-      console.warn('Session restore failed:', e);
-      localStorage.removeItem('gce_v2_session');
-    }
-  }
   showAuth();
 }
 
@@ -2446,6 +2422,7 @@ async function initApp() {
   setSyncStatus('connecting');
   // Load data in background — re-render when done
   initDataLayer().then(() => {
+    _sanitizeInventory(); // clean any bad string values from Firestore
     updateInventoryBadge();
     const page = document.querySelector('.page.active')?.id?.replace('page-','');
     if (page) switchPage(page); // re-render active page with real data
