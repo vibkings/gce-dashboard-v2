@@ -1188,21 +1188,50 @@ async function loadCollection(col, stateKey) {
     // Seed STATE immediately from local data
     STATE[stateKey] = {};
     items.forEach(item => { STATE[stateKey][item._id||item.id] = item; });
-    // Background-refresh from Firestore
+    // Background-refresh from Firestore (non-blocking)
     _refreshFromFirestore(col, stateKey);
-  } else {
-    // No local data — must fetch from Firestore
-    try {
-      const docs = await _fsList(col);
+    return; // ← return early — app already has data
+  }
+
+  // No local data — attempt Firestore fetch
+  try {
+    const ctrl = new AbortController();
+    const tid = setTimeout(() => ctrl.abort(), 6000); // 6s per-collection timeout
+    const r = await fetch(`${FB.base}/${col}?key=${FB.apiKey}&pageSize=3000`, {signal: ctrl.signal});
+    clearTimeout(tid);
+
+    if (r.status === 200) {
+      const data = await r.json();
+      const docs = (data.documents||[]).map(fromFsDoc).filter(Boolean);
       STATE[stateKey] = {};
       const store = _lfStore(col);
       for (const doc of docs) {
         STATE[stateKey][doc._id] = doc;
         if (store) store.setItem(doc._id, doc).catch(()=>{});
       }
-    } catch(e) {
-      console.warn(`Firestore load failed for ${col}:`, e.message);
+    } else if (r.status === 404) {
+      // Collection doesn't exist yet — that's fine, treat as empty
       STATE[stateKey] = STATE[stateKey] || {};
+    } else {
+      // 403 / 401 / 400 etc — auth/rules issue
+      const errText = `HTTP ${r.status}`;
+      console.warn(`Firestore ${col}: ${errText}`);
+      STATE[stateKey] = STATE[stateKey] || {};
+      // Only show guide once (on first auth failure)
+      if ((r.status === 403 || r.status === 400) && !window._fsErrShown) {
+        window._fsErrShown = true;
+        _testFirestoreConnection(); // triggers the detailed guide
+      }
+    }
+  } catch(e) {
+    const isAbort = e.name === 'AbortError';
+    const isCors = e.message?.includes('fetch') || e.message?.includes('network');
+    if (!isAbort && !isCors) console.warn(`Firestore load failed for ${col}:`, e.message);
+    STATE[stateKey] = STATE[stateKey] || {};
+    // Show guide once if we have internet but still failed (= API key restriction)
+    if (navigator.onLine && !window._fsErrShown && isCors) {
+      window._fsErrShown = true;
+      setTimeout(() => _showFirestoreGuide('cors'), 2000);
     }
   }
 }
@@ -1318,12 +1347,73 @@ async function initDataLayer() {
 async function _testFirestoreConnection() {
   try {
     const r = await fetch(`${FB.base}/v2_settings?key=${FB.apiKey}&pageSize=1`);
-    if (r.status === 404) {
-      showToast('⚠️ Firestore database not found. Go to Firebase Console → Create Firestore Database.', 'error');
-    } else if (r.status === 403) {
-      showToast('⚠️ Firestore permission denied. Update security rules to allow read/write.', 'error');
+    if (r.status === 200 || r.status === 204) {
+      _online = true;
+      setSyncStatus('synced');
+    } else if (r.status === 404) {
+      showToast('⚠️ Firestore DB not found — please create it in Firebase Console.', 'error');
+      _showFirestoreGuide('404');
+    } else if (r.status === 403 || r.status === 401) {
+      showToast('⚠️ Firestore permission denied — check security rules.', 'error');
+      _showFirestoreGuide('403');
+    } else if (r.status === 400) {
+      // Often means API key restrictions
+      showToast('⚠️ Firestore API key issue — check Firebase API key restrictions.', 'error');
+      _showFirestoreGuide('400');
     }
-  } catch(e) { /* No connection at all — offline */ }
+  } catch(e) {
+    // "Failed to fetch" = no network OR CORS block OR API key HTTP referrer restriction
+    if (navigator.onLine) {
+      // We have internet but fetch failed = API key restriction most likely
+      _showFirestoreGuide('cors');
+    }
+    // If offline, do nothing — normal
+  }
+}
+
+function _showFirestoreGuide(errType) {
+  const guides = {
+    '404': `<b>Firestore Database Not Found</b><br>
+      1. Go to <a href="https://console.firebase.google.com" target="_blank" style="color:#60a5fa">Firebase Console</a><br>
+      2. Select project: <code>great-chid-electro-daad3</code><br>
+      3. Click <b>Firestore Database</b> → <b>Create database</b><br>
+      4. Choose <b>Start in test mode</b> → select region → Done`,
+    '403': `<b>Permission Denied</b><br>
+      Go to Firebase Console → Firestore → <b>Rules</b> and set:<br>
+      <code style="font-size:11px">rules_version='2'; service cloud.firestore { match /databases/{database}/documents { match /{document=**} { allow read, write: if true; } } }</code>`,
+    '400': `<b>API Key Restricted</b><br>
+      Go to <a href="https://console.cloud.google.com/apis/credentials" target="_blank" style="color:#60a5fa">Google Cloud Console</a> → Credentials → your API key → Remove HTTP referrer restrictions, or add <code>vibkings.github.io</code>`,
+    'cors': `<b>Connection Failed (CORS / API Key Restriction)</b><br>
+      Most likely your Firebase API key has HTTP referrer restrictions.<br>
+      Go to <a href="https://console.cloud.google.com/apis/credentials" target="_blank" style="color:#60a5fa">Google Cloud Console</a> → Credentials → API key → Add <code>https://vibkings.github.io/*</code> to allowed referrers, or remove restrictions for testing.`
+  };
+  const msg = guides[errType] || 'Firestore connection error.';
+  // Show in a dismissible panel inside the app
+  const existing = document.getElementById('_fs_error_banner');
+  if (existing) existing.remove();
+  const banner = document.createElement('div');
+  banner.id = '_fs_error_banner';
+  banner.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);width:min(560px,92vw);background:#1e1a2e;border:1px solid rgba(239,68,68,.4);border-radius:12px;padding:14px 16px;z-index:99998;box-shadow:0 8px 32px rgba(0,0,0,.7);font-size:12.5px;color:#e2e8f0;line-height:1.7';
+  banner.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">
+      <div>
+        <div style="color:#f87171;font-weight:700;margin-bottom:6px;font-size:13px">🔥 Firestore Connection Error</div>
+        <div>${msg}</div>
+        <div style="margin-top:8px;padding:8px 10px;background:rgba(255,255,255,.05);border-radius:6px;font-size:11.5px;color:#94a3b8">
+          <b>Project ID:</b> great-chid-electro-daad3<br>
+          <b>API Key:</b> AIzaSyADBjwZ-8iymGCqkW0Q0LQLr_YBHO3-yLI<br>
+          <b>Dashboard URL:</b> vibkings.github.io
+        </div>
+        <div style="margin-top:8px;font-size:11px;color:#64748b">The dashboard works offline with locally cached data. Data will sync when connection is restored.</div>
+      </div>
+      <button onclick="document.getElementById('_fs_error_banner').remove()" style="background:rgba(255,255,255,.08);border:none;color:#94a3b8;font-size:16px;padding:4px 8px;border-radius:6px;cursor:pointer;flex-shrink:0">✕</button>
+    </div>
+    <div style="margin-top:10px;display:flex;gap:8px">
+      <a href="https://console.firebase.google.com/project/great-chid-electro-daad3/firestore" target="_blank" style="flex:1;display:inline-block;text-align:center;padding:7px;background:linear-gradient(135deg,#1d4ed8,#3b82f6);color:#fff;border-radius:7px;text-decoration:none;font-size:12px;font-weight:600">Open Firebase Console</a>
+      <a href="https://console.cloud.google.com/apis/credentials" target="_blank" style="flex:1;display:inline-block;text-align:center;padding:7px;background:rgba(255,255,255,.08);color:#e2e8f0;border-radius:7px;text-decoration:none;font-size:12px">Manage API Keys</a>
+      <button onclick="location.reload()" style="flex:1;padding:7px;background:rgba(34,197,94,.15);border:1px solid rgba(34,197,94,.3);color:#22c55e;border-radius:7px;font-size:12px;font-weight:600;cursor:pointer">↺ Retry</button>
+    </div>`;
+  document.body.appendChild(banner);
 }
 
 // ── startListeners / startExtraListeners ─────────────────
