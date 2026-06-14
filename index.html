@@ -9064,80 +9064,189 @@ function renderSettingsFull(){
   const el=document.getElementById('settings-content');if(!el)return;
   const settings=STATE.settings||{};
   const banks=Object.values(STATE.banks||{}).filter(b=>!b._deleted);
-  const posBanks=banks.filter(b=>b.type==='pos'||b.type==='both');
   const transferBanks=banks.filter(b=>b.type==='transfer'||b.type==='both'||!b.type);
-  const mkRow=(b)=>`<tr>
-    <td><b>${esc(b.name)}</b></td>
-    <td><span class="badge badge-neutral" style="font-size:10px">${b.type==='pos'?'POS':b.type==='both'?'POS + Transfer':'Transfer'}</span></td>
-    <td style="font-size:12px;color:var(--text3)">${esc(b.acct||'—')}</td>
-    <td>${STATE.user?.role==='admin'?`<button class="btn btn-sm" onclick="removeBank('${b._id||b.id}')" style="color:var(--danger)">Remove</button>`:''}</td>
-  </tr>`;
-  const bankRows=banks.length?banks.map(mkRow).join(''):'<tr><td colspan="4" style="text-align:center;color:var(--text3)">No banks/POS terminals added yet.</td></tr>';
+  const posBanks=banks.filter(b=>b.type==='pos'||b.type==='both');
   const inv=Object.values(STATE.inventory||{}).length;
   const sal=Object.values(STATE.sales||{}).length;
   const pur=Object.values(STATE.purchases||{}).length;
+  const lastSaved=STATE.lastSaved||localStorage.getItem('gce_lastSaved')||'—';
+
+  const transferRows=transferBanks.length?transferBanks.map(b=>`<tr>
+    <td><b>${esc(b.name)}</b></td>
+    <td style="font-size:12px;color:var(--text3)">${esc(b.acct||'—')}</td>
+    <td>${STATE.user?.role==='admin'?`<button class="btn btn-sm" onclick="removeBank('${b._id||b.id}')" style="color:var(--danger)">Remove</button>`:''}</td>
+  </tr>`).join(''):'<tr><td colspan="3" style="text-align:center;color:var(--text3);padding:10px">No bank accounts added yet.</td></tr>';
+
+  const posRows=posBanks.length?posBanks.map(b=>`<tr>
+    <td><b>${esc(b.name)}</b></td>
+    <td style="font-size:12px;color:var(--text3)">${esc(b.acct||'—')}</td>
+    <td>${STATE.user?.role==='admin'?`<button class="btn btn-sm" onclick="removeBank('${b._id||b.id}')" style="color:var(--danger)">Remove</button>`:''}</td>
+  </tr>`).join(''):'<tr><td colspan="3" style="text-align:center;color:var(--text3);padding:10px">No POS terminals added yet.</td></tr>';
+
+  const secTitle=(icon,title)=>`<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--brand);margin-bottom:12px;display:flex;align-items:center;gap:6px">
+    <span style="width:3px;height:14px;background:var(--brand);border-radius:2px;display:inline-block"></span>
+    ${icon} ${title}</div>`;
+
   el.innerHTML=`
-    <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:1.5rem">
-      ${kpiCard('info','Inventory items',inv,'In shop')}
-      ${kpiCard('success','Sales records',sal,'All time')}
-      ${kpiCard('brand','Purchases',pur,'All time')}
-      ${kpiCard('neutral','Dashboard','v2','GCE System')}
+    <!-- 4 KPIs matching v1 -->
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:1.5rem">
+      <div class="kpi-card" style="border-left:3px solid var(--brand)">
+        <div class="kpi-label" style="color:var(--brand)">INVENTORY ITEMS</div>
+        <div class="kpi-value" style="font-size:28px;font-weight:800">${inv.toLocaleString()}</div>
+        <div class="kpi-sub">In shop</div>
+      </div>
+      <div class="kpi-card" style="border-left:3px solid var(--success)">
+        <div class="kpi-label" style="color:var(--success)">SALES RECORDS</div>
+        <div class="kpi-value" style="font-size:28px;font-weight:800">${sal.toLocaleString()}</div>
+        <div class="kpi-sub">All time</div>
+      </div>
+      <div class="kpi-card" style="border-left:3px solid var(--info)">
+        <div class="kpi-label" style="color:var(--info)">PURCHASES</div>
+        <div class="kpi-value" style="font-size:28px;font-weight:800">${pur.toLocaleString()}</div>
+        <div class="kpi-sub">All time</div>
+      </div>
+      <div class="kpi-card" style="border-left:3px solid #7c3aed">
+        <div class="kpi-label" style="color:#7c3aed">LAST SAVED</div>
+        <div class="kpi-value" style="font-size:14px;font-weight:800;color:#7c3aed;line-height:1.3">${lastSaved}</div>
+        <div class="kpi-sub">Local storage</div>
+      </div>
     </div>
+
+    <!-- Business Information -->
     <div class="form-card" style="margin-bottom:1.25rem">
-      <div class="form-title">Business Information</div>
+      ${secTitle('🏢','Business Information')}
       <div class="form-grid c2">
-        <div class="form-group"><label>Business Name</label><input class="form-input" id="set-biz" value="${esc(settings.bizName||'Great Chid Electro / Global Doors Ltd')}"></div>
-        <div class="form-group"><label>Phone</label><input class="form-input" id="set-phone" value="${esc(settings.phone||'08035158594')}"></div>
-        <div class="form-group" style="grid-column:1/-1"><label>Ogbomoso Address</label><input class="form-input" id="set-addr" value="${esc(settings.address||'Ile-Bara Oke-Ado, Sabo Ilorin Rd, Ogbomoso, Oyo State')}"></div>
-        <div class="form-group" style="grid-column:1/-1"><label>Ilorin Address</label><input class="form-input" id="set-addr2" value="${esc(settings.address2||'189, Ibrahim Taiwo Rd, beside UBA Bank, Ilorin, Kwara State')}"></div>
+        <div class="form-group"><label>BUSINESS NAME</label><input class="form-input" id="set-biz" value="${esc(settings.bizName||'Great Chid Electro / Global Doors Ltd')}"></div>
+        <div class="form-group"><label>PHONE</label><input class="form-input" id="set-phone" value="${esc(settings.phone||'08035158594')}"></div>
+        <div class="form-group" style="grid-column:1/-1"><label>OGBOMOSO ADDRESS</label><input class="form-input" id="set-addr" value="${esc(settings.address||'Ile-Bara Oke-Ado, Sabo Ilorin Rd, Ogbomoso, Oyo State')}"></div>
+        <div class="form-group" style="grid-column:1/-1"><label>ILORIN ADDRESS</label><input class="form-input" id="set-addr2" value="${esc(settings.address2||'189, Ibrahim Taiwo Rd, beside UBA Bank, Ilorin, Kwara State')}"></div>
       </div>
       <button class="btn btn-primary" style="margin-top:10px" onclick="saveSettings()">Save Settings</button>
     </div>
+
+    <!-- Version & Changelog -->
     <div class="form-card" style="margin-bottom:1.25rem">
-      <div class="form-title">💳 POS Terminals &amp; Transfer Banks</div>
-      <p style="font-size:12px;color:var(--text3);margin-bottom:12px">Register your POS machines and bank accounts. These appear as dropdown options whenever POS or Bank Transfer is selected during payment.</p>
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:8px;align-items:flex-end;margin-bottom:10px;max-width:680px">
-        <div>
-          <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);margin-bottom:4px">NAME <span style="color:var(--danger)">*</span></div>
-          <input class="form-input" id="set-bank-name" placeholder="e.g. Moniepoint POS" style="width:100%">
+      ${secTitle('📋','Version & Changelog')}
+      <div style="background:#1a1a2e;color:#e0e0e0;border-radius:var(--radius);padding:16px;margin-bottom:10px">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+          <span style="background:#7c3aed;color:#fff;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700">v2</span>
+          <b style="font-size:15px">GCE Dashboard v2 — Full Rebuild</b>
         </div>
-        <div>
-          <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);margin-bottom:4px">TYPE <span style="color:var(--danger)">*</span></div>
-          <select class="form-input" id="set-bank-type" style="width:100%">
-            <option value="transfer">Bank Transfer</option>
-            <option value="pos">POS Terminal</option>
-            <option value="both">Both (POS + Transfer)</option>
-          </select>
-        </div>
-        <div>
-          <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);margin-bottom:4px">ACCOUNT NUMBER</div>
-          <input class="form-input" id="set-bank-acct" placeholder="e.g. 8100170802" style="width:100%">
-        </div>
-        <div>
-          <button class="btn btn-primary" onclick="addBank()" style="white-space:nowrap">+ Add</button>
-        </div>
+        <div style="font-size:11px;color:#999;margin-bottom:10px">Released: June 2026</div>
+        <ul style="font-size:12px;color:#ccc;padding-left:18px;line-height:2;margin:0">
+          <li>Multi-user system with role-based permissions</li>
+          <li>Offline-first with IndexedDB → Firestore sync queue</li>
+          <li>All 26 modules rebuilt: Inventory, Sales, Purchases, Expenses, Financial Dashboard, P&amp;L, Returns Tracker, Product Report, Monthly Summary, Customer/Supplier Profiles and more</li>
+          <li>Dark mode with localStorage persistence</li>
+          <li>Split payment, credit, deposit, part payment support</li>
+          <li>Sales invoice print: A4 / A5 / 80mm thermal</li>
+          <li>Bank + POS terminal registration for payment dropdowns</li>
+          <li>Activity log, Recycle bin, Stock adjustments, Warehouse transfers</li>
+          <li>Google Drive auto-backup integration</li>
+        </ul>
       </div>
-      <div class="tbl-wrap" style="margin-top:10px">
-        <table>
-          <thead><tr><th>Name</th><th>Type</th><th>Account No.</th><th></th></tr></thead>
-          <tbody>${bankRows}</tbody>
-        </table>
+      <button class="btn btn-sm" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'" style="color:var(--brand)">▶ View full version history</button>
+      <div style="display:none;margin-top:10px;font-size:12px;color:var(--text2);line-height:1.8">
+        <b>v1 (2024–2025)</b> — Original single-file POS system built iteratively with Claude. Firebase SDK → REST API. Per-collection Firestore sync. Split payment, deposits, credit write-off, commission system, demo sales, daily closing report, Google Drive backup.
       </div>
     </div>
+
+    <!-- Backup & Restore -->
     <div class="form-card" style="margin-bottom:1.25rem">
-      <div class="form-title">Invoice Counter</div>
+      ${secTitle('💾','Backup & Restore')}
+      <p style="font-size:12px;color:var(--text3);margin-bottom:12px">Export your data before editing the dashboard code. Import it after to restore everything.</p>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+        <button class="btn btn-primary" onclick="exportBackup()" style="font-weight:700">⬇ Export backup (.json)</button>
+        <button class="btn" onclick="document.getElementById('import-backup-file').click()" style="color:var(--text2)">⬆ Import backup</button>
+        <input type="file" id="import-backup-file" accept=".json" style="display:none" onchange="importBackup(this)">
+      </div>
+      <div id="backup-info" style="font-size:12px;color:var(--text3);background:var(--surface);border-radius:var(--radius);padding:8px 12px">
+        ${STATE.lastBackupInfo||'No backup info yet.'}
+      </div>
+    </div>
+
+    <!-- Bank Accounts (Transfer) -->
+    <div class="form-card" style="margin-bottom:1.25rem">
+      ${secTitle('🏦','Bank Accounts')}
+      <p style="font-size:12px;color:var(--text3);margin-bottom:12px">Banks shown when "Bank transfer" is selected as payment mode.</p>
+      <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:flex-end;margin-bottom:12px;max-width:560px">
+        <div>
+          <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);margin-bottom:3px">BANK NAME <span style="color:var(--danger)">*</span></div>
+          <input class="form-input" id="set-transfer-name" placeholder="e.g. Zenith Bank" style="width:100%">
+        </div>
+        <div>
+          <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);margin-bottom:3px">ACCOUNT NUMBER (OPTIONAL)</div>
+          <input class="form-input" id="set-transfer-acct" placeholder="e.g. 0123456789" style="width:100%">
+        </div>
+        <button class="btn btn-primary" onclick="addBankByType('transfer')" style="white-space:nowrap">Add bank</button>
+      </div>
+      <div class="tbl-wrap" style="border-radius:var(--radius);border:1px solid var(--border)">
+        <table><thead><tr><th>BANK NAME</th><th>ACCOUNT NUMBER</th><th></th></tr></thead>
+        <tbody>${transferRows}</tbody></table>
+      </div>
+    </div>
+
+    <!-- POS Terminals -->
+    <div class="form-card" style="margin-bottom:1.25rem">
+      ${secTitle('🏧','POS Terminals')}
+      <p style="font-size:12px;color:var(--text3);margin-bottom:12px">Terminals shown when "POS" is selected as payment mode.</p>
+      <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:flex-end;margin-bottom:12px;max-width:560px">
+        <div>
+          <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);margin-bottom:3px">TERMINAL NAME <span style="color:var(--danger)">*</span></div>
+          <input class="form-input" id="set-pos-name" placeholder="e.g. Moniepoint POS 1" style="width:100%">
+        </div>
+        <div>
+          <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);margin-bottom:3px">TERMINAL ID (OPTIONAL)</div>
+          <input class="form-input" id="set-pos-acct" placeholder="e.g. TID-001" style="width:100%">
+        </div>
+        <button class="btn btn-primary" onclick="addBankByType('pos')" style="white-space:nowrap">Add terminal</button>
+      </div>
+      <div class="tbl-wrap" style="border-radius:var(--radius);border:1px solid var(--border)">
+        <table><thead><tr><th>TERMINAL NAME</th><th>TERMINAL ID</th><th></th></tr></thead>
+        <tbody>${posRows}</tbody></table>
+      </div>
+    </div>
+
+    <!-- Invoice Counter -->
+    <div class="form-card" style="margin-bottom:1.25rem">
+      ${secTitle('🔢','Invoice Counter')}
       <p style="font-size:13px;color:var(--text3);margin-bottom:10px">Current counter: <b>${STATE.invCounter||0}</b></p>
       <div style="display:flex;gap:8px;align-items:flex-end">
         <div class="form-group" style="margin:0"><label>Set counter to</label><input class="form-input" id="set-inv-counter" type="number" min="0" placeholder="e.g. 631" style="width:140px"></div>
         <button class="btn btn-primary" onclick="fixInvoiceCounter()">Fix Invoice Counter</button>
       </div>
     </div>
-    <div class="form-card">
-      <div class="form-title">Data Migration from v1</div>
+
+    <!-- Data Migration -->
+    <div class="form-card" style="margin-bottom:1.25rem">
+      ${secTitle('📦','Data Migration from v1')}
       <p style="font-size:13px;color:var(--text3);margin-bottom:1rem">Import from a v1 dashboard backup (.json) file.</p>
       <input type="file" id="v1-backup-file" accept=".json" style="margin-bottom:10px;font-size:13px"><br>
       <button class="btn btn-primary" onclick="importV1Backup()">Import v1 Backup</button>
-    </div>`;
+    </div>
+
+    <!-- Danger Zone -->
+    ${STATE.user?.role==='admin'?`
+    <div class="form-card" style="margin-bottom:1.25rem;border:1.5px solid var(--danger)">
+      ${secTitle('⚠️','Danger Zone')}
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        <button class="btn btn-danger" onclick="if(confirm('Clear ALL v2 data? This cannot be undone.'))clearAllV2Data()" style="background:var(--danger);color:#fff;border-color:var(--danger)">🗑️ Clear All V2 Data</button>
+      </div>
+    </div>`:''}`
+}
+
+async function addBankByType(type){
+  const nameId=type==='pos'?'set-pos-name':'set-transfer-name';
+  const acctId=type==='pos'?'set-pos-acct':'set-transfer-acct';
+  const name=document.getElementById(nameId)?.value.trim();
+  if(!name){showToast(`Enter ${type==='pos'?'terminal':'bank'} name.`,'error');return;}
+  const acct=document.getElementById(acctId)?.value.trim()||'';
+  const id=uid();const bank={id,name,type,acct};
+  setSyncStatus('saving');
+  try{await fsSave('v2_banks',id,bank);if(!STATE.banks)STATE.banks={};STATE.banks[id]={...bank,_id:id};
+    document.getElementById(nameId).value='';document.getElementById(acctId).value='';
+    setSyncStatus('synced');showToast(`${type==='pos'?'POS terminal':'Bank'} "${name}" added.`,'success');renderSettings();}
+  catch(e){setSyncStatus('error');showToast('Failed.','error');}
 }
 
 async function saveSettings(){
@@ -9148,16 +9257,43 @@ async function saveSettings(){
 }
 
 async function addBank(){
-  const name=document.getElementById('set-bank-name')?.value.trim();
-  if(!name){showToast('Enter bank/POS name.','error');return;}
+  // Legacy: called from old form — delegate to addBankByType based on select
   const type=document.getElementById('set-bank-type')?.value||'transfer';
-  const acct=document.getElementById('set-bank-acct')?.value.trim()||'';
-  const id=uid();const bank={id,name,type,acct};
-  setSyncStatus('saving');
-  try{await fsSave('v2_banks',id,bank);if(!STATE.banks)STATE.banks={};STATE.banks[id]={...bank,_id:id};
-    document.getElementById('set-bank-name').value='';document.getElementById('set-bank-acct').value='';
-    setSyncStatus('synced');showToast(`${type==='pos'?'POS terminal':'Bank'} "${name}" added.`,'success');renderSettings();}
-  catch(e){setSyncStatus('error');showToast('Failed.','error');}
+  await addBankByType(type);
+}
+
+function exportBackup(){
+  const data={inventory:STATE.inventory,sales:STATE.sales,purchases:STATE.purchases,customers:STATE.customers,suppliers:STATE.suppliers,cashflow:STATE.cashflow,banks:STATE.banks,settings:STATE.settings,salesReturns:STATE.salesReturns,pendingDeliveries:STATE.pendingDeliveries,activityLog:STATE.activityLog,invCounter:STATE.invCounter,exportedAt:new Date().toISOString(),version:'v2'};
+  const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`gce-v2-backup-${new Date().toISOString().slice(0,10)}.json`;a.click();
+  const info=`Last backup saved: ${new Date().toLocaleString()} · Items: ${Object.keys(STATE.inventory||{}).length} inventory · Sales: ${Object.keys(STATE.sales||{}).length} records`;
+  STATE.lastBackupInfo=info;localStorage.setItem('gce_lastBackup',info);
+  document.getElementById('backup-info').textContent=info;
+  showToast('Backup exported.','success');
+}
+
+function importBackup(input){
+  const file=input.files[0];if(!file)return;
+  const reader=new FileReader();
+  reader.onload=async e=>{
+    try{
+      const data=JSON.parse(e.target.result);
+      if(!confirm(`Import backup from ${data.exportedAt||'unknown'}? This will merge data.`))return;
+      setSyncStatus('saving');
+      // Merge imported data
+      const merge=async(col,obj)=>{if(!obj)return;for(const[id,val]of Object.entries(obj)){try{await fsSave(col,id,val);}catch(err){}}};
+      if(data.inventory)await merge('v2_inventory',data.inventory);
+      if(data.sales)await merge('v2_sales',data.sales);
+      if(data.purchases)await merge('v2_purchases',data.purchases);
+      if(data.customers)await merge('v2_customers',data.customers);
+      if(data.suppliers)await merge('v2_suppliers',data.suppliers);
+      if(data.banks)await merge('v2_banks',data.banks);
+      input.value='';setSyncStatus('synced');
+      showToast('Backup imported. Refreshing...','success');
+      setTimeout(()=>location.reload(),1500);
+    }catch(err){showToast('Invalid backup file.','error');}
+  };
+  reader.readAsText(file);
 }
 
 async function removeBank(id){
