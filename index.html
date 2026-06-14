@@ -2229,6 +2229,8 @@ document.addEventListener('keydown', e => {
     }catch(e){}
     // Apply saved theme on load
     _applyTheme();
+    // One-time inventory data sanitization (cleans bad string 'undefined' values)
+    _sanitizeInventory();
   });
 })();
 
@@ -2266,16 +2268,31 @@ function uid() {
 }
 
 async function initAuth() {
-  // Show login screen immediately — never block on data loading
   const saved = localStorage.getItem('gce_v2_session');
   if (saved) {
     try {
       const session = JSON.parse(saved);
+      // Validate session has required fields
+      if (!session?.username && !session?.id) throw new Error('Invalid session');
+      // Session expiry — 24 hours
+      const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
+      const loginTime = parseInt(localStorage.getItem('gce_v2_login_time') || '0');
+      const expired = loginTime && (Date.now() - loginTime) > SESSION_TTL_MS;
+      if (expired) {
+        localStorage.removeItem('gce_v2_session');
+  localStorage.removeItem('gce_v2_login_time');
+        localStorage.removeItem('gce_v2_login_time');
+        showAuth();
+        showToast('Session expired — please sign in again.', 'info');
+        return;
+      }
       STATE.user = session;
-      // Show app shell immediately, load data in background
       await initApp();
       return;
-    } catch(e) { console.warn('Session restore failed:', e); }
+    } catch(e) {
+      console.warn('Session restore failed:', e);
+      localStorage.removeItem('gce_v2_session');
+    }
   }
   showAuth();
 }
@@ -2350,6 +2367,7 @@ async function doLogin() {
   btn.textContent = '✅ Loading dashboard...';
   STATE.user = user;
   localStorage.setItem('gce_v2_session', JSON.stringify(user));
+  localStorage.setItem('gce_v2_login_time', Date.now().toString());
 
   try {
     await initApp();
@@ -2708,7 +2726,40 @@ function quickAction(icon, label, page, color) {
 const INV_PAGE_SIZE = 50;
 if (typeof window._invPage === 'undefined') window._invPage = 0;
 
+function _sanitizeInventory() {
+  // Clean up any inventory items that have literal string 'undefined' 
+  // (caused by bad data entry or migration from other systems)
+  const items = Object.values(STATE.inventory||{});
+  let dirty = 0;
+  items.forEach(i => {
+    let changed = false;
+    ['cost','sell','qty','minQty'].forEach(k => {
+      if (i[k] === 'undefined' || i[k] === 'null' || i[k] === '') {
+        i[k] = 0; changed = true;
+      } else if (typeof i[k] === 'string' && i[k].length > 0) {
+        const num = k === 'qty' || k === 'minQty' ? parseInt(i[k]) : parseFloat(i[k]);
+        if (!isNaN(num)) { i[k] = num; changed = true; }
+      }
+    });
+    if (changed) {
+      dirty++;
+      // Push cleaned item back to Firestore silently
+      if (i._id) fsSave(COLS.INVENTORY, i._id, i).catch(()=>{});
+    }
+  });
+  if (dirty > 0) console.log(`Sanitized ${dirty} inventory items with bad data`);
+}
+
 function renderInventory() {
+  // Sanitize any items with undefined string values (from bad imports/migrations)
+  Object.values(STATE.inventory||{}).forEach(i => {
+    if (i.cost === 'undefined' || i.cost === null) i.cost = 0;
+    if (i.sell === 'undefined' || i.sell === null) i.sell = 0;
+    if (i.qty  === 'undefined' || i.qty  === null) i.qty  = 0;
+    if (i.cost !== undefined) i.cost = parseFloat(i.cost) || 0;
+    if (i.sell !== undefined) i.sell = parseFloat(i.sell) || 0;
+    if (i.qty  !== undefined) i.qty  = parseInt(i.qty)   || 0;
+  });
   const items = Object.values(STATE.inventory);
   const searchTerm = (document.getElementById('inv-search')?.value || '').toLowerCase();
   const catFilter = document.getElementById('inv-cat-filter')?.value || '';
@@ -2777,17 +2828,19 @@ function renderInventory() {
     const status = itemStatus(i);
     const chipClass = {ok:'chip-ok',low:'chip-low',out:'chip-out'}[status];
     const chipLabel = {ok:'OK',low:'Low',out:'Out'}[status];
-    const margin = i.sell && i.cost ? Math.round(((i.sell-i.cost)/i.sell)*100) : 0;
+    const cost = parseFloat(i.cost)||0;
+    const sell = parseFloat(i.sell)||0;
+    const margin = sell>0 && cost>0 ? Math.round(((sell-cost)/sell)*100) : (i._margin||0);
     return `<tr>
       <td><b>${esc(i.name)}</b></td>
       <td style="font-size:12px;color:var(--text2)">${esc(i.cat||'—')}</td>
       <td style="font-size:12px;color:var(--text3)">${esc(i.supplierName||'-')}</td>
       <td class="td-center td-mono"><b>${i.qty??0}</b></td>
       <td class="td-center td-mono" style="color:var(--text3)">${i.minQty??5}</td>
-      <td class="td-right td-mono" style="text-decoration:line-through;color:var(--text3)">${fmt(i.cost||0)}</td>
-      <td class="td-right td-mono" style="text-decoration:line-through;color:var(--text3)">${fmt(i.sell||0)}</td>
-      <td class="td-center td-mono" style="color:var(--text3)">${margin}%</td>
-      <td class="td-right td-mono" style="text-decoration:line-through;color:var(--text3)">${fmt((i.qty||0)*(i.cost||0))}</td>
+      <td class="td-right td-mono">${fmt(i.cost||0)}</td>
+      <td class="td-right td-mono" style="color:var(--success);font-weight:700">${fmt(i.sell||0)}</td>
+      <td class="td-center td-mono" style="color:${margin>=30?'var(--success)':margin>=15?'var(--warning)':'var(--danger)'}">${margin}%</td>
+      <td class="td-right td-mono">${fmt((i.qty||0)*(i.cost||0))}</td>
       <td class="td-center"><span class="chip ${chipClass}">${chipLabel}</span></td>
       <td>
         <div style="display:flex;gap:4px;white-space:nowrap">
@@ -5784,6 +5837,7 @@ function setSyncStatus(status) {
 // ════════════════════════════════════════════════════════════
 
 function fmt(n) {
+  if (n === 'undefined' || n === undefined || n === null || n === '') n = 0;
   if (typeof n !== 'number') n = parseFloat(n)||0;
   if (n < 0) return '-₦' + Math.round(-n).toLocaleString('en-NG');
 }
