@@ -3548,8 +3548,8 @@ function renderSales() {
       <td style="font-size:11px">${esc(modeLabel)}</td>
       <td style="font-size:11px;color:var(--text3)">${esc(g.seller||'')}</td>
       <td><div style="display:flex;gap:4px;flex-wrap:wrap">
-        <button class="btn btn-sm" onclick="v2ViewInvoice('${k}')" style="color:var(--primary);border-color:#b6d4fe;font-size:11px">View</button>
-        <button class="btn btn-sm" onclick="reprintSaleInvoice('${k}')" style="color:#1a237e;border-color:#93c5fd;font-size:11px">Print</button>
+        <button class="btn btn-sm" onclick="showInvoiceViewModal('${k}')" style="color:var(--primary);border-color:#b6d4fe;font-size:11px">View</button>
+        <button class="btn btn-sm" onclick="showInvoiceViewModal('${k}')" style="color:#1a237e;border-color:#93c5fd;font-size:11px">Print</button>
         ${hasPending?`<button class="btn btn-sm" onclick="markAsSupplied('${k}')" style="background:#16a34a;color:#fff;border-color:#16a34a;font-size:11px">✓ Mark supplied</button>`:''}
         ${!hasPending?`<button class="btn btn-sm" onclick="showReturnModal('${k}')" style="color:#dc3545;border-color:#f5c2c7;font-size:11px">↩ Return</button>`:''}
         ${STATE.user?.role==='admin'?`<button class="btn btn-sm btn-danger" onclick="voidInvoice('${k}')" style="font-size:11px">🗑️ Void</button>`:''}
@@ -4048,45 +4048,6 @@ function v2UpdateCartDisc(idx, val){
   invoiceItems[idx].discPct = pct;
   invoiceItems[idx].discAmt = Math.round(invoiceItems[idx].price * invoiceItems[idx].qty * pct/100);
   renderSales();
-}
-
-function v2ViewInvoice(invNum) {
-  const items = Object.values(STATE.sales||{}).filter(s=>s.invoiceNum===invNum);
-  if (!items.length) { showToast('Invoice not found.','error'); return; }
-  const s0 = items[0];
-  const gt = items.reduce((a,s)=>a+(s.total||0),0);
-  const rows = items.map((s,i)=>`<tr>
-    <td>${i+1}</td><td><b>${esc(s.name)}</b></td>
-    <td class="td-center">${s.qty}</td>
-    <td class="td-right">${fmt(s.salePrice||0)}</td>
-    <td class="td-right"><b>${fmt(s.total||0)}</b></td>
-  </tr>`).join('');
-  const ptBadge = s0.payment==='credit'?'<span class="badge badge-danger">Credit</span>':
-    s0.payment==='part'?'<span class="badge badge-warning">Part Payment</span>':
-    s0.payMode==='split'?'<span class="badge" style="background:#6f42c1;color:#fff">Split</span>':
-    s0.payMode==='pos'?'<span class="badge" style="background:#0891b2;color:#fff">POS</span>':
-    s0.payMode==='transfer'?'<span class="badge badge-info">Transfer</span>':
-    '<span class="badge badge-success">Cash</span>';
-  showModal(`🧾 Invoice #${invNum}`,`
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;font-size:13px;background:var(--surface);padding:10px;border-radius:8px;margin-bottom:12px">
-      <div><span style="color:var(--text3);font-size:11px">CUSTOMER</span><br><b>${esc(s0.custName||'Walk-in')}</b></div>
-      <div><span style="color:var(--text3);font-size:11px">DATE</span><br>${s0.date}</div>
-      <div><span style="color:var(--text3);font-size:11px">PAYMENT</span><br>${ptBadge}</div>
-    </div>
-    <div class="tbl-wrap">
-      <table><thead><tr><th>#</th><th>Item</th><th class="td-center">Qty</th><th class="td-right">Price</th><th class="td-right">Total</th></tr></thead>
-      <tbody>${rows}</tbody>
-      <tfoot><tr style="font-weight:700;background:var(--surface)">
-        <td colspan="4" style="text-align:right">GRAND TOTAL</td>
-        <td class="td-right">${fmt(gt)}</td>
-      </tr></tfoot></table>
-    </div>
-    ${s0.payment==='part'?`<div class="alert alert-warning" style="margin-top:8px">Paid: ${fmt(s0.partPayment||0)} · Balance: ${fmt(Math.max(0,gt-(s0.partPayment||0)))}</div>`:''}
-    <div style="font-size:12px;color:var(--text3);margin-top:8px">Seller: ${esc(s0.seller||'—')}</div>
-  `,[
-    {label:'Close',action:'close',style:''},
-    {label:'🖨️ Print',action:`reprintSaleInvoice('${invNum}')`,style:'btn-primary'}
-  ]);
 }
 
 // ── Invoice print modes ─────────────────────────────────
