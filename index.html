@@ -11325,20 +11325,57 @@ document.addEventListener('click', e => {
 }, true);
 
 function _refreshBackupPanel() {
-  // Last saved
+  // Last Firestore sync
   const ls = STATE.lastSaved || localStorage.getItem('gce_lastSaved') || '—';
-  const el = document.getElementById('backup-last-saved');
-  if (el) el.textContent = `Last saved: ${ls}`;
+  const lsEl = document.getElementById('backup-last-saved');
+  if (lsEl) lsEl.textContent = `Last saved: ${ls}`;
 
-  // Google Drive last
+  // Last Google Drive backup time
   const gd = localStorage.getItem(GDRIVE_LAST_KEY) || '—';
   const gdEl = document.getElementById('backup-last-drive');
   if (gdEl) gdEl.textContent = `Last Google Drive: ${gd}`;
-
   const gdLast = document.getElementById('gdrive-last');
   if (gdLast) gdLast.textContent = `Last backup: ${gd}`;
 
-  // History list
+  // Drive connection status badge
+  const connected = _isDriveConnected();
+  const badge = document.getElementById('gdrive-status-badge');
+  if (badge) {
+    badge.textContent = connected ? 'connected' : 'not connected';
+    badge.style.background = connected ? 'var(--success-bg)' : 'var(--danger-bg)';
+    badge.style.color = connected ? 'var(--success)' : 'var(--danger)';
+  }
+
+  // Drive upload button — connect if not connected
+  const uploadBtn = document.getElementById('drive-upload-btn');
+  if (uploadBtn) {
+    if (connected) {
+      uploadBtn.textContent = '☁️ Upload Now';
+      uploadBtn.onclick = () => uploadToDrive().then(()=>{ _addBackupHistory('drive'); _refreshBackupPanel(); showToast('✅ Uploaded to Google Drive.','success'); }).catch(e=>showToast('❌ '+e.message,'error'));
+      uploadBtn.className = 'btn btn-success btn-sm';
+    } else {
+      uploadBtn.textContent = '🔗 Connect Drive';
+      uploadBtn.onclick = _initGDriveOAuth;
+      uploadBtn.className = 'btn btn-primary btn-sm';
+    }
+  }
+
+  // Status pill
+  const pill = document.getElementById('backup-status-pill');
+  if (pill) {
+    if (connected) {
+      pill.style.background = 'rgba(34,197,94,.1)';
+      pill.style.borderColor = 'rgba(34,197,94,.2)';
+      pill.style.color = 'var(--success)';
+      pill.innerHTML = '✅ Auto-uploads to Google Drive every hour via Cloudflare Worker. Local device backup at 7PM daily.';
+    } else {
+      pill.style.background = 'rgba(245,158,11,.1)';
+      pill.style.borderColor = 'rgba(245,158,11,.2)';
+      pill.style.color = 'var(--warning)';
+      pill.innerHTML = '⚠️ Google Drive not connected. Click <b>Connect Drive</b> below to enable hourly auto-uploads.';
+    }
+  }
+
   _renderBackupHistory();
 }
 
@@ -11395,69 +11432,127 @@ async function manualBackupNow() {
   }
 }
 
-// ── Google Drive Upload ──────────────────────────────────
+// ── Google Drive Upload via Cloudflare Worker ────────────
+// Worker handles: auth token refresh, multipart upload, CORS
 async function uploadToDrive() {
-  const data = _buildBackupPayload();
-  const json = JSON.stringify(data);
-  const filename = `GCE-Backup-${new Date().toISOString().slice(0,10)}.json`;
+  const access_token  = localStorage.getItem('gce_gdrive_access_token');
+  const refresh_token = localStorage.getItem('gce_gdrive_refresh_token');
 
-  // Check for stored Drive token
-  const token = localStorage.getItem('gce_gdrive_token');
-  if (!token) {
-    // No token — trigger OAuth
+  if (!access_token && !refresh_token) {
     _initGDriveOAuth();
-    throw new Error('No Drive token — OAuth initiated');
+    throw new Error('No Drive credentials — OAuth required');
   }
 
-  // Upload via multipart to Drive API
-  const metadata = { name: filename, parents: ['root'], mimeType: 'application/json' };
-  const boundary = '-------GCEBackupBoundary';
-  const body = `--${boundary}\r\nContent-Type: application/json\r\n\r\n${JSON.stringify(metadata)}\r\n--${boundary}\r\nContent-Type: application/json\r\n\r\n${json}\r\n--${boundary}--`;
+  const data     = _buildBackupPayload();
+  const filename = `GCE-Backup-${new Date().toISOString().slice(0,10)}_${new Date().getHours()}h.json`;
+  const content  = JSON.stringify(data);
 
-  const r = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
+  const r = await fetch(`${GDRIVE_WORKER}/gdrive/upload`, {
     method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': `multipart/related; boundary=${boundary}`
-    },
-    body
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ access_token, refresh_token, filename, content })
   });
 
-  if (r.status === 401) {
-    // Token expired — clear and re-auth
-    localStorage.removeItem('gce_gdrive_token');
-    _initGDriveOAuth();
-    throw new Error('Drive token expired');
+  if (!r.ok) {
+    const err = await r.json().catch(()=>({error:'Upload failed'}));
+    if (r.status === 401) {
+      // Both tokens failed — need re-auth
+      localStorage.removeItem('gce_gdrive_access_token');
+      _initGDriveOAuth();
+      throw new Error('Drive auth expired — please reconnect Google Drive');
+    }
+    throw new Error(err.error || `Upload failed: ${r.status}`);
   }
-  if (!r.ok) throw new Error(`Drive upload failed: ${r.status}`);
 
   const result = await r.json();
+
+  // Worker auto-refreshed the token — save new one
+  if (result.new_access_token) {
+    localStorage.setItem('gce_gdrive_access_token', result.new_access_token);
+  }
+
+  // Update last backup timestamp
   const t = new Date().toLocaleString();
   localStorage.setItem(GDRIVE_LAST_KEY, t);
+  STATE.lastGDriveBackup = t;
   const gdEl = document.getElementById('gdrive-last');
   if (gdEl) gdEl.textContent = `Last backup: ${t}`;
+  const gdPanel = document.getElementById('backup-last-drive');
+  if (gdPanel) gdPanel.textContent = `Last Google Drive: ${t}`;
+
   return result;
 }
 
-// ── Google Drive OAuth ───────────────────────────────────
-const GDRIVE_CLIENT_ID = ''; // Set via Settings or auto-detected
-function _initGDriveOAuth() {
-  // Use Cloudflare Worker proxy for OAuth if configured
-  const workerToken = localStorage.getItem('gce_worker_gdrive_token');
-  if (workerToken) {
-    localStorage.setItem('gce_gdrive_token', workerToken);
-    showToast('Google Drive reconnected.', 'success');
-    return;
-  }
-  showToast('⚠️ Google Drive not connected. Configure in Settings → Backup.', 'info');
+// ── List Drive backups via Worker ─────────────────────────
+async function listDriveBackups() {
+  const access_token  = localStorage.getItem('gce_gdrive_access_token');
+  const refresh_token = localStorage.getItem('gce_gdrive_refresh_token');
+  if (!access_token && !refresh_token) return [];
+  try {
+    const r = await fetch(`${GDRIVE_WORKER}/gdrive/list`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ access_token, refresh_token })
+    });
+    const data = await r.json();
+    if (data.new_access_token) localStorage.setItem('gce_gdrive_access_token', data.new_access_token);
+    return data.files || [];
+  } catch(e) { return []; }
 }
 
-// Set Drive token from Cloudflare Worker (called after OAuth redirect)
-function setGDriveToken(token) {
-  if (!token) return;
-  localStorage.setItem('gce_gdrive_token', token);
+// ── Google Drive OAuth (popup flow) ──────────────────────
+function _initGDriveOAuth() {
+  const CLIENT_ID = '18374685378-mc1du1csu19dith7nc466rpn3tj41k23.apps.googleusercontent.com';
+  const redirect  = encodeURIComponent(window.location.origin + window.location.pathname);
+  const scope     = encodeURIComponent('https://www.googleapis.com/auth/drive.file');
+  const authUrl   = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${CLIENT_ID}&redirect_uri=${redirect}&response_type=code&scope=${scope}&access_type=offline&prompt=consent`;
+
+  const popup = window.open(authUrl, 'gdrive_auth', 'width=500,height=600,left=200,top=100');
+  if (!popup) {
+    showToast('⚠️ Allow popups to connect Google Drive.', 'error');
+    return;
+  }
+
+  // Listen for redirect with ?code=
+  const timer = setInterval(async () => {
+    try {
+      if (popup.closed) { clearInterval(timer); return; }
+      const pu = new URL(popup.location.href);
+      const code = pu.searchParams.get('code');
+      if (code) {
+        clearInterval(timer);
+        popup.close();
+        // Exchange code via Worker
+        const r = await fetch(`${GDRIVE_WORKER}/gdrive/token`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code, redirect_uri: window.location.origin + window.location.pathname })
+        });
+        const tokens = await r.json();
+        if (tokens.access_token) {
+          localStorage.setItem('gce_gdrive_access_token', tokens.access_token);
+          if (tokens.refresh_token) localStorage.setItem('gce_gdrive_refresh_token', tokens.refresh_token);
+          showToast('✅ Google Drive connected!', 'success');
+          _refreshBackupPanel();
+          // Immediately do first upload
+          uploadToDrive().then(()=>{ _addBackupHistory('drive'); }).catch(()=>{});
+        } else {
+          showToast('❌ Drive auth failed: ' + (tokens.error||'unknown'), 'error');
+        }
+      }
+    } catch(e) { /* cross-origin — still waiting */ }
+  }, 800);
+}
+
+function setGDriveToken(token, refreshToken) {
+  if (token) localStorage.setItem('gce_gdrive_access_token', token);
+  if (refreshToken) localStorage.setItem('gce_gdrive_refresh_token', refreshToken);
   showToast('✅ Google Drive connected!', 'success');
   _refreshBackupPanel();
+}
+
+function _isDriveConnected() {
+  return !!(localStorage.getItem('gce_gdrive_access_token') || localStorage.getItem('gce_gdrive_refresh_token'));
 }
 
 // ── Download (pull from Firestore) ──────────────────────
@@ -11537,44 +11632,52 @@ function _buildBackupPayload() {
 
 // ── Auto backup check (every hour to Google Drive) ────────
 function checkAutoBackup() {
-  const h = new Date().getHours();
-  const m = new Date().getMinutes();
+  const now = new Date();
+  const h = now.getHours();
+  const m = now.getMinutes();
+  const dateStr = now.toLocaleDateString();
 
-  // 7PM — auto download backup to local storage (silent, once per day)
+  // 7PM — auto download JSON backup to device (once per day)
   if (h === 19 && m <= 5) {
-    const key = 'gce_v2_backup_7pm_'+new Date().toLocaleDateString();
+    const key = `gce_v2_backup_7pm_${dateStr}`;
     if (!localStorage.getItem(key)) {
-      localStorage.setItem(key,'1');
+      localStorage.setItem(key, '1');
       exportBackup();
       _addBackupHistory('local');
       showToast('🕖 7PM — Auto backup saved to your device.', 'success');
     }
   }
 
-  // Auto Google Drive backup EVERY HOUR (if token exists)
-  if (m <= 2) { // fire within first 2 minutes of each hour
-    const key = `gce_v2_auto_drive_${new Date().toLocaleDateString()}_${h}`;
-    if (!localStorage.getItem(key) && localStorage.getItem('gce_gdrive_token')) {
-      localStorage.setItem(key,'1');
-      uploadToDrive()
-        .then(()=>{
-          _addBackupHistory('drive');
-          // Quiet success — only show toast once per day, not every hour
-          const dayKey = 'gce_v2_drive_toast_'+new Date().toLocaleDateString();
-          if (!localStorage.getItem(dayKey)) {
-            localStorage.setItem(dayKey,'1');
-            showToast('☁️ Auto backup to Google Drive.','success');
-          }
-        })
-        .catch(()=>{
-          // Fallback: local JSON export
-          exportBackup();
-          _addBackupHistory('local');
-        });
+  // HOURLY Google Drive upload via Cloudflare Worker (once per hour)
+  // Fires within first 2 minutes of any hour if Drive is connected
+  if (m <= 2 && _isDriveConnected()) {
+    const key = `gce_v2_auto_drive_${dateStr}_${h}`;
+    if (!localStorage.getItem(key)) {
+      localStorage.setItem(key, '1');
+      // Fire-and-forget via Worker — non-blocking
+      _workerDriveBackup();
     }
   }
 }
-setInterval(checkAutoBackup, 60000); // check every minute
+setInterval(checkAutoBackup, 60000); // poll every minute
+
+// ── Worker-triggered Drive backup (non-blocking) ──────────
+async function _workerDriveBackup() {
+  try {
+    await uploadToDrive(); // uses Worker /gdrive/upload with auto token-refresh
+    _addBackupHistory('drive');
+    // Silent — only toast once per day
+    const dayKey = `gce_v2_drive_toast_${new Date().toLocaleDateString()}`;
+    if (!localStorage.getItem(dayKey)) {
+      localStorage.setItem(dayKey, '1');
+      showToast('☁️ Hourly backup → Google Drive.', 'success');
+    }
+  } catch(e) {
+    console.warn('Auto Drive backup failed:', e.message);
+    // Silent fallback — don't bother user with hourly errors
+    // They'll see it in the backup panel history
+  }
+}
 
 document.addEventListener('DOMContentLoaded', () => {
   // Auth form handlers
