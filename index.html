@@ -1283,6 +1283,7 @@ async function initDataLayer() {
     loadCollection(COLS.BORROWS,      'borrows'),
     loadCollection(COLS.PROFORMAS,    'proformas'),
     loadCollection(COLS.ADJLOG,       'adjLog'),
+    loadCollection('v2_pendingDeliveries', 'pendingDeliveries'),
     loadCollection(COLS.SALESRETURNS, 'salesReturns'),
   ]), TIMEOUT);
 
@@ -1644,10 +1645,17 @@ function renderOverview() {
   const allSales = Object.values(STATE.sales||{});
   const todaySales = allSales.filter(s=>s.date===today);
   const monthSales = allSales.filter(s=>(s.month||'')===curMonth);
-  const todayRev = todaySales.reduce((a,s)=>a+(s.total||0),0);
-  const todayProfit = todaySales.reduce((a,s)=>a+(s.profit||0),0);
-  const monthRev = monthSales.reduce((a,s)=>a+(s.total||0),0);
-  const monthProfit = monthSales.reduce((a,s)=>a+(s.profit||0),0);
+  // Group by invoice to avoid double-counting multi-item invoices
+  function groupByInv(sales){
+    const g={};sales.forEach(s=>{const k=s.invoiceNum;if(!g[k])g[k]={total:0,profit:0};g[k].total+=s.total||0;g[k].profit+=s.profit||0;});
+    return Object.values(g);
+  }
+  const todayInvs = groupByInv(todaySales);
+  const monthInvs = groupByInv(monthSales);
+  const todayRev = todayInvs.reduce((a,g)=>a+g.total,0);
+  const todayProfit = todayInvs.reduce((a,g)=>a+g.profit,0);
+  const monthRev = monthInvs.reduce((a,g)=>a+g.total,0);
+  const monthProfit = monthInvs.reduce((a,g)=>a+g.profit,0);
   const todayInvCount = [...new Set(todaySales.map(s=>s.invoiceNum))].length;
 
   // ── Financial ──────────────────────────────────────────────
@@ -3103,7 +3111,7 @@ function _buildInvoiceHTML(invNum, mode='a4', invTypeOverride='sales') {
   const s0 = items[0];
   const gt = items.reduce((a,s)=>a+(s.total||0),0);
   const totalDisc = items.reduce((a,s)=>a+(s.discAmt||0),0);
-  const subtotal = gt + totalDisc;
+  const subtotal = totalDisc>0 ? gt+totalDisc : gt;
 
   // Badge type
   const invType = invTypeOverride||'sales';
@@ -3234,13 +3242,51 @@ function _buildInvoiceHTML(invNum, mode='a4', invTypeOverride='sales') {
   body{font-family:Arial,Helvetica,sans-serif;font-size:${fs('11px','12px')};color:#1a1a1a;background:#fff;
        width:${pageW};margin:0 auto;padding:${pad};position:relative}
   table{width:100%;border-collapse:collapse}
-  .wm{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%) rotate(-35deg);
-      font-size:${fs('55px','72px')};font-weight:900;color:rgba(192,57,43,.055);
-      pointer-events:none;white-space:pre-line;text-align:center;line-height:1;letter-spacing:4px;z-index:0}
+  .wm{position:fixed;top:50%;left:55%;transform:translate(-50%,-50%);
+      pointer-events:none;z-index:0;opacity:0.055;display:flex;flex-direction:column;align-items:center;gap:4px}
   @media print{body{padding:${fs('8mm','10mm')}}button{display:none!important}.wm{position:fixed}}
 </style>
 </head><body>
-<div class="wm">GCE&#10;ORIGINAL&#10;INVOICE</div>
+<div class="wm">
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 190" width="200" height="238">
+    <defs>
+      <linearGradient id="wsg" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" style="stop-color:#c0392b"/>
+        <stop offset="100%" style="stop-color:#7b241c"/>
+      </linearGradient>
+      <linearGradient id="wgg" x1="0%" y1="0%" x2="0%" y2="100%">
+        <stop offset="0%" style="stop-color:#f9d835"/>
+        <stop offset="100%" style="stop-color:#c9a227"/>
+      </linearGradient>
+    </defs>
+    <!-- Main shield body -->
+    <path d="M80 6 L148 34 L148 100 C148 144 80 178 80 178 C80 178 12 144 12 100 L12 34 Z" 
+          fill="url(#wsg)" stroke="url(#wgg)" stroke-width="5"/>
+    <!-- Inner shield outline -->
+    <path d="M80 18 L136 42 L136 100 C136 134 80 164 80 164 C80 164 24 134 24 100 L24 42 Z" 
+          fill="none" stroke="url(#wgg)" stroke-width="2" opacity="0.4"/>
+    <!-- GCE text -->
+    <text x="80" y="72" text-anchor="middle" font-family="Arial Black,sans-serif" 
+          font-size="32" font-weight="900" fill="#f9d835" letter-spacing="4">GCE</text>
+    <!-- Separator line -->
+    <line x1="26" y1="82" x2="134" y2="82" stroke="#f9d835" stroke-width="2" opacity="0.5"/>
+    <!-- Lock body -->
+    <rect x="60" y="93" width="40" height="46" rx="4" fill="none" stroke="#f9d835" stroke-width="3"/>
+    <!-- Lock shackle -->
+    <path d="M68 93 L68 78 Q80 68 92 78 L92 93" fill="none" stroke="#f9d835" stroke-width="3"/>
+    <!-- Keyhole -->
+    <circle cx="80" cy="108" r="7" fill="#f9d835"/>
+    <rect x="77" y="112" width="6" height="16" rx="1" fill="#f9d835"/>
+    <!-- ELECTRO text -->
+    <text x="80" y="160" text-anchor="middle" font-family="Arial,sans-serif" 
+          font-size="13" font-weight="700" fill="#f9d835" letter-spacing="3">ELECTRO</text>
+  </svg>
+  <!-- ORIGINAL INVOICE text below shield -->
+  <div style="text-align:center;margin-top:6px">
+    <div style="font-family:Arial,sans-serif;font-size:22px;font-weight:900;color:#1a237e;letter-spacing:3px;line-height:1.2">ORIGINAL</div>
+    <div style="font-family:Arial,sans-serif;font-size:22px;font-weight:900;color:#c0392b;letter-spacing:2px;line-height:1.2">INVOICE</div>
+  </div>
+</div>
 
 <!-- ═══ HEADER ═══ -->
 <div style="display:flex;align-items:flex-start;justify-content:space-between;padding-bottom:10px;border-bottom:3px solid #c0392b;margin-bottom:10px">
