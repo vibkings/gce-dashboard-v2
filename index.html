@@ -4142,7 +4142,7 @@ function _buildInvoiceHTML(invNum, mode='a4', invTypeOverride='sales', showOutst
   const change=Math.max(0,tendered-gt);
 
   const custName=s0.printName||s0.custName||'Walk-in customer';
-  const address=s0.deliveryAddr||s0.address||'(leave space)';
+  const address=s0.deliveryAddr||s0.address||'';
   const isPending=items.some(s=>s.pendingSupply||s.supplyStatus==='pending');
   const suppliedDate=s0.suppliedDate||s0.date||'';
 
@@ -4309,7 +4309,7 @@ function _buildInvoiceHTML(invNum, mode='a4', invTypeOverride='sales', showOutst
   <div style="border:1px solid #ccc;border-radius:4px;padding:${fs('7px','9px')} ${fs('9px','11px')}">
     <div style="font-size:${fs('10px','11px')};font-weight:700;color:#555;margin-bottom:4px">Bill To:</div>
     <div style="font-size:${fs('12px','14px')};font-weight:700;margin-bottom:2px">${esc(custName)}</div>
-    <div style="font-size:${fs('9px','10px')};color:#777">Address: ${esc(address)}</div>
+      ${address?`<div style="font-size:${fs('9px','10px')};color:#777">Address: ${esc(address)}</div>`:''}
   </div>
   <div style="border:1px solid #ccc;border-radius:4px;padding:${fs('7px','9px')} ${fs('9px','11px')}">
     <div style="font-size:${fs('10px','11px')};font-weight:700;color:#555;margin-bottom:4px">Invoice Details:</div>
