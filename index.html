@@ -1580,6 +1580,8 @@ function fsUrl(col, id) {
 }
 
 function toFsValue(val) {
+  // Never write literal string "undefined" or "null" to Firestore
+  if (val === 'undefined' || val === 'null' || val === 'NaN') return {nullValue: null};
   if (val === null || val === undefined) return {nullValue: null};
   if (typeof val === 'boolean') return {booleanValue: val};
   if (typeof val === 'number') return Number.isInteger(val) ? {integerValue: String(val)} : {doubleValue: val};
@@ -1607,7 +1609,11 @@ function fromFsValue(fv) {
   if ('booleanValue'  in fv) return fv.booleanValue;
   if ('integerValue'  in fv) return parseInt(fv.integerValue);
   if ('doubleValue'   in fv) return fv.doubleValue;
-  if ('stringValue'   in fv) return fv.stringValue;
+  if ('stringValue'   in fv) {
+    const s = fv.stringValue;
+    if (s === 'undefined' || s === 'null' || s === 'NaN') return null;
+    return s;
+  }
   if ('arrayValue'    in fv) return (fv.arrayValue.values||[]).map(fromFsValue);
   if ('mapValue'      in fv) {
     const obj = {};
@@ -1625,6 +1631,20 @@ function fromFsDoc(doc) {
     const parts = doc.name.split('/');
     obj._id = parts[parts.length - 1];
   }
+  // Sanitize numeric fields — null/undefined/'undefined' → 0
+  const NUM_FIELDS = ['cost','sell','qty','minQty','price','salePrice','unitPrice',
+    'total','profit','partPayment','discPct','discAmt','creditBalance','creditLimit',
+    'amount','grandTotal','deposit'];
+  NUM_FIELDS.forEach(f => {
+    if (f in obj) {
+      const v = obj[f];
+      if (v === null || v === undefined || v === '') obj[f] = 0;
+      else if (typeof v === 'string') {
+        const n = parseFloat(v);
+        obj[f] = isNaN(n) ? 0 : n;
+      }
+    }
+  });
   return obj;
 }
 
@@ -2727,27 +2747,31 @@ const INV_PAGE_SIZE = 50;
 if (typeof window._invPage === 'undefined') window._invPage = 0;
 
 function _sanitizeInventory() {
-  // Clean up any inventory items that have literal string 'undefined' 
-  // (caused by bad data entry or migration from other systems)
   const items = Object.values(STATE.inventory||{});
+  if (!items.length) return;
   let dirty = 0;
+  const NUM_FIELDS = ['cost','sell','qty','minQty'];
   items.forEach(i => {
     let changed = false;
-    ['cost','sell','qty','minQty'].forEach(k => {
-      if (i[k] === 'undefined' || i[k] === 'null' || i[k] === '') {
+    NUM_FIELDS.forEach(k => {
+      const raw = i[k];
+      if (raw === null || raw === undefined || raw === '' || raw === 'undefined' || raw === 'null' || raw === 'NaN') {
         i[k] = 0; changed = true;
-      } else if (typeof i[k] === 'string' && i[k].length > 0) {
-        const num = k === 'qty' || k === 'minQty' ? parseInt(i[k]) : parseFloat(i[k]);
-        if (!isNaN(num)) { i[k] = num; changed = true; }
+      } else if (typeof raw === 'string') {
+        const n = k === 'qty' || k === 'minQty' ? parseInt(raw) : parseFloat(raw);
+        if (!isNaN(n)) { i[k] = n; changed = true; }
+        else { i[k] = 0; changed = true; }
       }
     });
-    if (changed) {
+    if (changed && i._id) {
       dirty++;
-      // Push cleaned item back to Firestore silently
-      if (i._id) fsSave(COLS.INVENTORY, i._id, i).catch(()=>{});
+      fsSave(COLS.INVENTORY, i._id, i).catch(()=>{});
     }
   });
-  if (dirty > 0) console.log(`Sanitized ${dirty} inventory items with bad data`);
+  if (dirty > 0) {
+    console.log(`Auto-fixed ${dirty} inventory items — bad numeric values cleaned`);
+    showToast(`✅ Fixed ${dirty} items with missing prices.`, 'success');
+  }
 }
 
 function renderInventory() {
