@@ -1418,10 +1418,26 @@ function _saveSyncQueue() {
   try { localStorage.setItem(SYNC_QUEUE_KEY, JSON.stringify(_syncQueue.slice(-200))); } catch(e){}
 }
 
+// Collections where each entry is unique (append-only, never deduplicate)
+const APPEND_ONLY_COLS = new Set([
+  'v2_sales', 'v2_cashflow', 'v2_activityLog', 'v2_adjLog', 'v2_salesReturns',
+  'v2_purchases', 'v2_proformas', 'v2_borrows'
+]);
+// Monthly sales collections also append-only
+function isAppendOnly(col) {
+  if (APPEND_ONLY_COLS.has(col)) return true;
+  if (/^v2_sales_\d{4}_\d{2}$/.test(col)) return true;
+  return false;
+}
+
 function _enqueue(col, id, data, op='patch') {
-  // Remove existing entry for same doc to avoid double-write
-  _syncQueue = _syncQueue.filter(q=>!(q.col===col&&q.id===id));
-  _syncQueue.push({ col, id, data, op, ts: Date.now() });
+  // For append-only collections: never deduplicate — each record is unique
+  // For mutable collections (inventory, customers, suppliers...): deduplicate
+  // so we don't send stale older state after a newer write
+  if (!isAppendOnly(col)) {
+    _syncQueue = _syncQueue.filter(q=>!(q.col===col&&q.id===id));
+  }
+  _syncQueue.push({ col, id, data, op, ts: Date.now(), v: (data?._updatedAt||new Date().toISOString()) });
   _saveSyncQueue();
   if (_online && !_syncRunning) runSyncQueue();
 }
@@ -1432,23 +1448,67 @@ async function runSyncQueue() {
   setSyncStatus('saving');
   const batch = [..._syncQueue];
   let failed = [];
+  let successCount = 0;
+
   for (const item of batch) {
     try {
       if (item.op === 'delete') {
         await _fsDelete(item.col, item.id);
       } else {
+        // Conflict guard: before patching a mutable doc,
+        // check if Firestore has a newer version
+        if (!isAppendOnly(item.col) && item.v) {
+          try {
+            const existing = await _fsGet(item.col, item.id);
+            if (existing?._updatedAt && existing._updatedAt > item.v) {
+              // Firestore doc is newer than our queued write — skip to prevent overwrite
+              console.warn(`Sync skipped (conflict) ${item.col}/${item.id}: server=${existing._updatedAt} local=${item.v}`);
+              continue; // drop this stale queue entry
+            }
+          } catch(e) { /* can't check — proceed with patch */ }
+        }
         await _fsPatch(item.col, item.id, item.data);
       }
+      successCount++;
     } catch(e) {
-      console.warn(`Sync failed for ${item.col}/${item.id}:`, e.message);
-      failed.push(item);
+      const msg = e.message||'';
+      // Don't retry 404 deletes or 409 conflicts — they're unrecoverable
+      if (msg.includes('404') || msg.includes('409')) {
+        console.warn(`Sync dropped (${msg.includes('404')?'404':'conflict'}) ${item.col}/${item.id}`);
+      } else {
+        // Exponential backoff — increment retry count
+        failed.push({ ...item, retries: (item.retries||0)+1 });
+      }
     }
   }
-  _syncQueue = failed;
+
+  // Cap queue at 500 — prioritise recent writes (keep last 500)
+  _syncQueue = failed.length > 500 ? failed.slice(-500) : failed;
   _saveSyncQueue();
   _syncRunning = false;
+
+  if (successCount > 0) {
+    STATE.lastSaved = new Date().toLocaleString();
+    localStorage.setItem('gce_lastSaved', STATE.lastSaved);
+  }
   setSyncStatus(failed.length ? 'error' : 'synced');
-  if (failed.length) console.warn(`${failed.length} items still in sync queue`);
+  if (failed.length) console.warn(`${failed.length} items still in sync queue (will retry)`);
+
+  // Schedule retry for failed items with exponential backoff
+  if (failed.length && _online) {
+    const maxRetries = Math.max(...failed.map(f=>f.retries||0));
+    const delay = Math.min(30000, 2000 * Math.pow(2, maxRetries-1));
+    setTimeout(()=>{ _syncRunning=false; runSyncQueue(); }, delay);
+  }
+}
+
+// Helper: fetch single doc from Firestore (for conflict check)
+async function _fsGet(col, id) {
+  try {
+    const r = await fetch(`${FB.base}/${col}/${id}?key=${FB.apiKey}`);
+    if (!r.ok) return null;
+    return fromFsDoc(await r.json());
+  } catch(e) { return null; }
 }
 
 // ── Firestore REST helpers ───────────────────────────────
@@ -1650,15 +1710,32 @@ async function _refreshFromFirestore(col, stateKey) {
     const docs = await _fsList(col);
     if (!docs.length) return;
     const store = _lfStore(col);
-    // Merge: Firestore wins for docs it has, local wins for queued unsync'd docs
+    // Snapshot queued IDs at the moment of merge (prevents race condition)
     const queuedIds = new Set(_syncQueue.filter(q=>q.col===col).map(q=>q.id));
-    for (const doc of docs) {
-      if (!queuedIds.has(doc._id)) {
-        STATE[stateKey][doc._id] = doc;
-        if (store) store.setItem(doc._id, doc).catch(()=>{});
+
+    for (const serverDoc of docs) {
+      const docId = serverDoc._id;
+      if (!docId) continue;
+
+      // If doc is in sync queue → our local version is newer, keep it
+      if (queuedIds.has(docId)) continue;
+
+      const localDoc = STATE[stateKey]?.[docId];
+      // Timestamp-based conflict resolution: server wins only if newer
+      if (localDoc?._updatedAt && serverDoc._updatedAt && serverDoc._updatedAt < localDoc._updatedAt) {
+        // Local is newer — skip server version, re-queue local to sync up
+        if (!isAppendOnly(col)) {
+          _enqueue(col, docId, localDoc, 'patch');
+        }
+        continue;
       }
+
+      // Server version is same age or newer — accept it
+      if (!STATE[stateKey]) STATE[stateKey] = {};
+      STATE[stateKey][docId] = serverDoc;
+      if (store) store.setItem(docId, serverDoc).catch(()=>{});
     }
-  } catch(e) { /* silent background refresh */ }
+  } catch(e) { /* silent background refresh failure */ }
 }
 
 // Load monthly sales collection (on demand for reports/overview)
@@ -3749,9 +3826,50 @@ async function v2SaveSale(mode) {
       await fsSave(COLS.CUSTOMERS, invoiceCustomer._id, uc);
       STATE.customers[invoiceCustomer._id] = {...uc, _id:invoiceCustomer._id};
     }
+
+    // ── CASHFLOW RECORDING ──────────────────────────────────
+    // Rule: Only record ACTUAL cash received — never credit sales
+    // Credit    → ₦0 received now → NO cashflow entry
+    // Part pay  → record only partAmt (what was actually received)
+    // Cash/POS/Transfer/Split → record full invoice total
+    const grandTotalCalc = invoiceItems.reduce((a,l)=>a+Math.round(l.price*l.qty*(1-(l.discPct||0)/100)),0);
+    const payment_type = pt==='credit'?'credit':pt==='part'?'part':'paid';
+    if (payment_type !== 'credit') {
+      const cashReceived = payment_type==='part' ? partAmt : grandTotalCalc;
+      if (cashReceived > 0) {
+        if (pt==='split' && splitPayment) {
+          // Two cashflow lines for split payment
+          for (const leg of [{amt:splitPayment.amt1,mode:splitPayment.mode1,bank:splitPayment.bank1||''},{amt:splitPayment.amt2,mode:splitPayment.mode2,bank:splitPayment.bank2||''}]) {
+            if (!leg.amt) continue;
+            const cfId=uid();
+            const cf={id:cfId,type:'in',cat:'Sales',
+              desc:`Split(${leg.mode}${leg.bank?' - '+leg.bank:''}) — Invoice #${invNum} — ${printName}`,
+              amount:leg.amt,payMode:leg.mode,bankName:leg.bank,invoiceNum:invNum,
+              custId:invoiceCustomer?._id||null,custName:invoiceCustomer?.name||'Walk-in',
+              date,month,by:STATE.user.name};
+            await fsSave(COLS.CASHFLOW,cfId,cf);
+            if(!STATE.cashflow)STATE.cashflow={};STATE.cashflow[cfId]={...cf,_id:cfId};
+          }
+        } else {
+          const cfId=uid();
+          const cfCat=payment_type==='part'?'Sales (Part)':'Sales';
+          const cfDesc=payment_type==='part'
+            ?`Part payment — Invoice #${invNum} — ${printName}`
+            :`Sales — Invoice #${invNum} — ${printName}`;
+          const cf={id:cfId,type:'in',cat:cfCat,desc:cfDesc,
+            amount:cashReceived,payMode,bankName,posName,invoiceNum:invNum,
+            custId:invoiceCustomer?._id||null,custName:invoiceCustomer?.name||'Walk-in',
+            date,month,by:STATE.user.name};
+          await fsSave(COLS.CASHFLOW,cfId,cf);
+          if(!STATE.cashflow)STATE.cashflow={};STATE.cashflow[cfId]={...cf,_id:cfId};
+        }
+      }
+    }
+    // ── END CASHFLOW ────────────────────────────────────────
+
     setSyncStatus('synced');
     showToast(`✅ Invoice #${invNum} saved!`,'success');
-    logActivity('Invoice saved',`Invoice #${invNum} — ${printName||''} — ${fmt(grandTotal)}`,payMode||'');
+    logActivity('Invoice saved',`Invoice #${invNum} — ${printName||''} — ${fmt(grandTotalCalc)}`,payMode||'');
     if (mode==='print') printSaleInvoice(invNum);
   else if (mode==='proforma') { await _saveProformaRecord(invNum, printName, date); }
   else if (mode==='draft') { showToast('Draft saved.','info'); }
