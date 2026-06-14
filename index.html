@@ -11535,30 +11535,44 @@ function _buildBackupPayload() {
   };
 }
 
-// ── Auto backup check (daily) ─────────────────────────────
+// ── Auto backup check (every hour to Google Drive) ────────
 function checkAutoBackup() {
   const h = new Date().getHours();
   const m = new Date().getMinutes();
-  // 7PM reminder
+
+  // 7PM reminder toast
   if (h === 19 && m <= 5) {
-    const key = 'gce_v2_backup_'+new Date().toLocaleDateString();
+    const key = 'gce_v2_backup_remind_'+new Date().toLocaleDateString();
     if (!localStorage.getItem(key)) {
       localStorage.setItem(key,'1');
       showToast('🕖 7PM — Daily backup reminder! Click 💾 Backup in the toolbar.', 'info');
     }
   }
-  // Auto Google Drive backup at 2AM if token exists
-  if (h === 2 && m <= 2) {
-    const key = 'gce_v2_auto_drive_'+new Date().toLocaleDateString();
+
+  // Auto Google Drive backup EVERY HOUR (if token exists)
+  if (m <= 2) { // fire within first 2 minutes of each hour
+    const key = `gce_v2_auto_drive_${new Date().toLocaleDateString()}_${h}`;
     if (!localStorage.getItem(key) && localStorage.getItem('gce_gdrive_token')) {
       localStorage.setItem(key,'1');
       uploadToDrive()
-        .then(()=>{ _addBackupHistory('drive'); showToast('☁️ Auto backup to Google Drive done.','success'); })
-        .catch(()=>{ exportBackup(); _addBackupHistory('local'); });
+        .then(()=>{
+          _addBackupHistory('drive');
+          // Quiet success — only show toast once per day, not every hour
+          const dayKey = 'gce_v2_drive_toast_'+new Date().toLocaleDateString();
+          if (!localStorage.getItem(dayKey)) {
+            localStorage.setItem(dayKey,'1');
+            showToast('☁️ Auto backup to Google Drive.','success');
+          }
+        })
+        .catch(()=>{
+          // Fallback: local JSON export
+          exportBackup();
+          _addBackupHistory('local');
+        });
     }
   }
 }
-setInterval(checkAutoBackup, 60000);
+setInterval(checkAutoBackup, 60000); // check every minute
 
 document.addEventListener('DOMContentLoaded', () => {
   // Auth form handlers
