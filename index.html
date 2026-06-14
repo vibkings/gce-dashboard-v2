@@ -4402,20 +4402,20 @@ ${prevBalance>0?`
 </div>
 
 <!-- ═══ QR + SUPPLIED STAMP ═══ -->
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;align-items:stretch">
-  <div style="border:1px solid #ccc;border-radius:4px;padding:${fs('8px','10px')};display:flex;flex-direction:column;align-items:center;justify-content:center">
-    <img id="qrimg" src="${qrUrl}" width="${fs('70','85')}" height="${fs('70','85')}" alt="QR" style="display:block;margin-bottom:4px">
-    <div style="font-size:${fs('8px','9px')};color:#777;text-align:center">scan me</div>
+<div style="display:grid;grid-template-columns:auto 1fr;gap:8px;align-items:stretch;margin-top:4px">
+  <div style="border:1px solid #ccc;border-radius:4px;padding:6px 8px;display:flex;flex-direction:column;align-items:center;justify-content:center;width:${fs('80px','100px')}">
+    <img id="qrimg" src="${qrUrl}" width="${fs('60','72')}" height="${fs('60','72')}" alt="QR" style="display:block;margin-bottom:3px">
+    <div style="font-size:${fs('7px','8px')};color:#999;text-align:center">scan me</div>
   </div>
-  <div style="border:2px solid ${isPending?'#f59e0b':'#16a34a'};border-radius:4px;padding:${fs('8px','10px')};background:${isPending?'#fffbeb':'#f0fdf4'};display:flex;flex-direction:column;align-items:center;justify-content:center">
-    <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
-      <div style="width:${fs('18px','22px')};height:${fs('18px','22px')};border-radius:3px;background:${isPending?'#f59e0b':'#16a34a'};display:flex;align-items:center;justify-content:center;color:#fff;font-size:${fs('11px','14px')};font-weight:900">${isPending?'⏳':'✓'}</div>
-      <div style="font-size:${fs('13px','16px')};font-weight:900;color:${isPending?'#92400e':'#14532d'};letter-spacing:1px">${isPending?'NOT YET SUPPLIED':'SUPPLIED'}</div>
+  <div style="border:2px solid ${isPending?'#f59e0b':'#16a34a'};border-radius:4px;padding:${fs('6px','8px')} ${fs('8px','12px')};background:${isPending?'#fffbeb':'#f0fdf4'};display:flex;flex-direction:column;align-items:center;justify-content:center">
+    <div style="display:flex;align-items:center;gap:6px;margin-bottom:2px">
+      <div style="width:${fs('16px','18px')};height:${fs('16px','18px')};border-radius:3px;background:${isPending?'#f59e0b':'#16a34a'};display:flex;align-items:center;justify-content:center;color:#fff;font-size:${fs('10px','12px')};font-weight:900;flex-shrink:0">${isPending?'⏳':'✓'}</div>
+      <div style="font-size:${fs('11px','13px')};font-weight:900;color:${isPending?'#92400e':'#14532d'};letter-spacing:1px">${isPending?'NOT YET SUPPLIED':'SUPPLIED'}</div>
     </div>
-    <div style="font-size:${fs('9px','10px')};color:${isPending?'#92400e':'#166534'};font-style:italic;text-align:center">
-      ${isPending?'Awaiting supply — stock not yet deducted.':'Goods collected by customer.'}
+    <div style="font-size:${fs('8px','9px')};color:${isPending?'#92400e':'#166534'};font-style:italic;text-align:center">
+      ${isPending?'Awaiting supply.':'Goods collected by customer.'}
     </div>
-    ${!isPending&&suppliedDate?`<div style="font-size:${fs('8.5px','9.5px')};color:#166534;margin-top:3px">Supplied Date: ${suppliedDate}</div>`:''}
+    ${!isPending&&suppliedDate?`<div style="font-size:${fs('7.5px','8.5px')};color:#166534;margin-top:2px">Supplied Date: ${suppliedDate}</div>`:''}
   </div>
 </div>
 
