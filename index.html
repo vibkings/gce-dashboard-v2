@@ -1152,6 +1152,7 @@ async function initDataLayer() {
   if (_online && _syncQueue.length) runSyncQueue();
 
   setSyncStatus(_online ? 'synced' : 'offline');
+  logActivity('Login',`${STATE.user?.name||'Unknown'} logged in`,'');
 }
 
 async function _testFirestoreConnection() {
@@ -1321,6 +1322,7 @@ function doSignout() {
   STATE.user = null;
   Object.keys(_pollTimers).forEach(stopLivePolling);
   showAuth();
+  logActivity('Sign out',`${STATE.user?.name||'User'} signed out`,'');
   showToast('Signed out successfully.', 'info');
 }
 
@@ -2038,6 +2040,7 @@ async function handleInvImportFile(input) {
   renderInventory(); renderOverviewIfActive(); updateInventoryBadge();
   setSyncStatus('synced');
   showToast(`✅ Imported ${added} items.`,'success');
+  logActivity('Inventory import',`${added} items imported from CSV`,'');
 }
 function exportInventory() {
   const items = Object.values(STATE.inventory);
@@ -2839,6 +2842,7 @@ async function v2SaveSale(mode) {
     }
     setSyncStatus('synced');
     showToast(`✅ Invoice #${invNum} saved!`,'success');
+    logActivity('Invoice saved',`Invoice #${invNum} — ${fmt(STATE.lastInvTotal||0)}`,STATE.lastPayMode||'');
     if (mode==='print') printSaleInvoice(invNum);
     invoiceItems=[]; invoiceCustomer=null;
     window._salesFilter='today';
@@ -3263,6 +3267,7 @@ async function voidInvoice(invNum) {
       if (inv) { const u={...inv,qty:(inv.qty||0)+s.qty}; await fsSave(COLS.INVENTORY,s.itemId,u); STATE.inventory[s.itemId]={...u,_id:s.itemId}; }
     }
     setSyncStatus('synced'); showToast(`Invoice #${invNum} voided.`,'info');
+    logActivity('Invoice voided',`Invoice #${invNum} voided`,'');
     renderSales(); renderOverviewIfActive();
   } catch(e) { setSyncStatus('error'); showToast('Failed.','error'); }
 }
@@ -3795,6 +3800,7 @@ async function savePurchaseRecord() {
     renderOverviewIfActive();
     updateInventoryBadge();
     showToast(`✅ Purchase recorded — ${cart.length} item${cart.length!==1?'s':''}`, 'success');
+    logActivity('Purchase saved',`${cart.length} item(s) from ${supplier}`,payType||'');
   } catch(e) {
     setSyncStatus('error');
     showToast('Failed to save purchase.','error');
@@ -3892,6 +3898,7 @@ async function receivePendingItem(pendId) {
 
     setSyncStatus('synced');
     showToast(`✅ Received ${qty}× ${pend.itemName}${fullyDone?' — Fully delivered!':''}`, 'success');
+    logActivity('Delivery received',`${qty}× ${pend.itemName}`,fullyDone?'Complete':'Partial');
     renderPurchases();
   } catch(e) { setSyncStatus('error'); showToast('Failed.','error'); }
 }
@@ -3967,7 +3974,7 @@ async function saveAddCustomer(){
     address:document.getElementById('ac-addr').value.trim(),creditLimit:parseFloat(document.getElementById('ac-limit').value)||0,
     creditBalance:parseFloat(document.getElementById('ac-opening').value)||0,createdAt:new Date().toISOString()};
   setSyncStatus('saving');
-  try{await fsSave(COLS.CUSTOMERS,id,cust);STATE.customers[id]={...cust,_id:id};closeModal();renderCustomers();setSyncStatus('synced');showToast(`✅ ${name} added.`,'success');}
+  try{await fsSave(COLS.CUSTOMERS,id,cust);STATE.customers[id]={...cust,_id:id};closeModal();renderCustomers();setSyncStatus('synced');showToast(`✅ ${name} added.`,'success');logActivity('Customer added',`${name}`,'');}
   catch(e){setSyncStatus('error');showToast('Failed.','error');}
 }
 function showAddCustomerModal(){showAddCustModal();}
@@ -4026,6 +4033,7 @@ async function saveRecordPayment(id){
     await fsSave(COLS.CASHFLOW,payId,{id:payId,desc:`Credit payment — ${c.name}${note?' — '+note:''}`,amount:amt,type:'in',cat:'Credit Payment',payMode:mode,bankName,custId:id,date,month:dateObj.getFullYear()+'-'+String(dateObj.getMonth()+1).padStart(2,'0'),by:STATE.user.name});
     closeModal();renderCustomers();setSyncStatus('synced');
     showToast(`✅ Payment recorded. New balance: ${fmt(newBal)}`,'success');
+    logActivity('Credit payment',`${c.name} — paid ${fmt(amt)} — balance: ${fmt(newBal)}`,mode||'');
   }catch(e){setSyncStatus('error');showToast('Failed.','error');}
 }
 
@@ -4076,7 +4084,7 @@ async function saveAddSupplier(){
   const sup={id,name,phone:document.getElementById('as-phone').value.trim(),contact:document.getElementById('as-contact').value.trim(),
     address:document.getElementById('as-addr').value.trim(),openingBalance:opening,owedToSupplier:opening,totalPurchased:0,createdAt:new Date().toISOString()};
   setSyncStatus('saving');
-  try{await fsSave(COLS.SUPPLIERS,id,sup);STATE.suppliers[id]={...sup,_id:id};closeModal();renderSuppliers();setSyncStatus('synced');showToast(`✅ ${name} added.`,'success');}
+  try{await fsSave(COLS.SUPPLIERS,id,sup);STATE.suppliers[id]={...sup,_id:id};closeModal();renderSuppliers();setSyncStatus('synced');showToast(`✅ ${name} added.`,'success');logActivity('Supplier added',`${name}`,'');}
   catch(e){setSyncStatus('error');showToast('Failed.','error');}
 }
 function showEditSupplierModal(id){
@@ -4202,6 +4210,7 @@ async function resetUserPassword(id) {
     STATE.users[id] = {...updated, _id: id};
     setSyncStatus('synced');
     showToast(`✅ Password reset for ${u.name||u.username}.`, 'success');
+    logActivity('Password reset',`Password reset for ${u.name||u.username}`,'');
   } catch(e) {
     setSyncStatus('error');
     showToast('Failed to reset password.', 'error');
@@ -4673,6 +4682,7 @@ async function saveInlineExpense() {
     renderExpenses();
     setSyncStatus('synced');
     showToast(`✅ Expense recorded: ${fmt(amt)}`,'success');
+    logActivity('Expense added',`${desc||''} — ${fmt(amt)}`,cat||'');
   } catch(e){setSyncStatus('error');showToast('Failed to save.','error');}
 }
 
@@ -4830,6 +4840,7 @@ async function deleteExpense(id) {
     delete STATE.cashflow[id];
     renderExpenses(); setSyncStatus('synced');
     showToast('🗑 Expense deleted.','success');
+    logActivity('Expense deleted','Expense deleted','');
   } catch(e) { setSyncStatus('error'); showToast('Failed to delete.','error'); }
 }
 
@@ -5394,6 +5405,7 @@ function editWhMinQty(id) {
     STATE.warehouse[id]={...w,minQty:newMin,_id:id};
     renderWarehouse();
     showToast(`Min qty updated: ${w.name} → ${newMin}`,'success');
+    logActivity('Min qty updated',`${w.name}: min qty → ${newMin}`,'');
   }).catch(()=>showToast('Failed.','error'));
 }
 
@@ -5436,6 +5448,7 @@ async function saveAddWarehouseStock() {
     await fsSave('v2_transferLog',logId,logEntry);
     if(!STATE.transferLog)STATE.transferLog={};STATE.transferLog[logId]={...logEntry,_id:logId};
     closeModal();setSyncStatus('synced');showToast(`✅ ${qty} × ${inv.name} added to warehouse.`,'success');renderWarehouse();
+    logActivity('Warehouse add',`${qty}× ${inv.name} added to warehouse`,'');
   }catch(e){setSyncStatus('error');showToast('Failed.','error');}
 }
 
@@ -5505,6 +5518,7 @@ async function saveAddWhItem() {
     updateInventoryBadge();
     setSyncStatus('synced');
     showToast(`✅ "${name}" added to warehouse. Shop inventory shows Qty 0.`, 'success');
+    logActivity('Warehouse item added',`${name} added to warehouse`,'');
   } catch(e) {
     setSyncStatus('error');
     showToast('Failed: '+e.message,'error');
@@ -5620,6 +5634,7 @@ async function saveTransferToShop(whId) {
     updateInventoryBadge();
     setSyncStatus('synced');
     showToast(`✅ ${qty} units of "${wh.name}" transferred to shop.`, 'success');
+    logActivity('Transfer to shop',`${qty}× ${wh.name} → Shop`,'');
   } catch(e) {
     setSyncStatus('error');
     showToast('Failed: '+e.message,'error');
@@ -5722,6 +5737,7 @@ async function saveShopToWh() {
     renderInventory();
     setSyncStatus('synced');
     showToast(`✅ ${qty} units moved to warehouse.`, 'success');
+    logActivity('Transfer to warehouse',`${qty}× moved to warehouse`,'');
   } catch(e) {
     setSyncStatus('error');
     showToast('Failed.','error');
@@ -6059,13 +6075,15 @@ function setOpeningFloat(){
   const val=parseFloat(prompt('Enter opening float (cash at start of day):',STATE.settings?.openingFloat||0))||0;
   if(isNaN(val))return;
   const updated={...(STATE.settings||{}),openingFloat:val};
-  fsSave('v2_settings','config',updated).then(()=>{STATE.settings=updated;renderClosing();showToast('Opening float set.','success');}).catch(()=>showToast('Failed.','error'));
+  fsSave('v2_settings','config',updated).then(()=>{STATE.settings=updated;renderClosing();showToast('Opening float set.','success');
+    logActivity('Opening float set',`Float set`,String(val));}).catch(()=>showToast('Failed.','error'));
 }
 
 function editTillCount(){
   const val=parseFloat(prompt('Enter actual cash counted in till:',window._closingActualCount??0));
   if(isNaN(val))return;
   window._closingActualCount=val;
+  logActivity('Closing cash count',`${window._closingDate||new Date().toLocaleDateString()} — counted ${fmt(val)}`,'')
   renderClosing();
 }
 
@@ -7619,6 +7637,7 @@ async function saveEditReturn(id) {
     STATE.salesReturns[id]={...updated,_id:id};
     closeModal();renderReturnsTracker();setSyncStatus('synced');
     showToast('Return updated.','success');
+    logActivity('Sales return',`Return updated`,updated?.refundType||'');
   }catch(e){setSyncStatus('error');showToast('Failed to save.','error');}
 }
 // ── PRODUCT REPORT ───────────────────────────────────────
@@ -8774,6 +8793,7 @@ async function recordInlineCredit(id){
     await fsSave(COLS.CASHFLOW,cfId,{id:cfId,type:'in',cat:'Credit Payment',desc:`Credit payment — ${c.name}`,amount:amt,payMode:mode,bankName,custId:id,date,month,by:STATE.user?.name});
     if(!STATE.cashflow)STATE.cashflow={};STATE.cashflow[cfId]={id:cfId,_id:cfId,type:'in',cat:'Credit Payment',amount:amt,custId:id,date,month};
     setSyncStatus('synced');showToast(`${fmt(amt)} payment recorded. New balance: ${fmt(newBal)}`,'success');
+    logActivity('Credit payment',`Paid ${fmt(amt)} — balance: ${fmt(newBal)}`,mode||'');
     renderCustomers();
   }catch(e){setSyncStatus('error');showToast('Failed.','error');}
 }
@@ -8785,7 +8805,8 @@ async function writeOffCredit(id){
   try{
     const upd={...c,creditBalance:0};
     await fsSave(COLS.CUSTOMERS,id,upd);STATE.customers[id]={...upd,_id:id};
-    setSyncStatus('synced');showToast('Credit written off.','success');renderCustomers();
+    setSyncStatus('synced');showToast('Credit written off.','success');
+    logActivity('Credit written off',`Credit written off for ${c.name}`,fmt(c.creditBalance||0));renderCustomers();
   }catch(e){setSyncStatus('error');showToast('Failed.','error');}
 }
 
@@ -8812,7 +8833,9 @@ async function saveCustomerDeposit(id){
     const cfId=uid();
     await fsSave(COLS.CASHFLOW,cfId,{id:cfId,type:'in',cat:'Customer Deposit',desc:`Deposit from ${c.name}${note?' — '+note:''}`,amount:amt,payMode:mode,bankName,custId:id,date,month,by:STATE.user?.name});
     if(!STATE.cashflow)STATE.cashflow={};STATE.cashflow[cfId]={id:cfId,_id:cfId,type:'in',cat:'Customer Deposit',amount:amt,custId:id,date,month};
-    closeModal();setSyncStatus('synced');showToast(`Deposit of ${fmt(amt)} recorded for ${c.name}.`,'success');renderCustomers();
+    closeModal();setSyncStatus('synced');showToast(`Deposit of ${fmt(amt)} recorded for ${c.name}.`,'success');
+    logActivity('Customer deposit',`${fmt(amt)} deposit from ${c.name}`,mode||'');
+    logActivity('Customer deposit',`${fmt(amt)} deposit from ${c.name}`,mode||'');renderCustomers();
   }catch(e){setSyncStatus('error');showToast('Failed.','error');}
 }
 
@@ -9219,6 +9242,7 @@ async function saveSigCanvas(){
   localStorage.setItem('gce_sig_'+uid2,dataUrl);
   try{await fsSave('v2_signatures',uid2,{id:uid2,sig:dataUrl,savedAt:new Date().toISOString()});}catch(e){}
   showToast('✅ Signature saved.','success');
+  logActivity('Signature saved',`${STATE.user?.name||''} saved signature`,'');
   renderUsers();
 }
 
@@ -9261,7 +9285,8 @@ async function saveInlineNewUser(){
     await fsSave(COLS.USERS,id,user);
     if(!STATE.users)STATE.users={};STATE.users[id]={...user,_id:id};
     ['nu-name','nu-user','nu-pass'].forEach(x=>{const el=document.getElementById(x);if(el)el.value='';});
-    setSyncStatus('synced');showToast(`User "${name}" created.`,'success');renderUsers();
+    setSyncStatus('synced');showToast(`User "${name}" created.`,'success');
+    logActivity('User created',`New user: ${name} (@${username}) — ${role}`,'');renderUsers();
   }catch(e){setSyncStatus('error');showToast('Failed.','error');}
 }
 
@@ -9315,7 +9340,8 @@ async function saveMyProfile(){
   const upd={...STATE.user,name};
   if(pass&&pass.length>=6)upd.password=btoa(pass);
   setSyncStatus('saving');
-  try{await fsSave(COLS.USERS,userId,upd);STATE.users[userId]={...upd,_id:userId};STATE.user={...STATE.user,name};const el=document.getElementById('user-name');if(el)el.textContent=name;setSyncStatus('synced');showToast('Profile updated.','success');}
+  try{await fsSave(COLS.USERS,userId,upd);STATE.users[userId]={...upd,_id:userId};STATE.user={...STATE.user,name};const el=document.getElementById('user-name');if(el)el.textContent=name;setSyncStatus('synced');showToast('Profile updated.','success');
+    logActivity('Profile updated',`${STATE.user?.name||''} updated profile`,'');}
   catch(e){setSyncStatus('error');showToast('Failed.','error');}
 }
 
@@ -9512,7 +9538,8 @@ async function addBankByType(type){
 async function saveSettings(){
   const settings={bizName:document.getElementById('set-biz')?.value.trim(),phone:document.getElementById('set-phone')?.value.trim(),address:document.getElementById('set-addr')?.value.trim(),address2:document.getElementById('set-addr2')?.value.trim()};
   setSyncStatus('saving');
-  try{await fsSave('v2_settings','config',settings);STATE.settings=settings;setSyncStatus('synced');showToast('Settings saved.','success');}
+  try{await fsSave('v2_settings','config',settings);STATE.settings=settings;setSyncStatus('synced');showToast('Settings saved.','success');
+  logActivity('Settings saved','Business settings updated','');}
   catch(e){setSyncStatus('error');showToast('Failed.','error');}
 }
 
