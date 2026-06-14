@@ -193,27 +193,27 @@ input,select,textarea{font-family:var(--font)}
 }
 .nav-section{padding:0 .625rem;margin-bottom:.25rem}
 .nav-section-label{
-  font-size:9px;font-weight:700;color:rgba(255,255,255,.18);
+  font-size:9px;font-weight:800;color:rgba(255,255,255,.35);
   text-transform:uppercase;letter-spacing:.14em;
   padding:.5rem .5rem .2rem;
 }
 .nav-item{
   display:flex;align-items:center;gap:9px;
   padding:7px 10px;border-radius:8px;
-  cursor:pointer;color:rgba(255,255,255,.38);
+  cursor:pointer;color:rgba(255,255,255,.65);
   font-size:12.5px;font-weight:500;
   transition:all .15s;position:relative;
   text-decoration:none;user-select:none;margin:1px 0;
 }
-.nav-item:hover{background:rgba(255,255,255,.04);color:rgba(255,255,255,.7)}
+.nav-item:hover{background:rgba(255,255,255,.07);color:rgba(255,255,255,.92)}
 .nav-item.active{
-  background:rgba(59,130,246,.12);
-  color:#93c5fd;font-weight:600;
+  background:rgba(59,130,246,.15);
+  color:#bfdbfe;font-weight:700;
   border-left:2px solid #3b82f6;
-  box-shadow:inset 0 0 20px rgba(59,130,246,.06);
+  box-shadow:inset 0 0 20px rgba(59,130,246,.08);
 }
 .nav-item.active .nav-icon{opacity:1;filter:drop-shadow(0 0 4px rgba(59,130,246,.6))}
-.nav-icon{font-size:14px;width:18px;text-align:center;flex-shrink:0;opacity:.45}
+.nav-icon{font-size:14px;width:18px;text-align:center;flex-shrink:0;opacity:.75}
 .nav-badge{
   margin-left:auto;background:var(--danger);color:#fff;
   font-size:9.5px;font-weight:700;padding:1px 6px;
@@ -511,10 +511,10 @@ input[type=number]::-webkit-inner-spin-button{opacity:.25}
 }
 [data-theme="light"] .header{background:rgba(240,242,245,.97)}
 [data-theme="light"] .sidebar{background:#e4e6ea}
-[data-theme="light"] .nav-item{color:rgba(0,0,0,.45)}
-[data-theme="light"] .nav-item:hover{background:rgba(0,0,0,.05);color:rgba(0,0,0,.75)}
-[data-theme="light"] .nav-item.active{background:rgba(37,99,235,.1);color:#1d4ed8;border-left-color:#2563eb}
-[data-theme="light"] .nav-section-label{color:rgba(0,0,0,.25)}
+[data-theme="light"] .nav-item{color:rgba(0,0,0,.65)}
+[data-theme="light"] .nav-item:hover{background:rgba(0,0,0,.06);color:rgba(0,0,0,.88)}
+[data-theme="light"] .nav-item.active{background:rgba(37,99,235,.12);color:#1d4ed8;border-left-color:#2563eb;font-weight:700}
+[data-theme="light"] .nav-section-label{color:rgba(0,0,0,.38);font-weight:800}
 [data-theme="light"] .kpi-card{background:rgba(240,242,245,.9)}
 [data-theme="light"] .tbl-wrap{background:rgba(240,242,245,.9)}
 [data-theme="light"] thead{background:rgba(0,0,0,.03)}
@@ -11914,7 +11914,17 @@ async function fixInvoiceCounter(){
 }
 
 // ── WIRE-UP OVERRIDES ─────────────────────────────────────
-renderCustomers = function(){ renderCustomersFull(); };
+renderCustomers = function(){
+  // Messaging tab is handled outside renderCustomersFull
+  if(window._custTab==='messaging'){
+    const el=document.getElementById('customers-content');
+    if(!el)return;
+    const tabBar=`<div class="subtabs"><button class="subtab" onclick="window._custTab='list';renderCustomers()">👥 All Customers</button><button class="subtab active">📱 Messaging</button></div>`;
+    el.innerHTML=tabBar+buildMessagingPanel();
+    return;
+  }
+  renderCustomersFull();
+};
 renderSuppliers = function(){ renderSuppliersFull(); };
 renderUsers     = function(){ renderUsersFull(); };
 renderSettings  = function(){ renderSettingsFull(); };
