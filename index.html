@@ -465,6 +465,237 @@ select.form-input option{background:#1c2130;color:var(--text1)}
 
 /* ── Input number spinners subtle ── */
 input[type=number]::-webkit-inner-spin-button{opacity:.25}
+
+/* ══════════════════════════════════════════════
+   LIGHT MODE  [data-theme="light"]
+══════════════════════════════════════════════ */
+[data-theme="light"]{
+  --bg:        #f0f2f5;
+  --bg2:       #e8eaed;
+  --surface:   #e8eaed;
+  --surface2:  #f0f2f5;
+  --white:     #f0f2f5;
+  --card:      rgba(240,242,245,0.95);
+  --border:    rgba(0,0,0,.09);
+  --border2:   rgba(0,0,0,.15);
+  --text1:     #1a1f2e;
+  --text2:     #374151;
+  --text3:     #6b7280;
+  --text4:     #9ca3af;
+  --brand:     #2563eb;
+  --brand-dk:  #1d4ed8;
+  --success:   #16a34a;
+  --warning:   #d97706;
+  --danger:    #dc2626;
+  --info:      #0284c7;
+}
+[data-theme="light"] .header{background:rgba(240,242,245,.97)}
+[data-theme="light"] .sidebar{background:#e4e6ea}
+[data-theme="light"] .nav-item{color:rgba(0,0,0,.45)}
+[data-theme="light"] .nav-item:hover{background:rgba(0,0,0,.05);color:rgba(0,0,0,.75)}
+[data-theme="light"] .nav-item.active{background:rgba(37,99,235,.1);color:#1d4ed8;border-left-color:#2563eb}
+[data-theme="light"] .nav-section-label{color:rgba(0,0,0,.25)}
+[data-theme="light"] .kpi-card{background:rgba(240,242,245,.9)}
+[data-theme="light"] .tbl-wrap{background:rgba(240,242,245,.9)}
+[data-theme="light"] thead{background:rgba(0,0,0,.03)}
+[data-theme="light"] th{color:#6b7280;border-bottom-color:rgba(0,0,0,.09)}
+[data-theme="light"] td{color:#374151;border-bottom-color:rgba(0,0,0,.05)}
+[data-theme="light"] tr:hover td{background:rgba(37,99,235,.04)}
+[data-theme="light"] .form-card{background:rgba(240,242,245,.95)}
+[data-theme="light"] .form-input{background:rgba(255,255,255,.7);color:#1a1f2e;border-color:rgba(0,0,0,.12)}
+[data-theme="light"] .form-input:focus{background:#fff;border-color:#2563eb}
+[data-theme="light"] select.form-input option{background:#f0f2f5;color:#1a1f2e}
+[data-theme="light"] .modal{background:#f0f2f5}
+[data-theme="light"] .modal-header{background:#f0f2f5}
+[data-theme="light"] .signout-btn{background:rgba(220,38,38,.06);border-color:rgba(220,38,38,.15);color:#dc2626}
+[data-theme="light"] .toast-item{background:rgba(240,242,245,.98);color:#1a1f2e;border-color:rgba(0,0,0,.1)}
+[data-theme="light"] .card{background:rgba(240,242,245,.9)}
+[data-theme="light"] .header-user{background:rgba(0,0,0,.05);border-color:rgba(0,0,0,.09)}
+[data-theme="light"] .header-uname{color:#1a1f2e}
+
+/* ══════════════════════════════════════════════
+   NEUMORPHIC MODE  [data-neumorphic="1"]
+   Soft inset/raised surfaces — eye-friendly
+══════════════════════════════════════════════ */
+/* Dark neumorphic (default dark + neumorph) */
+[data-neumorphic="1"]{
+  --nm-bg:     #12151f;
+  --nm-light:  rgba(255,255,255,.06);
+  --nm-dark:   rgba(0,0,0,.5);
+  --nm-in1:    inset 3px 3px 8px rgba(0,0,0,.5),inset -3px -3px 8px rgba(255,255,255,.04);
+  --nm-out:    6px 6px 14px rgba(0,0,0,.5),-4px -4px 10px rgba(255,255,255,.04);
+  --nm-out-sm: 3px 3px 8px rgba(0,0,0,.45),-2px -2px 6px rgba(255,255,255,.04);
+  --nm-press:  inset 4px 4px 10px rgba(0,0,0,.55),inset -2px -2px 6px rgba(255,255,255,.03);
+  --bg:        #12151f;
+  --surface:   #12151f;
+  --white:     #12151f;
+  --card:      #12151f;
+  --border:    transparent;
+}
+/* Light neumorphic */
+[data-theme="light"][data-neumorphic="1"]{
+  --nm-bg:     #e8ecf0;
+  --nm-light:  rgba(255,255,255,.85);
+  --nm-dark:   rgba(163,177,198,.6);
+  --nm-in1:    inset 4px 4px 10px rgba(163,177,198,.6),inset -4px -4px 10px rgba(255,255,255,.85);
+  --nm-out:    6px 6px 16px rgba(163,177,198,.6),-6px -6px 16px rgba(255,255,255,.85);
+  --nm-out-sm: 3px 3px 8px rgba(163,177,198,.5),-3px -3px 8px rgba(255,255,255,.8);
+  --nm-press:  inset 5px 5px 12px rgba(163,177,198,.65),inset -3px -3px 8px rgba(255,255,255,.75);
+  --bg:        #e8ecf0;
+  --surface:   #e8ecf0;
+  --white:     #e8ecf0;
+  --card:      #e8ecf0;
+  --border:    transparent;
+  --text1:     #2d3748;
+  --text2:     #4a5568;
+  --text3:     #718096;
+}
+/* Apply neumorphic to components */
+[data-neumorphic="1"] .kpi-card{
+  background:var(--nm-bg);box-shadow:var(--nm-out);border:none;transition:all .2s;
+}
+[data-neumorphic="1"] .kpi-card:hover{
+  box-shadow:var(--nm-out),0 0 0 1px rgba(59,130,246,.2);transform:translateY(-1px);
+}
+[data-neumorphic="1"] .tbl-wrap{
+  background:var(--nm-bg);box-shadow:var(--nm-in1);border:none;border-radius:var(--radius-lg);
+}
+[data-neumorphic="1"] .form-card{
+  background:var(--nm-bg);box-shadow:var(--nm-out);border:none;
+}
+[data-neumorphic="1"] .form-input{
+  background:var(--nm-bg);box-shadow:var(--nm-in1);border:none;color:var(--text1);
+}
+[data-neumorphic="1"] .form-input:focus{
+  box-shadow:var(--nm-in1),0 0 0 2px rgba(59,130,246,.3);outline:none;
+}
+[data-neumorphic="1"] .btn{
+  background:var(--nm-bg);box-shadow:var(--nm-out-sm);border:none;color:var(--text2);
+}
+[data-neumorphic="1"] .btn:hover{
+  box-shadow:var(--nm-out);color:var(--text1);transform:translateY(-1px);
+}
+[data-neumorphic="1"] .btn:active{
+  box-shadow:var(--nm-press);transform:translateY(0);
+}
+[data-neumorphic="1"] .btn-primary{
+  background:linear-gradient(135deg,#1d4ed8,#3b82f6);
+  box-shadow:var(--nm-out-sm),0 4px 14px rgba(59,130,246,.35);border:none;color:#fff;
+}
+[data-neumorphic="1"] .btn-primary:hover{
+  box-shadow:var(--nm-out),0 6px 20px rgba(59,130,246,.45);
+}
+[data-neumorphic="1"] .btn-primary:active{
+  box-shadow:var(--nm-press);
+}
+[data-neumorphic="1"] .card{
+  background:var(--nm-bg);box-shadow:var(--nm-out);border:none;
+}
+[data-neumorphic="1"] .modal{
+  background:var(--nm-bg);box-shadow:var(--nm-out),0 0 60px rgba(0,0,0,.5);border:none;
+}
+[data-neumorphic="1"] .modal-header{background:var(--nm-bg)}
+[data-neumorphic="1"] .header{
+  background:var(--nm-bg);box-shadow:0 2px 12px rgba(0,0,0,.4);border-bottom:none;
+}
+[data-neumorphic="1"] .sidebar{
+  background:var(--nm-bg);box-shadow:inset -4px 0 10px rgba(0,0,0,.3);border-right:none;
+}
+[data-neumorphic="1"] .nav-item.active{
+  box-shadow:var(--nm-in1);background:var(--nm-bg);border-left:2px solid #3b82f6;
+}
+[data-neumorphic="1"] .nav-item:hover{
+  box-shadow:var(--nm-out-sm);background:var(--nm-bg);
+}
+[data-neumorphic="1"] .subtab.active{
+  box-shadow:var(--nm-in1);border-bottom:2px solid #3b82f6;
+}
+[data-neumorphic="1"] .overview-hero{
+  box-shadow:var(--nm-out);border:none;
+}
+[data-neumorphic="1"] .chip-ok,[data-neumorphic="1"] .chip-low,[data-neumorphic="1"] .chip-out{
+  box-shadow:var(--nm-out-sm);border:none;
+}
+
+/* ══════════════════════════════════════════════
+   THEME TOGGLE SWITCH
+══════════════════════════════════════════════ */
+.theme-ctrl{display:flex;align-items:center;gap:6px}
+.toggle-wrap{display:flex;align-items:center;gap:5px;padding:4px 8px;border-radius:8px;background:rgba(255,255,255,.05);border:1px solid var(--border);cursor:pointer;transition:all .15s}
+.toggle-wrap:hover{background:rgba(255,255,255,.09)}
+.toggle-label{font-size:10.5px;font-weight:600;color:var(--text3);white-space:nowrap;user-select:none}
+.toggle-track{width:32px;height:18px;border-radius:99px;background:rgba(255,255,255,.1);position:relative;transition:background .2s;flex-shrink:0}
+.toggle-track.on{background:linear-gradient(135deg,#3b82f6,#06b6d4)}
+.toggle-thumb{position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:#fff;transition:all .2s;box-shadow:0 1px 4px rgba(0,0,0,.4)}
+.toggle-track.on .toggle-thumb{left:16px}
+
+/* ══════════════════════════════════════════════
+   FLOATING CALCULATOR
+══════════════════════════════════════════════ */
+#calc-float{
+  position:fixed;bottom:80px;right:24px;z-index:9000;
+  width:240px;border-radius:16px;overflow:hidden;
+  box-shadow:0 20px 60px rgba(0,0,0,.7);
+  display:none;user-select:none;
+}
+#calc-float.visible{display:block}
+.calc-titlebar{
+  background:linear-gradient(135deg,#1d4ed8,#3b82f6);
+  padding:8px 12px;display:flex;align-items:center;justify-content:space-between;
+  cursor:grab;
+}
+.calc-titlebar:active{cursor:grabbing}
+.calc-title{font-size:12px;font-weight:700;color:#fff;letter-spacing:.03em}
+.calc-close{background:rgba(255,255,255,.2);border:none;color:#fff;width:20px;height:20px;border-radius:50%;font-size:12px;cursor:pointer;display:flex;align-items:center;justify-content:center;line-height:1;transition:background .15s}
+.calc-close:hover{background:rgba(255,255,255,.35)}
+.calc-body{
+  background:#13172a;padding:12px;
+}
+[data-theme="light"] .calc-body{background:#e8ecf0}
+[data-neumorphic="1"] .calc-body{background:var(--nm-bg)}
+.calc-display{
+  background:rgba(0,0,0,.35);border-radius:8px;padding:10px 12px;
+  margin-bottom:10px;text-align:right;min-height:54px;
+}
+[data-theme="light"] .calc-display{background:rgba(0,0,0,.08)}
+[data-neumorphic="1"] .calc-display{background:var(--nm-bg);box-shadow:var(--nm-in1)}
+.calc-expr{font-size:10.5px;color:#64748b;min-height:14px;font-family:var(--font-mono)}
+.calc-result{font-size:22px;font-weight:700;color:#f1f5f9;font-family:var(--font-mono);letter-spacing:.02em}
+[data-theme="light"] .calc-result{color:#1a1f2e}
+.calc-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+.calc-btn{
+  padding:10px 4px;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;
+  transition:all .12s;font-family:var(--font-mono);
+}
+[data-neumorphic="1"] .calc-btn{box-shadow:var(--nm-out-sm)}
+[data-neumorphic="1"] .calc-btn:active{box-shadow:var(--nm-press)}
+.calc-btn-num{background:rgba(255,255,255,.07);color:#e2e8f0}
+.calc-btn-num:hover{background:rgba(255,255,255,.13)}
+.calc-btn-num:active{background:rgba(255,255,255,.05);transform:scale(.95)}
+[data-theme="light"] .calc-btn-num{background:rgba(0,0,0,.07);color:#1a1f2e}
+[data-theme="light"] .calc-btn-num:hover{background:rgba(0,0,0,.12)}
+.calc-btn-op{background:rgba(59,130,246,.15);color:#60a5fa;font-size:15px}
+.calc-btn-op:hover{background:rgba(59,130,246,.28)}
+.calc-btn-op:active{transform:scale(.95)}
+.calc-btn-eq{background:linear-gradient(135deg,#2563eb,#3b82f6);color:#fff;grid-column:span 1;box-shadow:0 4px 12px rgba(59,130,246,.35)}
+.calc-btn-eq:hover{box-shadow:0 6px 18px rgba(59,130,246,.5);transform:translateY(-1px)}
+.calc-btn-eq:active{transform:scale(.95) translateY(0)}
+.calc-btn-clear{background:rgba(239,68,68,.15);color:#f87171}
+.calc-btn-clear:hover{background:rgba(239,68,68,.28)}
+.calc-btn-wide{grid-column:span 2}
+
+/* Floating action button for calculator */
+#calc-fab{
+  position:fixed;bottom:24px;right:24px;z-index:8999;
+  width:44px;height:44px;border-radius:50%;
+  background:linear-gradient(135deg,#1d4ed8,#3b82f6);
+  border:none;color:#fff;font-size:20px;cursor:pointer;
+  box-shadow:0 4px 20px rgba(59,130,246,.5);
+  display:flex;align-items:center;justify-content:center;
+  transition:all .2s;
+}
+#calc-fab:hover{transform:scale(1.1);box-shadow:0 6px 28px rgba(59,130,246,.65)}
+#calc-fab:active{transform:scale(.95)}
 </style>
 </head>
 <body>
@@ -517,6 +748,27 @@ input[type=number]::-webkit-inner-spin-button{opacity:.25}
     <div class="header-right">
       <span class="sync-dot" id="sync-dot"></span>
       <span class="sync-label" id="sync-label">Connecting...</span>
+
+      <!-- Light/Dark toggle -->
+      <div class="theme-ctrl">
+        <div class="toggle-wrap" onclick="toggleLightDark()" title="Light / Dark mode">
+          <span class="toggle-label" id="lbl-dark">🌙</span>
+          <div class="toggle-track" id="track-dark">
+            <div class="toggle-thumb"></div>
+          </div>
+          <span class="toggle-label" id="lbl-light">☀️</span>
+        </div>
+      </div>
+
+      <!-- Neumorphic toggle -->
+      <div class="toggle-wrap" onclick="toggleNeumorphic()" title="Neumorphic / Flat design">
+        <span class="toggle-label">✦</span>
+        <div class="toggle-track" id="track-neum">
+          <div class="toggle-thumb"></div>
+        </div>
+        <span class="toggle-label" style="font-size:10px">NM</span>
+      </div>
+
       <button onclick="refreshAllData()" title="Refresh all data" style="background:none;border:1px solid var(--border);border-radius:8px;padding:5px 10px;font-size:12px;cursor:pointer;color:var(--text3)">🔄 Refresh</button>
       <div class="header-user" id="user-menu">
         <div class="header-avatar" id="user-avatar">A</div>
@@ -527,6 +779,48 @@ input[type=number]::-webkit-inner-spin-button{opacity:.25}
       </div>
     </div>
   </header>
+
+  <!-- ══ FLOATING CALCULATOR ══ -->
+  <div id="calc-float">
+    <div class="calc-titlebar" id="calc-drag">
+      <span class="calc-title">🧮 Calculator</span>
+      <button class="calc-close" onclick="toggleCalc()">✕</button>
+    </div>
+    <div class="calc-body">
+      <div class="calc-display">
+        <div class="calc-expr" id="calc-expr"></div>
+        <div class="calc-result" id="calc-result">0</div>
+      </div>
+      <div class="calc-grid">
+        <button class="calc-btn calc-btn-clear" onclick="calcClear()">AC</button>
+        <button class="calc-btn calc-btn-op" onclick="calcSign()">+/-</button>
+        <button class="calc-btn calc-btn-op" onclick="calcPct()">%</button>
+        <button class="calc-btn calc-btn-op" onclick="calcOp('/')">÷</button>
+
+        <button class="calc-btn calc-btn-num" onclick="calcNum('7')">7</button>
+        <button class="calc-btn calc-btn-num" onclick="calcNum('8')">8</button>
+        <button class="calc-btn calc-btn-num" onclick="calcNum('9')">9</button>
+        <button class="calc-btn calc-btn-op" onclick="calcOp('*')">×</button>
+
+        <button class="calc-btn calc-btn-num" onclick="calcNum('4')">4</button>
+        <button class="calc-btn calc-btn-num" onclick="calcNum('5')">5</button>
+        <button class="calc-btn calc-btn-num" onclick="calcNum('6')">6</button>
+        <button class="calc-btn calc-btn-op" onclick="calcOp('-')">−</button>
+
+        <button class="calc-btn calc-btn-num" onclick="calcNum('1')">1</button>
+        <button class="calc-btn calc-btn-num" onclick="calcNum('2')">2</button>
+        <button class="calc-btn calc-btn-num" onclick="calcNum('3')">3</button>
+        <button class="calc-btn calc-btn-op" onclick="calcOp('+')">+</button>
+
+        <button class="calc-btn calc-btn-num calc-btn-wide" onclick="calcNum('0')">0</button>
+        <button class="calc-btn calc-btn-num" onclick="calcDot()">.</button>
+        <button class="calc-btn calc-btn-eq" onclick="calcEquals()">=</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Calculator FAB -->
+  <button id="calc-fab" onclick="toggleCalc()" title="Calculator">🧮</button>
 
   <!-- Sidebar -->
   <nav class="sidebar" id="sidebar">
@@ -1458,6 +1752,183 @@ function stopLivePolling(col) {
     delete _refreshIntervals[col];
   }
 }
+
+/* ══════════════════════════════════════════════
+   THEME SYSTEM — Light/Dark + Neumorphic
+══════════════════════════════════════════════ */
+function _applyTheme(){
+  const dark  = localStorage.getItem('gce_theme_dark')  !== '0'; // default dark
+  const neum  = localStorage.getItem('gce_theme_neum')  === '1'; // default flat
+  const html  = document.documentElement;
+  html.setAttribute('data-theme',    dark ? 'dark' : 'light');
+  html.setAttribute('data-neumorphic', neum ? '1' : '0');
+  // Sync toggles
+  const trackDark = document.getElementById('track-dark');
+  const trackNeum = document.getElementById('track-neum');
+  if(trackDark) trackDark.classList.toggle('on', dark);
+  if(trackNeum) trackNeum.classList.toggle('on', neum);
+}
+function toggleLightDark(){
+  const isDark = document.documentElement.getAttribute('data-theme') !== 'light';
+  localStorage.setItem('gce_theme_dark', isDark ? '0' : '1');
+  _applyTheme();
+  showToast(isDark ? '☀️ Light mode on' : '🌙 Dark mode on', 'info');
+}
+function toggleNeumorphic(){
+  const isNeum = document.documentElement.getAttribute('data-neumorphic') === '1';
+  localStorage.setItem('gce_theme_neum', isNeum ? '0' : '1');
+  _applyTheme();
+  showToast(isNeum ? '✦ Flat design on' : '✦ Neumorphic design on', 'info');
+}
+
+/* ══════════════════════════════════════════════
+   FLOATING CALCULATOR
+══════════════════════════════════════════════ */
+const _calc = {
+  display: '0', expr: '', op: null,
+  prev: null, waitNext: false, hasResult: false
+};
+function toggleCalc(){
+  const el = document.getElementById('calc-float');
+  el.classList.toggle('visible');
+  if(el.classList.contains('visible')) _calcUpdateDisplay();
+}
+function _calcUpdateDisplay(){
+  const r = document.getElementById('calc-result');
+  const e = document.getElementById('calc-expr');
+  if(r) r.textContent = _calc.display.length > 12
+    ? parseFloat(_calc.display).toLocaleString('en',{maximumFractionDigits:6})
+    : parseFloat(_calc.display).toLocaleString('en',{maximumFractionDigits:8});
+  if(e) e.textContent = _calc.expr;
+}
+function calcNum(n){
+  if(_calc.waitNext || _calc.hasResult){
+    _calc.display = n; _calc.waitNext = false; _calc.hasResult = false;
+  } else {
+    _calc.display = _calc.display === '0' ? n : _calc.display + n;
+  }
+  _calcUpdateDisplay();
+}
+function calcDot(){
+  if(_calc.waitNext){ _calc.display = '0.'; _calc.waitNext = false; }
+  else if(!_calc.display.includes('.')) _calc.display += '.';
+  _calcUpdateDisplay();
+}
+function calcOp(op){
+  const val = parseFloat(_calc.display);
+  if(_calc.op && !_calc.waitNext){
+    const res = _calcCompute(_calc.prev, val, _calc.op);
+    _calc.display = String(res);
+    _calc.prev = res;
+  } else {
+    _calc.prev = val;
+  }
+  _calc.op = op;
+  _calc.expr = `${_calc.display} ${op === '*' ? '×' : op === '/' ? '÷' : op}`;
+  _calc.waitNext = true;
+  _calcUpdateDisplay();
+}
+function calcEquals(){
+  if(_calc.op === null) return;
+  const val = parseFloat(_calc.display);
+  const res = _calcCompute(_calc.prev, val, _calc.op);
+  const opSym = _calc.op === '*' ? '×' : _calc.op === '/' ? '÷' : _calc.op;
+  _calc.expr = `${_calc.prev} ${opSym} ${val} =`;
+  _calc.display = String(parseFloat(res.toFixed(10)));
+  _calc.op = null; _calc.prev = null; _calc.waitNext = false; _calc.hasResult = true;
+  _calcUpdateDisplay();
+}
+function _calcCompute(a, b, op){
+  switch(op){
+    case '+': return a + b;
+    case '-': return a - b;
+    case '*': return a * b;
+    case '/': return b === 0 ? 0 : a / b;
+    default: return b;
+  }
+}
+function calcClear(){
+  _calc.display = '0'; _calc.expr = ''; _calc.op = null;
+  _calc.prev = null; _calc.waitNext = false; _calc.hasResult = false;
+  _calcUpdateDisplay();
+}
+function calcSign(){
+  _calc.display = String(parseFloat(_calc.display) * -1);
+  _calcUpdateDisplay();
+}
+function calcPct(){
+  _calc.display = String(parseFloat(_calc.display) / 100);
+  _calcUpdateDisplay();
+}
+
+// Keyboard support for calculator
+document.addEventListener('keydown', e => {
+  const calc = document.getElementById('calc-float');
+  if(!calc?.classList.contains('visible')) return;
+  if(e.key >= '0' && e.key <= '9') { calcNum(e.key); }
+  else if(e.key === '.') { calcDot(); }
+  else if(e.key === '+') { calcOp('+'); }
+  else if(e.key === '-') { calcOp('-'); }
+  else if(e.key === '*') { calcOp('*'); }
+  else if(e.key === '/') { e.preventDefault(); calcOp('/'); }
+  else if(e.key === 'Enter' || e.key === '=') { calcEquals(); }
+  else if(e.key === 'Escape') { toggleCalc(); }
+  else if(e.key === 'Backspace') {
+    _calc.display = _calc.display.length > 1 ? _calc.display.slice(0,-1) : '0';
+    _calcUpdateDisplay();
+  }
+});
+
+// Draggable calculator
+(function(){
+  let dragging=false, ox=0, oy=0;
+  function onDown(e){
+    dragging=true;
+    const el=document.getElementById('calc-float');
+    const r=el.getBoundingClientRect();
+    const cx=e.touches?e.touches[0].clientX:e.clientX;
+    const cy=e.touches?e.touches[0].clientY:e.clientY;
+    ox=cx-r.left; oy=cy-r.top;
+    document.addEventListener('mousemove',onMove);
+    document.addEventListener('mouseup',onUp);
+    document.addEventListener('touchmove',onMove,{passive:false});
+    document.addEventListener('touchend',onUp);
+  }
+  function onMove(e){
+    if(!dragging)return;
+    e.preventDefault();
+    const cx=e.touches?e.touches[0].clientX:e.clientX;
+    const cy=e.touches?e.touches[0].clientY:e.clientY;
+    const el=document.getElementById('calc-float');
+    const maxX=window.innerWidth-el.offsetWidth-8;
+    const maxY=window.innerHeight-el.offsetHeight-8;
+    el.style.left=Math.max(8,Math.min(maxX,cx-ox))+'px';
+    el.style.top =Math.max(8,Math.min(maxY,cy-oy))+'px';
+    el.style.right='auto'; el.style.bottom='auto';
+  }
+  function onUp(){
+    dragging=false;
+    document.removeEventListener('mousemove',onMove);
+    document.removeEventListener('mouseup',onUp);
+    document.removeEventListener('touchmove',onMove);
+    document.removeEventListener('touchend',onUp);
+    // Save position
+    const el=document.getElementById('calc-float');
+    localStorage.setItem('gce_calc_pos',JSON.stringify({l:el.style.left,t:el.style.top}));
+  }
+  window.addEventListener('DOMContentLoaded',()=>{
+    const bar=document.getElementById('calc-drag');
+    if(bar){bar.addEventListener('mousedown',onDown);bar.addEventListener('touchstart',onDown,{passive:false});}
+    // Restore position
+    try{
+      const p=JSON.parse(localStorage.getItem('gce_calc_pos')||'{}');
+      const el=document.getElementById('calc-float');
+      if(p.l&&p.t&&el){el.style.left=p.l;el.style.top=p.t;el.style.right='auto';el.style.bottom='auto';}
+    }catch(e){}
+    // Apply saved theme on load
+    _applyTheme();
+  });
+})();
 
 async function refreshAllData() {
   setSyncStatus('saving');
