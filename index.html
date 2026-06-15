@@ -8609,6 +8609,17 @@ function renderClosing() {
   const creditPayments = Object.values(STATE.cashflow||{}).filter(c=>c.type==='in'&&c.cat==='Credit Payment'&&c.date===closingDate);
   creditPayIn = creditPayments.reduce((a,c)=>a+(c.amount||0),0);
 
+  // Cash change given out today (money that left the till as change to customers)
+  // Only count when changeDisp === 'cash' (not applied to credit/deposit)
+  const cashChangeOut = Object.values(STATE.sales||{})
+    .filter(s => s.date === closingDate && s.changeAmt > 0 && (!s.changeDisp || s.changeDisp === 'cash'))
+    .reduce((a, s) => {
+      // Only count change from cash sales (not transfer/POS where change doesn't come from till)
+      const mode = s.payMode || 'cash';
+      if (mode === 'cash') return a + (s.changeAmt||0);
+      return a;
+    }, 0);
+
   // Expenses
   const EXC=['Restock','Supplier Payment','Supplier Deposit','Change'];
   const dayExp = Object.values(STATE.cashflow||{}).filter(c=>c.type==='out'&&c.date===closingDate&&!EXC.includes(c.cat));
@@ -8617,7 +8628,7 @@ function renderClosing() {
 
   // Till / Cash in hand
   const openingFloat = STATE.settings?.openingFloat || 0;
-  const expectedTill = openingFloat + cashIncome - cashExpenses;
+  const expectedTill = openingFloat + cashIncome - cashExpenses - cashChangeOut;
   const actualCount  = window._closingActualCount ?? expectedTill;
   const tillDiff     = actualCount - expectedTill;
 
@@ -8687,10 +8698,15 @@ function renderClosing() {
         <div style="font-size:11px;color:var(--text3);margin-bottom:4px">Cash out (expenses)</div>
         <div style="font-size:18px;font-weight:700;color:var(--danger)">-${fmt(cashExpenses)}</div>
       </div>
+      ${cashChangeOut>0?`<div style="background:#fef2f2;border-radius:var(--radius);padding:12px 16px;text-align:center;margin-bottom:10px">
+        <div style="font-size:11px;color:var(--text3);margin-bottom:4px">Cash change given out</div>
+        <div style="font-size:18px;font-weight:700;color:var(--danger)">-${fmt(cashChangeOut)}</div>
+        <div style="font-size:10px;color:var(--text3)">Change returned to customers</div>
+      </div>`:''}
       <div style="background:var(--surface);border-radius:var(--radius);padding:12px 16px;text-align:center;margin-bottom:10px">
         <div style="font-size:11px;color:var(--text3);margin-bottom:4px">Expected in till</div>
         <div style="font-size:22px;font-weight:800;color:var(--text1)">${fmt(expectedTill)}</div>
-        <div style="font-size:11px;color:var(--text3)">Float + Sales − Cash out</div>
+        <div style="font-size:11px;color:var(--text3)">Float + Sales − Expenses${cashChangeOut>0?' − Change':''}</div>
       </div>
       <div style="background:${Math.abs(tillDiff)<1?'#f0fdf4':'#fef2f2'};border-radius:var(--radius);padding:12px 16px;text-align:center">
         <div style="font-size:11px;color:var(--text3);margin-bottom:4px">Actual count</div>
@@ -8758,9 +8774,15 @@ function renderClosing() {
           <tr style="border-bottom:1px solid var(--border)">
             <td style="padding:10px 12px">💵 Cash</td>
             <td style="padding:10px 12px;text-align:right;color:var(--success);font-weight:600">${fmt(cashIncome)}</td>
-            <td style="padding:10px 12px;text-align:right;color:var(--danger)">${cashExpenses>0?'-'+fmt(cashExpenses):'-'}</td>
-            <td style="padding:10px 12px;text-align:right;font-weight:700">${fmt(cashIncome-cashExpenses)}</td>
+            <td style="padding:10px 12px;text-align:right;color:var(--danger)">${(cashExpenses+cashChangeOut)>0?'-'+fmt(cashExpenses+cashChangeOut):'-'}</td>
+            <td style="padding:10px 12px;text-align:right;font-weight:700">${fmt(cashIncome-cashExpenses-cashChangeOut)}</td>
           </tr>
+          ${cashChangeOut>0?`<tr style="border-bottom:1px solid var(--border);opacity:.75">
+            <td style="padding:6px 12px;padding-left:24px;font-size:12px;color:var(--text3)">↳ of which change given out</td>
+            <td style="padding:6px 12px;text-align:right"></td>
+            <td style="padding:6px 12px;text-align:right;color:var(--danger);font-size:12px">-${fmt(cashChangeOut)}</td>
+            <td style="padding:6px 12px;text-align:right;font-size:12px;color:var(--text3)">included above</td>
+          </tr>`:''}
           <tr style="border-bottom:1px solid var(--border)">
             <td style="padding:10px 12px">🏧 POS</td>
             <td style="padding:10px 12px;text-align:right;color:var(--success);font-weight:600">${fmt(posIncome)}</td>
