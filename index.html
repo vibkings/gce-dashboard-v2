@@ -3773,9 +3773,27 @@ function renderSales() {
         <label>POS Terminal</label>
         <select class="form-input" id="s-pos-name">${bankSelectOpts('pos')}</select>
       </div>
-      <div class="form-group" id="s-part-wrap" style="margin:0;display:none">
+      <div class="form-group" id="s-part-wrap" style="margin:0;display:none;grid-column:1/-1">
         <label>Amount paid now (₦)</label>
         <input class="form-input" id="s-part-payment" type="number" min="0" placeholder="0">
+      </div>
+      <div class="form-group" id="s-part-mode-wrap" style="margin:0;display:none">
+        <label>Payment mode (part paid)</label>
+        <select class="form-input" id="s-part-mode" onchange="v2OnPartModeChange()">
+          <option value="cash">Cash</option>
+          <option value="transfer">Bank Transfer</option>
+          <option value="pos">POS</option>
+          <option value="split">Split (Cash + Transfer)</option>
+        </select>
+      </div>
+      <div class="form-group" id="s-part-bank-wrap" style="margin:0;display:none">
+        <label>Bank</label>
+        <select class="form-input" id="s-part-bank">${bankSelectOpts('transfer')}</select>
+      </div>
+      <div class="form-group" id="s-part-split-wrap" style="margin:0;display:none;grid-column:1/-1">
+        <label>Cash portion of part payment (₦)</label>
+        <input class="form-input" id="s-part-split-cash" type="number" min="0" placeholder="0">
+        <div id="s-part-split-info" style="font-size:11px;color:var(--text3);margin-top:4px"></div>
       </div>
       <div class="form-group" id="s-credit-due-wrap" style="margin:0;display:none">
         <label>Payment Due Date <span style="font-size:10px;color:var(--text3)">(for credit/part)</span></label>
@@ -4108,6 +4126,9 @@ function v2OnPayTypeChange() {
   show('s-bank-wrap',             pt==='transfer');
   show('s-pos-wrap',              pt==='pos');
   show('s-part-wrap',             pt==='part');
+  show('s-part-mode-wrap',        pt==='part');
+  show('s-part-bank-wrap',        false);
+  show('s-part-split-wrap',       false);
   show('s-credit-due-wrap',       pt==='credit'||pt==='part');
   show('s-split-wrap',            pt==='split');
   show('s-change-wrap',           pt==='cash');
@@ -4119,6 +4140,16 @@ function v2OnPayTypeChange() {
   if(pt==='pos'){const s=document.getElementById('s-paymode');if(s)s.value='pos';const b=document.getElementById('s-pos-name');if(b)b.innerHTML=bankSelectOpts('pos');}
   if(pt==='split') v2OnSplitModeChange();
   if(pt==='deposit') v2UpdateDepositBreakdown();
+}
+
+function v2OnPartModeChange() {
+  const v = document.getElementById('s-part-mode')?.value;
+  const show = (id,vis) => { const el=document.getElementById(id); if(el) el.style.display=vis?'block':'none'; };
+  show('s-part-bank-wrap',  v==='transfer'||v==='pos');
+  show('s-part-split-wrap', v==='split');
+  if (v==='transfer'||v==='pos') {
+    const b=document.getElementById('s-part-bank'); if(b) b.innerHTML=bankSelectOpts(v);
+  }
 }
 
 function v2OnDepositSfModeChange() {
@@ -4469,8 +4500,13 @@ async function v2SaveSale(mode) {
     } else if (payment_type !== 'credit') {
       const cashReceived = payment_type==='part' ? partAmt : grandTotalCalc;
       if (cashReceived > 0) {
+        // For part payment, use the dedicated part-mode selector
+        const partMode = payment_type==='part' ? (document.getElementById('s-part-mode')?.value||'cash') : null;
+        const partBank = partMode==='transfer'||partMode==='pos' ? (document.getElementById('s-part-bank')?.value||'') : '';
+        const partSplitCash = partMode==='split' ? (parseFloat(document.getElementById('s-part-split-cash')?.value)||0) : 0;
+
         if (pt==='split' && splitPayment) {
-          // Two cashflow lines for split payment
+          // Main split payment (full amount)
           for (const leg of [{amt:splitPayment.amt1,mode:splitPayment.mode1,bank:splitPayment.bank1||''},{amt:splitPayment.amt2,mode:splitPayment.mode2,bank:splitPayment.bank2||''}]) {
             if (!leg.amt) continue;
             const cfId=uid();
@@ -4482,14 +4518,31 @@ async function v2SaveSale(mode) {
             await fsSave(COLS.CASHFLOW,cfId,cf);
             if(!STATE.cashflow)STATE.cashflow={};STATE.cashflow[cfId]={...cf,_id:cfId,_savedAt:Date.now()};
           }
+        } else if (payment_type==='part' && partMode==='split') {
+          // Part payment split: cash + transfer
+          const partTransfer = Math.max(0, cashReceived - partSplitCash);
+          if (partSplitCash > 0) {
+            const cId=uid();
+            const cCf={id:cId,type:'in',cat:'Sales (Part)',desc:`Part split cash — Invoice #${invNum} — ${printName}`,amount:partSplitCash,payMode:'cash',custId:invoiceCustomer?._id||null,custName:invoiceCustomer?.name||'Walk-in',date,month,by:STATE.user.name};
+            await fsSave(COLS.CASHFLOW,cId,cCf);
+            if(!STATE.cashflow)STATE.cashflow={};STATE.cashflow[cId]={...cCf,_id:cId,_savedAt:Date.now()};
+          }
+          if (partTransfer > 0) {
+            const tId=uid();
+            const tCf={id:tId,type:'in',cat:'Sales (Part)',desc:`Part split transfer — Invoice #${invNum} — ${printName}`,amount:partTransfer,payMode:'transfer',bankName:partBank,custId:invoiceCustomer?._id||null,custName:invoiceCustomer?.name||'Walk-in',date,month,by:STATE.user.name};
+            await fsSave(COLS.CASHFLOW,tId,tCf);
+            if(!STATE.cashflow)STATE.cashflow={};STATE.cashflow[tId]={...tCf,_id:tId,_savedAt:Date.now()};
+          }
         } else {
           const cfId=uid();
           const cfCat=payment_type==='part'?'Sales (Part)':'Sales';
           const cfDesc=payment_type==='part'
-            ?`Part payment — Invoice #${invNum} — ${printName}`
+            ?`Part payment (${partMode||payMode}) — Invoice #${invNum} — ${printName}`
             :`Sales — Invoice #${invNum} — ${printName}`;
+          const effectiveMode = payment_type==='part' ? (partMode||'cash') : payMode;
+          const effectiveBank = payment_type==='part' ? partBank : bankName;
           const cf={id:cfId,type:'in',cat:cfCat,desc:cfDesc,
-            amount:cashReceived,payMode,bankName,posName,invoiceNum:invNum,
+            amount:cashReceived,payMode:effectiveMode,bankName:effectiveBank,posName,invoiceNum:invNum,
             custId:invoiceCustomer?._id||null,custName:invoiceCustomer?.name||'Walk-in',
             date,month,by:STATE.user.name};
           await fsSave(COLS.CASHFLOW,cfId,cf);
@@ -4912,12 +4965,35 @@ function _showPrintModeModal(invNum) {
   const items = Object.values(STATE.sales||{}).filter(s=>s.invoiceNum===invNum && !s.voided);
   const itemCount = items.length;
   const first = items[0];
-
   const custId = first?.custId;
   const cust = custId ? STATE.customers?.[custId] : null;
-  const outstandingBal = cust ? (cust.creditBalance||0) : 0;
   const custName = first?.printName||first?.custName||'';
   const invoiceTotal = items.reduce((a,s)=>a+(s.total||0),0);
+
+  // Compute outstanding balance LIVE (same formula as profile KPI - avoids drift)
+  let outstandingBal = 0;
+  if (cust) {
+    const custSales = Object.values(STATE.sales||{}).filter(s=>s.custId===custId&&!s._deleted);
+    const invGroups = {};
+    custSales.forEach(s=>{
+      const k=s.invoiceNum;
+      if(!invGroups[k]) invGroups[k]={total:0,payment:s.payment,partPayment:s.partPayment||0};
+      invGroups[k].total+=s.total||0;
+      if(s.partPayment) invGroups[k].partPayment=s.partPayment;
+    });
+    const totalCreditFromSales = Object.values(invGroups).reduce((a,g)=>{
+      if(g.payment==='credit') return a+(g.total||0);
+      if(g.payment==='part') return a+Math.max(0,(g.total||0)-(g.partPayment||0));
+      return a;
+    },0);
+    const totalCreditPaid = Object.values(STATE.cashflow||{})
+      .filter(cf=>cf.type==='in'&&cf.custId===custId&&cf.cat==='Credit Payment')
+      .reduce((a,p)=>a+(p.amount||0),0);
+    const totalWriteOff = Object.values(STATE.cashflow||{})
+      .filter(cf=>cf.custId===custId&&cf.cat==='Credit Write-Off')
+      .reduce((a,p)=>a+(p.amount||0),0);
+    outstandingBal = Math.max(0, totalCreditFromSales - totalCreditPaid - totalWriteOff);
+  }
 
   let suggested, suggestedLabel;
   if (itemCount <= 3)      { suggested='80mm'; suggestedLabel='80mm Thermal'; }
@@ -4935,49 +5011,41 @@ function _showPrintModeModal(invNum) {
   overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.65);z-index:999999;display:flex;align-items:center;justify-content:center;padding:16px;backdrop-filter:blur(4px)';
 
   if (outstandingBal > 0) {
-    // Customer has a balance — show choice for ALL invoice types (paid or credit)
-    overlay.innerHTML = `
-      <div style="background:#fff;border-radius:20px;padding:28px 26px;width:100%;max-width:370px;box-shadow:0 24px 80px rgba(0,0,0,.5);text-align:center">
-        <div style="font-size:36px;margin-bottom:10px">🖨️</div>
-        <div style="font-size:17px;font-weight:700;color:#1a1a1a;margin-bottom:4px">Print Invoice #${esc(invNum)}</div>
-        <div style="font-size:13px;color:#888;margin-bottom:16px">${esc(custName)} has an outstanding balance</div>
-
-        <div style="background:#fffbec;border:1.5px solid #f0d060;border-radius:10px;padding:12px 16px;margin-bottom:18px;text-align:left">
-          <div style="display:flex;justify-content:space-between;padding-bottom:8px;border-bottom:1px solid #f0d06044;margin-bottom:8px">
-            <span style="font-size:13px;color:#555">This invoice:</span>
-            <span style="font-size:13px;font-weight:700">${fmt(invoiceTotal)}</span>
-          </div>
-          <div style="display:flex;justify-content:space-between">
-            <span style="font-size:13px;color:#555">Outstanding balance:</span>
-            <span style="font-size:13px;font-weight:700;color:#c0392b">${fmt(outstandingBal)}</span>
-          </div>
-          <div style="display:flex;justify-content:space-between;padding-top:8px;margin-top:8px;border-top:1px solid #f0d06044">
-            <span style="font-size:13px;font-weight:700;color:#c0392b">Total owed:</span>
-            <span style="font-size:15px;font-weight:900;color:#c0392b">${fmt(outstandingBal)}</span>
-          </div>
-        </div>
-
-        <button onclick="_showSizePicker('${invNum}',true)"
-          style="width:100%;padding:13px;background:#c0392b;border:none;border-radius:10px;color:#fff;font-size:14px;font-weight:700;cursor:pointer;margin-bottom:8px">
-          🖨️ Print with outstanding balance
-        </button>
-        <button onclick="_showSizePicker('${invNum}',false)"
-          style="width:100%;padding:13px;background:#1e293b;border:none;border-radius:10px;color:#fff;font-size:14px;font-weight:700;cursor:pointer;margin-bottom:14px">
-          📄 Print current invoice only
-        </button>
-        <button onclick="document.getElementById('_print_mode_overlay').remove()"
-          style="background:none;border:none;color:#c0392b;font-size:13px;cursor:pointer;font-weight:600;padding:4px">
-          Cancel
-        </button>
-      </div>`;
+    overlay.innerHTML =
+      '<div style="background:var(--surface,#fff);border-radius:20px;padding:28px 26px;width:100%;max-width:370px;box-shadow:0 24px 80px rgba(0,0,0,.5);text-align:center">' +
+      '<div style="font-size:36px;margin-bottom:10px">🖨️</div>' +
+      '<div style="font-size:17px;font-weight:700;color:var(--text1,#1a1a1a);margin-bottom:4px">Print Invoice #'+esc(invNum)+'</div>' +
+      '<div style="font-size:13px;color:#888;margin-bottom:16px">'+esc(custName)+' has an outstanding balance</div>' +
+      '<div style="background:#fffbec;border:1.5px solid #f0d060;border-radius:10px;padding:12px 16px;margin-bottom:18px;text-align:left">' +
+        '<div style="display:flex;justify-content:space-between;padding-bottom:8px;border-bottom:1px solid #f0d06044;margin-bottom:8px">' +
+          '<span style="font-size:13px;color:#555">This invoice:</span>' +
+          '<span style="font-size:13px;font-weight:700">'+fmt(invoiceTotal)+'</span>' +
+        '</div>' +
+        '<div style="display:flex;justify-content:space-between;margin-bottom:6px">' +
+          '<span style="font-size:13px;color:#555">Outstanding balance:</span>' +
+          '<span style="font-size:13px;font-weight:700;color:#c0392b">'+fmt(outstandingBal)+'</span>' +
+        '</div>' +
+        '<div style="display:flex;justify-content:space-between;padding-top:8px;border-top:1px solid #f0d06044">' +
+          '<span style="font-size:13px;font-weight:700;color:#c0392b">Total owed:</span>' +
+          '<span style="font-size:15px;font-weight:900;color:#c0392b">'+fmt(outstandingBal)+'</span>' +
+        '</div>' +
+      '</div>' +
+      '<button onclick="_showSizePicker(\''+invNum+'\',true)" style="width:100%;padding:13px;background:#c0392b;border:none;border-radius:10px;color:#fff;font-size:14px;font-weight:700;cursor:pointer;margin-bottom:8px">' +
+        '🖨️ Print with outstanding balance' +
+      '</button>' +
+      '<button onclick="_showSizePicker(\''+invNum+'\',false)" style="width:100%;padding:13px;background:#1e293b;border:none;border-radius:10px;color:#fff;font-size:14px;font-weight:700;cursor:pointer;margin-bottom:14px">' +
+        '📄 Print current invoice only' +
+      '</button>' +
+      '<button onclick="document.getElementById(\'_print_mode_overlay\').remove()" style="background:none;border:none;color:#888;font-size:13px;cursor:pointer;font-weight:600;padding:4px">Cancel</button>' +
+      '</div>';
   } else {
-    // No outstanding balance — go straight to size picker
-    overlay.innerHTML = `<div id="_size_picker_inner">${_buildSizePickerHTML(invNum, itemCount, suggested, suggestedLabel, sizeRanges, false)}</div>`;
+    overlay.innerHTML = '<div id="_size_picker_inner">'+_buildSizePickerHTML(invNum, itemCount, suggested, suggestedLabel, sizeRanges, false)+'</div>';
   }
 
   document.body.appendChild(overlay);
   overlay.addEventListener('click', e=>{ if(e.target===overlay) overlay.remove(); });
 }
+
 
 // Show the size picker — called after balance choice is made
 function _showSizePicker(invNum, showOutstanding) {
