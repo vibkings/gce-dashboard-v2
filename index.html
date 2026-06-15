@@ -3828,8 +3828,16 @@ function renderSales() {
           <div style="display:flex;justify-content:space-between;margin-bottom:3px"><span>Invoice total:</span><span id="s-hint-total" style="font-weight:700"></span></div>
           <div style="display:flex;justify-content:space-between;margin-bottom:3px"><span>Amount tendered:</span><span id="s-hint-tendered" style="font-weight:700;color:#0369a1"></span></div>
           <div style="display:flex;justify-content:space-between;border-top:1px solid var(--border);padding-top:4px;margin-top:4px">
-            <span style="font-weight:700">💵 Change to give back:</span>
+            <span style="font-weight:700">💵 Change:</span>
             <span id="s-hint-change" style="font-weight:800;font-size:14px;color:#dc2626"></span>
+          </div>
+          <div id="s-change-disp-wrap" style="display:none;margin-top:8px;padding-top:8px;border-top:1px solid var(--border)">
+            <label style="font-size:11px;font-weight:700;color:var(--text2)">Apply change to:</label>
+            <select class="form-input" id="s-change-disp" style="margin-top:4px">
+              <option value="cash">Give as cash change</option>
+              <option value="credit">Apply to outstanding balance</option>
+              <option value="deposit">Add to customer deposit</option>
+            </select>
           </div>
         </div>
       </div>
@@ -4290,21 +4298,38 @@ function togglePurchBankField() {
 }
 
 function v2OnTenderedInput() {
-  const total = invoiceItems.reduce((a,l)=>a+l.price*l.qty,0);
+  const gt = invoiceItems.reduce((a,l)=>a+Math.round(l.price*l.qty*(1-(l.discPct||0)/100)),0);
   const tendered = parseFloat(document.getElementById('s-change-tendered')?.value)||0;
   const hint = document.getElementById('s-change-hint');
-  if(!hint) return;
-  if(tendered>0){
-    hint.style.display='block';
-    const change=tendered-total;
-    const el=id=>document.getElementById(id);
-    if(el('s-hint-total')) el('s-hint-total').textContent='₦'+total.toLocaleString();
-    if(el('s-hint-tendered')) el('s-hint-tendered').textContent='₦'+tendered.toLocaleString();
-    if(el('s-hint-change')){
-      el('s-hint-change').textContent=change>=0?'₦'+change.toLocaleString():'Insufficient';
-      el('s-hint-change').style.color=change>=0?'#dc2626':'#dc2626';
+  const dispWrap = document.getElementById('s-change-disp-wrap');
+  const dispSel = document.getElementById('s-change-disp');
+  if (!hint) return;
+  if (tendered > 0) {
+    hint.style.display = 'block';
+    const change = Math.max(0, tendered - gt);
+    const el = id => document.getElementById(id);
+    if (el('s-hint-total')) el('s-hint-total').textContent = fmt(gt);
+    if (el('s-hint-tendered')) el('s-hint-tendered').textContent = fmt(tendered);
+    if (el('s-hint-change')) {
+      el('s-hint-change').textContent = tendered >= gt ? fmt(change) : '⚠ Insufficient';
+      el('s-hint-change').style.color = tendered >= gt ? '#dc2626' : '#dc2626';
     }
-  } else { hint.style.display='none'; }
+    // Show disposition when there's actual change
+    if (dispWrap) {
+      const hasChange = change > 0;
+      dispWrap.style.display = hasChange ? 'block' : 'none';
+      if (hasChange && dispSel && invoiceCustomer) {
+        const custCredit = invoiceCustomer.creditBalance||0;
+        // Auto-suggest: if customer has outstanding, default to applying change to balance
+        if (custCredit > 0 && dispSel.value === 'cash') {
+          dispSel.value = 'credit';
+        }
+      }
+    }
+  } else {
+    hint.style.display = 'none';
+    if (dispWrap) dispWrap.style.display = 'none';
+  }
 }
 
 function v2OnSplitAmtChange() {
@@ -4409,6 +4434,11 @@ async function v2SaveSale(mode) {
   // Bank/POS name for transfer/POS
   const bankName = document.getElementById('s-bank-name')?.value||'';
   const posName = document.getElementById('s-pos-name')?.value||'';
+  // Tendered amount and change disposition
+  const tenderedAmt = parseFloat(document.getElementById('s-change-tendered')?.value)||0;
+  const changeDisp = document.getElementById('s-change-disp')?.value||'cash'; // cash/credit/deposit
+  const grandTotalForChange = invoiceItems.reduce((a,l)=>a+Math.round(l.price*l.qty*(1-(l.discPct||0)/100)),0);
+  const changeAmt = Math.max(0, tenderedAmt - grandTotalForChange);
   setSyncStatus('saving');
   try {
     for (const l of invoiceItems) {
@@ -4424,6 +4454,7 @@ async function v2SaveSale(mode) {
         payment:(pt==='credit'?'credit':pt==='part'?'part':pt==='deposit'?'deposit':'paid'),
         payMode:(pt==='credit'||pt==='part'?'cash':pt==='deposit'?'deposit':payMode), splitPayment,
         partPayment: pt==='part' ? partAmt : pt==='deposit' ? (window._saleDepositPortion||0) : 0, bankName, posName,
+        tenderedAmt: tenderedAmt||0, changeAmt: changeAmt||0, changeDisp: changeAmt>0?changeDisp:'cash',
         custId:invoiceCustomer?._id||null, custName:invoiceCustomer?.name||'Walk-in',
         printName, date, month, seller:STATE.user.name, deliveryAddr,
         dueDate:(pt==='credit'||pt==='part')?(document.getElementById('s-credit-due-date')?.value||''):'',
@@ -4440,6 +4471,39 @@ async function v2SaveSale(mode) {
         STATE.inventory[l.itemId] = {...u, _id:l.itemId,_savedAt:Date.now()};
       }
     }
+    // ── CHANGE DISPOSITION ───────────────────────────────────
+    // If customer overpaid (change > 0) and chose to apply it
+    if (changeAmt > 0 && invoiceCustomer && changeDisp !== 'cash') {
+      if (changeDisp === 'credit') {
+        // Apply change to reduce outstanding credit balance
+        const newBal = Math.max(0, (invoiceCustomer.creditBalance||0) - changeAmt);
+        const upd = {...invoiceCustomer, creditBalance: newBal};
+        await fsSave(COLS.CUSTOMERS, invoiceCustomer._id, upd);
+        STATE.customers[invoiceCustomer._id] = {...upd, _id:invoiceCustomer._id, _savedAt:Date.now()};
+        // Record as credit payment in cashflow
+        const cfId = uid();
+        const cf = {id:cfId,type:'in',cat:'Credit Payment',
+          desc:`Overpayment applied to balance — Inv #${invNum} — ${printName}`,
+          amount:changeAmt,payMode,bankName,custId:invoiceCustomer._id,
+          date,month,invoiceNum:invNum,by:STATE.user.name};
+        await fsSave(COLS.CASHFLOW,cfId,cf);
+        if(!STATE.cashflow)STATE.cashflow={};
+        STATE.cashflow[cfId]={...cf,_id:cfId,_savedAt:Date.now()};
+        showToast(`✅ ${fmt(changeAmt)} overpayment applied to outstanding balance. New balance: ${fmt(newBal)}.`,'success');
+      } else if (changeDisp === 'deposit') {
+        // Add change to customer deposit
+        const cfId = uid();
+        const cf = {id:cfId,type:'in',cat:'Customer Deposit',
+          desc:`Overpayment deposit — Inv #${invNum} — ${printName}`,
+          amount:changeAmt,payMode,bankName,custId:invoiceCustomer._id,
+          date,month,invoiceNum:invNum,by:STATE.user.name};
+        await fsSave(COLS.CASHFLOW,cfId,cf);
+        if(!STATE.cashflow)STATE.cashflow={};
+        STATE.cashflow[cfId]={...cf,_id:cfId,_savedAt:Date.now()};
+        showToast(`✅ ${fmt(changeAmt)} overpayment added to deposit balance.`,'success');
+      }
+    }
+
     // Update customer credit if credit/part
     if (invoiceCustomer && (pt==='credit'||pt==='part')) {
       // Always use discounted grand total
@@ -4729,10 +4793,12 @@ function _buildInvoiceHTML(invNum, mode='a4', invTypeOverride='sales', showOutst
   // What this invoice added to credit
   const thisInvoiceCredit = payment==='credit' ? gt
     : payment==='part' ? Math.max(0, gt-(s0.partPayment||0))
-    : payment==='deposit' ? Math.max(0, gt-(s0.partPayment||0)) // shortfall after deposit
+    : payment==='deposit' ? Math.max(0, gt-(s0.partPayment||0))
     : 0;
-  // Total owed after this invoice = prev balance + this invoice's credit portion
-  const totalWithBalance = prevBalance + thisInvoiceCredit;
+  // If change was applied to credit (not given as cash), it reduced the outstanding
+  const changeAppliedToCredit = (s0.changeDisp==='credit' && (s0.changeAmt||0)>0) ? (s0.changeAmt||0) : 0;
+  // Total owed after this invoice = prev balance + this invoice's credit - change applied
+  const totalWithBalance = Math.max(0, prevBalance + thisInvoiceCredit - changeAppliedToCredit);
   const qrUrl=`https://api.qrserver.com/v1/create-qr-code/?size=90x90&data=https://greatchidelectro.com/invoice/${invNum}`;
 
   // Customer signature (saved after verification)
