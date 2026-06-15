@@ -11593,15 +11593,71 @@ async function renderCustomerProfile(id){
 
   // Transaction history
   const cfLines=Object.values(STATE.cashflow||{}).filter(cf=>cf.custId===id).sort((a,b)=>(b.date||'').localeCompare(a.date||''));
-  const txRows=invList.map(g=>{
-    const modeStr=g.payMode==='split'&&g.splitPayment?`Split`:g.payMode==='transfer'&&g.bankName?`Transfer → ${esc(g.bankName)}`:g.payMode==='pos'&&g.posName?`POS (${esc(g.posName)})`:g.payment==='credit'?'Credit':g.payment==='part'?'Part pay':(g.payMode||'Cash');
-    return`<tr style="${g.payment==='credit'||g.payment==='part'?'background:#fef9f0':''}">
-      <td style="font-size:12px;color:var(--text3);white-space:nowrap">${g.date||''}</td>
-      <td><b style="font-family:var(--font-mono)">Invoice #${esc(g.invoiceNum)}</b></td>
-      <td class="td-right" style="color:var(--success);font-weight:700">+ ${fmt(g.total)}</td>
-      <td style="font-size:12px">${modeStr}</td>
-      <td class="td-right" style="color:${g.payment==='credit'||g.payment==='part'?'var(--danger)':'var(--text3)'};">${g.payment==='credit'||g.payment==='part'?fmt(g.total):'—'}</td>
-      <td style="font-size:11px;color:var(--text3)">${esc(g.seller)}</td>
+  // Build full chronological ledger: invoices + payments + write-offs
+  const allCustCashflow = Object.values(STATE.cashflow||{})
+    .filter(cf=>cf.custId===id&&!cf._deleted)
+    .sort((a,b)=>(a.date||'').localeCompare(b.date||'')||(a._savedAt||0)-(b._savedAt||0));
+
+  const ledgerEntries=[];
+  invList.forEach(g=>{
+    ledgerEntries.push({date:g.date||'',type:'invoice',invoiceNum:g.invoiceNum,
+      desc:'Invoice #'+g.invoiceNum,amount:g.total,payment:g.payment,payMode:g.payMode,
+      bankName:g.bankName||'',posName:g.posName||'',splitPayment:g.splitPayment||null,
+      seller:g.seller||'',partPayment:g.items[0]?.partPayment||0,
+      changeAmt:g.items[0]?.changeAmt||0,changeDisp:g.items[0]?.changeDisp||'cash',
+      _savedAt:g.items[0]?._savedAt||0});
+  });
+  allCustCashflow.filter(cf=>cf.cat==='Credit Payment').forEach(cf=>{
+    ledgerEntries.push({date:cf.date||'',type:'payment',desc:'Credit payment',
+      amount:cf.amount||0,payMode:cf.payMode||'cash',bankName:cf.bankName||'',
+      by:cf.by||'',invoiceNum:cf.invoiceNum||'',_savedAt:cf._savedAt||0});
+  });
+  allCustCashflow.filter(cf=>cf.cat==='Credit Write-Off').forEach(cf=>{
+    ledgerEntries.push({date:cf.date||'',type:'writeoff',desc:'Credit write-off',
+      amount:cf.amount||0,by:cf.by||'',_savedAt:cf._savedAt||0});
+  });
+  ledgerEntries.sort((a,b)=>(a.date||'').localeCompare(b.date||'')||(a._savedAt||0)-(b._savedAt||0));
+
+  let runningBal=0;
+  const txRows=ledgerEntries.map(e=>{
+    let amountCell='',balCell='',rowStyle='',descCell='',modeCell='',byCell='';
+    if(e.type==='invoice'){
+      const partPaid=e.partPayment||0;
+      const owed=e.payment==='credit'?e.amount
+        :e.payment==='part'||e.payment==='deposit'?Math.max(0,e.amount-partPaid):0;
+      const changeCredit=e.changeAmt>0&&e.changeDisp!=='deposit'?e.changeAmt:0;
+      runningBal=Math.max(0,runningBal+owed-changeCredit);
+      const modeStr=e.payment==='credit'?'Credit'
+        :e.payment==='part'?'Part ('+fmt(partPaid)+' paid)'
+        :e.payment==='deposit'?'Deposit ('+fmt(partPaid)+' applied)'
+        :e.payMode==='split'?'Split':(e.payMode||'Cash');
+      amountCell=`<td class="td-right" style="color:var(--success);font-weight:700">+ ${fmt(e.amount)}</td>`;
+      modeCell=`<td style="font-size:12px">${modeStr}</td>`;
+      balCell=`<td class="td-right" style="color:${runningBal>0?'var(--danger)':'var(--text3)'};font-weight:${runningBal>0?'700':'400'}">${runningBal>0?fmt(runningBal):'—'}</td>`;
+      descCell=`<td><b style="font-family:var(--font-mono)">${esc(e.desc)}</b></td>`;
+      rowStyle=owed>0?'background:#fef9f0':'';
+      byCell=esc(e.seller||'');
+    } else if(e.type==='payment'){
+      runningBal=Math.max(0,runningBal-(e.amount||0));
+      amountCell=`<td class="td-right" style="color:#15803d;font-weight:700">− ${fmt(e.amount)}</td>`;
+      modeCell=`<td style="font-size:12px">${e.payMode||'cash'}</td>`;
+      balCell=`<td class="td-right" style="color:${runningBal>0?'var(--danger)':'var(--success)'};font-weight:700">${fmt(runningBal)}</td>`;
+      descCell=`<td style="color:#15803d"><b>${esc(e.desc)}</b>${e.invoiceNum?' <span style="font-size:10px;color:var(--text3)">Inv #'+esc(e.invoiceNum)+'</span>':''}</td>`;
+      rowStyle='background:#f0fdf4';
+      byCell=esc(e.by||'');
+    } else if(e.type==='writeoff'){
+      runningBal=Math.max(0,runningBal-(e.amount||0));
+      amountCell=`<td class="td-right" style="color:#f59e0b;font-weight:700">− ${fmt(e.amount)}</td>`;
+      modeCell=`<td style="font-size:12px">Write-off</td>`;
+      balCell=`<td class="td-right" style="color:${runningBal>0?'var(--danger)':'var(--success)'};font-weight:700">${fmt(runningBal)}</td>`;
+      descCell=`<td style="color:#f59e0b"><b>${esc(e.desc)}</b></td>`;
+      rowStyle='background:#fffbeb';
+      byCell=esc(e.by||'');
+    }
+    return`<tr style="${rowStyle}">
+      <td style="font-size:12px;color:var(--text3);white-space:nowrap">${e.date||''}</td>
+      ${descCell}${amountCell}${modeCell}${balCell}
+      <td style="font-size:11px;color:var(--text3)">${byCell}</td>
     </tr>`;
   }).join('');
 
@@ -11722,7 +11778,27 @@ async function renderCustomerProfile(id){
       </table></div>`:'<div style="color:var(--text3);font-size:13px;text-align:center;padding:14px">No deposits yet.</div>'}
     </div>
 
-    <!-- Purchase History & Analytics -->
+    <!-- Payments Ledger -->
+    ${(()=>{
+      const payments = allCustCashflow.filter(cf=>cf.cat==='Credit Payment');
+      if(!payments.length) return '';
+      return `<div style="background:var(--white);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px 16px;margin-bottom:1.25rem">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:#15803d;margin-bottom:12px;display:flex;align-items:center;gap:6px">
+          <span style="width:3px;height:14px;background:#15803d;border-radius:2px;display:inline-block"></span>
+          💳 PAYMENTS RECEIVED
+        </div>
+        <div class="tbl-wrap" style="border-radius:var(--radius);border:1px solid var(--border)"><table>
+          <thead><tr><th>DATE</th><th class="td-right">AMOUNT</th><th>MODE</th><th>NOTE</th><th>RECEIVED BY</th></tr></thead>
+          <tbody>${payments.sort((a,b)=>(b.date||'').localeCompare(a.date||'')).map(p=>`<tr>
+            <td style="font-size:12px;color:var(--text3)">${p.date||'—'}</td>
+            <td class="td-right" style="color:#15803d;font-weight:700">${fmt(p.amount||0)}</td>
+            <td style="font-size:12px">${p.payMode||'cash'}${p.bankName?' — '+esc(p.bankName):''}</td>
+            <td style="font-size:12px;color:var(--text3)">${esc(p.desc||'—')}</td>
+            <td style="font-size:11px;color:var(--text3)">${esc(p.by||'—')}</td>
+          </tr>`).join('')}</tbody>
+        </table></div>
+      </div>`;
+    })()}
     <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px 16px;margin-bottom:1.25rem">
       <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--brand);margin-bottom:14px;display:flex;align-items:center;gap:6px">
         <span style="width:3px;height:14px;background:var(--brand);border-radius:2px;display:inline-block"></span>
