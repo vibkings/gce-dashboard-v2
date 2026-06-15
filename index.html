@@ -1758,28 +1758,23 @@ async function fsSave(col, id, data) {
 }
 
 async function fsDelete(col, id) {
+  // Tombstone-based soft delete — works for ALL collections including append-only.
+  // A tombstone { _deleted: true } tells every device "this was intentionally removed".
+  // BiSync will never push a tombstoned doc back up, and will propagate the tombstone
+  // to other devices so they also remove it from STATE.
+  // NOTE: "append-only" refers to sync queue deduplication behaviour only —
+  // it does NOT mean records can't be deleted. Tombstones handle deletes correctly
+  // for all collection types.
   const now = new Date().toISOString();
   const nowMs = Date.now();
-  // Write a tombstone instead of hard-deleting.
-  // Tombstone: { _id, _deleted:true, _deletedAt, _savedAt }
-  // BiSync sees tombstone → knows doc was intentionally deleted → doesn't push it back.
-  // Append-only collections (sales, cashflow, etc.) still hard-delete — those records
-  // are voided/returned via their own audit trail, not deleted outright.
-  if (!isAppendOnly(col)) {
-    const tombstone = { _id: id, _deleted: true, _deletedAt: now, _savedAt: nowMs, _updatedAt: now };
-    try {
-      const store = _lfStore(col);
-      if (store) await store.setItem(id, tombstone);
-    } catch(e) {}
-    _enqueue(col, id, tombstone, 'patch'); // write tombstone to Firestore (not a delete)
-    return;
-  }
-  // Append-only: hard delete (these are audit records, not entities)
+  const tombstone = { _id: id, _deleted: true, _deletedAt: now, _savedAt: nowMs, _updatedAt: now };
   try {
     const store = _lfStore(col);
-    if (store) await store.removeItem(id);
-  } catch(e) { console.warn('IndexedDB delete failed:', e); }
-  _enqueue(col, id, null, 'delete');
+    if (store) await store.setItem(id, tombstone);
+  } catch(e) { console.warn('IndexedDB tombstone write failed:', e); }
+  // Write tombstone to Firestore as a PATCH (not DELETE request)
+  // so other devices can see "this was intentionally removed"
+  _enqueue(col, id, tombstone, 'patch');
 }
 
 // Load a collection: IndexedDB first, then Firestore if stale
