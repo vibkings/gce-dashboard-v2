@@ -4797,7 +4797,10 @@ function _buildInvoiceHTML(invNum, mode='a4', invTypeOverride='sales', showOutst
     : 0;
   // If change was applied to credit (not given as cash), it reduced the outstanding
   const changeAppliedToCredit = (s0.changeDisp==='credit' && (s0.changeAmt||0)>0) ? (s0.changeAmt||0) : 0;
-  // Total owed after this invoice = prev balance + this invoice's credit - change applied
+  const changeAppliedToDeposit = (s0.changeDisp==='deposit' && (s0.changeAmt||0)>0) ? (s0.changeAmt||0) : 0;
+  // amountPaid shown in statement = what actually paid THIS invoice (not change going elsewhere)
+  const amountPaidOnInvoice = payment==='paid' ? gt : amountPaid;
+  // Total owed after this invoice = prev balance + this invoice's credit - change applied to balance
   const totalWithBalance = Math.max(0, prevBalance + thisInvoiceCredit - changeAppliedToCredit);
   const qrUrl=`https://api.qrserver.com/v1/create-qr-code/?size=90x90&data=https://greatchidelectro.com/invoice/${invNum}`;
 
@@ -5022,9 +5025,13 @@ ${totalWithBalance>0&&showOutstanding?`
     <span style="font-size:${fs('10px','11px')};color:#555">Previous outstanding:</span>
     <span style="font-size:${fs('11px','12px')};font-weight:700;color:#c0392b">₦${prevBalance.toLocaleString()}</span>
   </div>`:''}
-  ${amountPaid>0?`<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid #f5c6c6">
-    <span style="font-size:${fs('10px','11px')};color:#555">Amount paid now:</span>
-    <span style="font-size:${fs('11px','12px')};font-weight:700;color:#27ae60">₦${amountPaid.toLocaleString()}</span>
+  ${amountPaidOnInvoice>0?`<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid #f5c6c6">
+    <span style="font-size:${fs('10px','11px')};color:#555">Amount paid (this invoice):</span>
+    <span style="font-size:${fs('11px','12px')};font-weight:700;color:#27ae60">₦${amountPaidOnInvoice.toLocaleString()}</span>
+  </div>`:''}
+  ${changeAppliedToCredit>0?`<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid #f5c6c6">
+    <span style="font-size:${fs('10px','11px')};color:#555">Overpayment applied to balance:</span>
+    <span style="font-size:${fs('11px','12px')};font-weight:700;color:#27ae60">₦${changeAppliedToCredit.toLocaleString()}</span>
   </div>`:''}
   <div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;margin-top:2px">
     <span style="font-size:${fs('11px','12px')};font-weight:800;color:#c0392b">Total outstanding:</span>
