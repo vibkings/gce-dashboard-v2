@@ -1905,7 +1905,144 @@ async function saveSaleDoc(invoiceMonth, id, data) {
   return fsSave(col, id, data);
 }
 
-// ── STARTUP SEQUENCE ─────────────────────────────────────
+// ════════════════════════════════════════════════════════════
+// BIDIRECTIONAL SMART SYNC
+// Runs once per session per collection.
+// Direction A: Firestore has doc IndexedDB/STATE is missing → pull in
+// Direction B: IndexedDB has doc Firestore is missing → push up
+// Conflict (both have it): keep newer by _savedAt timestamp
+// Never deletes. Respects append-only. Skips on quota/network error.
+// ════════════════════════════════════════════════════════════
+const _biSyncDone = new Set();
+
+async function runBiSync(col, stateKey) {
+  if (_biSyncDone.has(col) || !_online) return;
+  _biSyncDone.add(col);
+  try {
+    const serverDocs = await _fsList(col);
+    const store = _lfStore(col);
+    const serverMap = {};
+    serverDocs.forEach(d => { if (d._id) serverMap[d._id] = d; });
+    const localMap = STATE[stateKey] || {};
+    const serverIds = new Set(Object.keys(serverMap));
+    const queuedIds = new Set(_syncQueue.filter(q=>q.col===col).map(q=>q.id));
+    let pulled = 0, pushed = 0, resolved = 0;
+
+    // A: Firestore has → we don't (or server is newer)
+    for (const [id, serverDoc] of Object.entries(serverMap)) {
+      if (queuedIds.has(id)) continue;
+      const localDoc = localMap[id];
+      if (!localDoc) {
+        if (!STATE[stateKey]) STATE[stateKey] = {};
+        STATE[stateKey][id] = serverDoc;
+        if (store) store.setItem(id, serverDoc).catch(()=>{});
+        pulled++;
+      } else {
+        const lTs = localDoc._savedAt || (localDoc._updatedAt ? new Date(localDoc._updatedAt).getTime() : 0);
+        const sTs = serverDoc._savedAt || (serverDoc._updatedAt ? new Date(serverDoc._updatedAt).getTime() : 0);
+        if (sTs > lTs) {
+          STATE[stateKey][id] = serverDoc;
+          if (store) store.setItem(id, serverDoc).catch(()=>{});
+          resolved++;
+        } else if (lTs > sTs && !isAppendOnly(col)) {
+          _enqueue(col, id, localDoc, 'patch');
+          resolved++;
+        }
+      }
+    }
+
+    // B: We have → Firestore doesn't
+    for (const [id, localDoc] of Object.entries(localMap)) {
+      if (serverIds.has(id) || queuedIds.has(id)) continue;
+      _enqueue(col, id, localDoc, 'patch');
+      pushed++;
+    }
+
+    if (pulled||pushed||resolved)
+      console.log(`BiSync [${col}]: ↓${pulled} pulled, ↑${pushed} queued, ~${resolved} conflicts resolved`);
+    if ((pushed||resolved) && _online && !_syncRunning) runSyncQueue();
+  } catch(e) {
+    _biSyncDone.delete(col); // allow retry
+    console.warn(`BiSync failed [${col}]:`, e.message);
+  }
+}
+
+async function runBiSyncSalesMonth(y, m) {
+  const col = salesCol(y, m);
+  if (_biSyncDone.has(col) || !_online) return;
+  _biSyncDone.add(col);
+  try {
+    const serverDocs = await _fsList(col);
+    if (!serverDocs.length) return;
+    const store = _lfStore(col);
+    const serverMap = {};
+    serverDocs.forEach(d => { if (d._id) serverMap[d._id] = d; });
+    const serverIds = new Set(Object.keys(serverMap));
+    const queuedIds = new Set(_syncQueue.filter(q=>q.col===col).map(q=>q.id));
+    let pulled = 0, pushed = 0;
+
+    // Pull missing from server
+    for (const [id, doc] of Object.entries(serverMap)) {
+      if (!queuedIds.has(id) && !STATE.sales[id]) {
+        STATE.sales[id] = doc;
+        if (store) store.setItem(id, doc).catch(()=>{});
+        pulled++;
+      }
+    }
+    // Push local docs server doesn't have
+    for (const [id, localDoc] of Object.entries(STATE.sales)) {
+      const docCol = localDoc.month ? salesCol(...localDoc.month.split('-').map(Number)) : null;
+      if (docCol !== col) continue;
+      if (!serverIds.has(id) && !queuedIds.has(id)) {
+        _enqueue(col, id, localDoc, 'patch');
+        pushed++;
+      }
+    }
+    if (pulled||pushed) console.log(`BiSync [${col}]: ↓${pulled} pulled, ↑${pushed} queued`);
+    if (pushed && _online && !_syncRunning) runSyncQueue();
+  } catch(e) {
+    _biSyncDone.delete(col);
+    console.warn(`BiSync sales failed [${col}]:`, e.message);
+  }
+}
+
+async function runFullBiSync() {
+  if (!_online) return;
+  const COLS_TO_SYNC = [
+    [COLS.INVENTORY,    'inventory'],
+    [COLS.CUSTOMERS,    'customers'],
+    [COLS.SUPPLIERS,    'suppliers'],
+    [COLS.CASHFLOW,     'cashflow'],
+    [COLS.PURCHASES,    'purchases'],
+    [COLS.WAREHOUSE,    'warehouse'],
+    [COLS.BORROWS,      'borrows'],
+    [COLS.PROFORMAS,    'proformas'],
+    [COLS.SALESRETURNS, 'salesReturns'],
+    [COLS.HELDCHANGE,   'heldChange'],
+    [COLS.USERS,        'users'],
+  ];
+  // Sequential with 300ms gap to be quota-friendly
+  for (const [col, key] of COLS_TO_SYNC) {
+    await runBiSync(col, key);
+    await new Promise(r => setTimeout(r, 300));
+  }
+  // Current + previous month sales
+  const now = new Date();
+  const months = [
+    [now.getFullYear(), now.getMonth()+1],
+    [now.getMonth()===0 ? now.getFullYear()-1 : now.getFullYear(),
+     now.getMonth()===0 ? 12 : now.getMonth()],
+  ];
+  for (const [y, m] of months) {
+    await runBiSyncSalesMonth(y, m);
+    await new Promise(r => setTimeout(r, 300));
+  }
+  console.log('Full BiSync complete.');
+  // Trigger UI refresh if we pulled new data
+  renderOverviewIfActive?.();
+}
+
+
 async function initDataLayer() {
   // localForage is loaded via <script> in <head> — no dynamic load needed
   _lf = typeof localforage !== 'undefined' ? localforage : null;
@@ -1968,6 +2105,14 @@ async function initDataLayer() {
 
   setSyncStatus(_online ? 'synced' : 'offline');
   logActivity('Login',`${STATE.user?.name||'Unknown'} logged in`,'');
+
+  // ── Bidirectional smart sync ──────────────────────────────
+  // Runs 6s after startup to avoid competing with initial render.
+  // Fills gaps in both directions: pulls missing Firestore docs into
+  // IndexedDB, and pushes missing IndexedDB docs up to Firestore.
+  if (_online) {
+    setTimeout(() => runFullBiSync(), 6000);
+  }
 }
 
 async function _testFirestoreConnection() {
@@ -2120,20 +2265,19 @@ function stopLivePolling(col) {
 
 async function manualSyncAll() {
   setSyncStatus('saving');
-  showToast('Syncing all collections from Firestore...', 'info');
+  showToast('Running full bidirectional sync...', 'info');
   try {
-    await Promise.all([
-      _refreshFromFirestore(COLS.INVENTORY,  'inventory'),
-      _refreshFromFirestore(COLS.CUSTOMERS,  'customers'),
-      _refreshFromFirestore(COLS.SUPPLIERS,  'suppliers'),
-      _refreshFromFirestore(COLS.PURCHASES,  'purchases'),
-      _refreshFromFirestore(COLS.CASHFLOW,   'cashflow'),
-      _refreshFromFirestore(COLS.WAREHOUSE,  'warehouse'),
-    ]);
-    const now = new Date();
-    await loadMonthlySales(now.getFullYear(), now.getMonth()+1);
+    // First push anything queued
+    if (_syncQueue.length) await runSyncQueue();
+    // Then do full bidirectional gap-fill
+    // Reset done flags so it actually runs
+    _biSyncDone.clear();
+    await runFullBiSync();
     setSyncStatus('synced');
-    showToast('✅ All data synced from Firestore.', 'success');
+    showToast('✅ Bidirectional sync complete.', 'success');
+    // Refresh active page
+    const activePage = document.querySelector('.page.active')?.id?.replace('page-','');
+    if (activePage) switchPage(activePage);
   } catch(e) {
     setSyncStatus('error');
     showToast('Sync failed: ' + e.message, 'error');
