@@ -3544,7 +3544,14 @@ function renderSales() {
           <option value="pos">POS</option>
           <option value="transfer">Bank transfer</option>
           <option value="split">Split payment (2 modes)</option>
-          ${invoiceType==='registered'?'<option value="credit">Credit (full amount owed)</option><option value="part">Part payment</option>':''}
+          ${invoiceType==='registered'?'<option value="credit">Credit (full amount owed)</option><option value="part">Part payment</option>':''}\
+          ${(()=>{
+            if(invoiceType!=='registered'||!invoiceCustomer)return'';
+            const totalDep=Object.values(STATE.cashflow||{}).filter(cf=>cf.custId===(invoiceCustomer._id||invoiceCustomer.id)&&cf.cat==='Customer Deposit').reduce((a,d)=>a+(d.amount||0),0);
+            const usedDep=Object.values(STATE.cashflow||{}).filter(cf=>cf.custId===(invoiceCustomer._id||invoiceCustomer.id)&&cf.cat==='Deposit Applied').reduce((a,d)=>a+(d.amount||0),0);
+            const avail=Math.max(0,totalDep-usedDep);
+            return avail>0?`<option value="deposit">💜 Apply Deposit (${fmt(avail)} available)</option>`:'';
+          })()}
         </select>
       </div>
       <div class="form-group" id="s-paymode-wrap" style="margin:0">
@@ -3570,6 +3577,28 @@ function renderSales() {
       <div class="form-group" id="s-credit-due-wrap" style="margin:0;display:none">
         <label>Payment Due Date <span style="font-size:10px;color:var(--text3)">(for credit/part)</span></label>
         <input class="form-input" id="s-credit-due-date" type="date">
+      </div>
+      <div class="form-group" id="s-deposit-info-wrap" style="margin:0;display:none;grid-column:1/-1">
+        <div id="s-deposit-breakdown" style="background:#f5f0ff;border:1.5px solid #c4b5fd;border-radius:8px;padding:10px 14px;font-size:13px"></div>
+      </div>
+      <div class="form-group" id="s-deposit-shortfall-wrap" style="margin:0;display:none">
+        <label>Shortfall mode</label>
+        <select class="form-input" id="s-deposit-sf-mode" onchange="v2OnDepositSfModeChange()">
+          <option value="cash">Cash</option>
+          <option value="transfer">Bank Transfer</option>
+          <option value="pos">POS</option>
+          <option value="split">Split (Cash + Transfer)</option>
+          ${(()=>{const c=invoiceCustomer;return(c&&(c.creditLimit||0)>0)?'<option value="credit">Credit (add to balance)</option>':'';})()} 
+        </select>
+      </div>
+      <div class="form-group" id="s-deposit-sf-bank-wrap" style="margin:0;display:none">
+        <label>Bank</label>
+        <select class="form-input" id="s-deposit-sf-bank">${bankSelectOpts('transfer')}</select>
+      </div>
+      <div class="form-group" id="s-deposit-sf-cash-wrap" style="margin:0;display:none;grid-column:1/-1">
+        <label>Cash portion of shortfall (₦)</label>
+        <input class="form-input" id="s-deposit-sf-cash" type="number" min="0" placeholder="0">
+        <div id="s-deposit-sf-split-info" style="font-size:11px;color:var(--text3);margin-top:4px"></div>
       </div>
       <div class="form-group" id="s-change-wrap" style="margin:0;display:none">
         <label>Amount tendered by customer (₦)</label>
@@ -3871,18 +3900,53 @@ function v2RemoveInvItem(idx) { invoiceItems.splice(idx,1); renderSales(); }
 
 function v2OnPayTypeChange() {
   const pt = document.getElementById('s-payment')?.value;
-  const pm = document.getElementById('s-paymode')?.value||'cash';
   const show = (id,vis) => { const el=document.getElementById(id); if(el) el.style.display=vis?'block':'none'; };
-  show('s-paymode-wrap', pt==='cash'||pt==='pos'||pt==='transfer');
-  show('s-bank-wrap',    pt==='transfer');
-  show('s-pos-wrap',     pt==='pos');
-  show('s-part-wrap',    pt==='part');
-  show('s-credit-due-wrap', pt==='credit'||pt==='part');
-  show('s-split-wrap',   pt==='split');
-  show('s-change-wrap',  pt==='cash');
+  show('s-paymode-wrap',          pt==='cash'||pt==='pos'||pt==='transfer');
+  show('s-bank-wrap',             pt==='transfer');
+  show('s-pos-wrap',              pt==='pos');
+  show('s-part-wrap',             pt==='part');
+  show('s-credit-due-wrap',       pt==='credit'||pt==='part');
+  show('s-split-wrap',            pt==='split');
+  show('s-change-wrap',           pt==='cash');
+  show('s-deposit-info-wrap',     pt==='deposit');
+  show('s-deposit-shortfall-wrap',pt==='deposit');
+  show('s-deposit-sf-bank-wrap',  false);
+  show('s-deposit-sf-cash-wrap',  false);
   if(pt==='transfer'){const s=document.getElementById('s-paymode');if(s)s.value='transfer';const b=document.getElementById('s-bank-name');if(b)b.innerHTML=bankSelectOpts('transfer');}
   if(pt==='pos'){const s=document.getElementById('s-paymode');if(s)s.value='pos';const b=document.getElementById('s-pos-name');if(b)b.innerHTML=bankSelectOpts('pos');}
   if(pt==='split') v2OnSplitModeChange();
+  if(pt==='deposit') v2UpdateDepositBreakdown();
+}
+
+function v2OnDepositSfModeChange() {
+  const v = document.getElementById('s-deposit-sf-mode')?.value;
+  const show = (id,vis) => { const el=document.getElementById(id); if(el) el.style.display=vis?'block':'none'; };
+  show('s-deposit-sf-bank-wrap', v==='transfer'||v==='pos');
+  show('s-deposit-sf-cash-wrap', v==='split');
+}
+
+function v2UpdateDepositBreakdown() {
+  const el = document.getElementById('s-deposit-breakdown');
+  const sfWrap = document.getElementById('s-deposit-shortfall-wrap');
+  if (!el || !invoiceCustomer) return;
+  const custId = invoiceCustomer._id||invoiceCustomer.id;
+  const totalDep = Object.values(STATE.cashflow||{}).filter(cf=>cf.custId===custId&&cf.cat==='Customer Deposit').reduce((a,d)=>a+(d.amount||0),0);
+  const usedDep = Object.values(STATE.cashflow||{}).filter(cf=>cf.custId===custId&&cf.cat==='Deposit Applied').reduce((a,d)=>a+(d.amount||0),0);
+  const avail = Math.max(0, totalDep - usedDep);
+  const grandTotal = invoiceItems.reduce((a,l)=>a+Math.round(l.price*l.qty*(1-(l.discPct||0)/100)),0);
+  const depPortion = Math.min(avail, grandTotal);
+  const shortfall = Math.max(0, grandTotal - depPortion);
+  el.innerHTML =
+    `<div style="display:flex;justify-content:space-between;margin-bottom:4px"><span>Invoice total:</span><b>${fmt(grandTotal)}</b></div>
+     <div style="display:flex;justify-content:space-between;margin-bottom:4px;color:#8b5cf6"><span>Deposit applied:</span><b>− ${fmt(depPortion)}</b></div>
+     <div style="display:flex;justify-content:space-between;border-top:1px solid #c4b5fd;padding-top:6px;margin-top:4px;font-weight:700;color:${shortfall>0?'#d97706':'#15803d'}">
+       <span>${shortfall>0?'Shortfall to pay:':'Fully covered by deposit'}</span><b>${fmt(shortfall)}</b>
+     </div>`;
+  if (sfWrap) sfWrap.style.display = shortfall > 0 ? 'block' : 'none';
+  // store for use in save
+  window._saleDepositAvail = avail;
+  window._saleDepositPortion = depPortion;
+  window._saleDepositShortfall = shortfall;
 }
 
 function v2TogglePaySubFields(mode) {
@@ -4036,8 +4100,8 @@ async function v2SaveSale(mode) {
         unitPrice:l.price,
         profit:(l.price-l.cost)*l.qty - (l.discAmt||0),
         discount:l.discAmt||0,
-        payment:(pt==='credit'?'credit':pt==='part'?'part':'paid'),
-        payMode:(pt==='credit'||pt==='part'?'cash':payMode), splitPayment,
+        payment:(pt==='credit'?'credit':pt==='part'?'part':pt==='deposit'?'deposit':'paid'),
+        payMode:(pt==='credit'||pt==='part'?'cash':pt==='deposit'?'deposit':payMode), splitPayment,
         partPayment:pt==='part'?partAmt:0, bankName, posName,
         custId:invoiceCustomer?._id||null, custName:invoiceCustomer?.name||'Walk-in',
         printName, date, month, seller:STATE.user.name, deliveryAddr,
@@ -4063,15 +4127,62 @@ async function v2SaveSale(mode) {
       await fsSave(COLS.CUSTOMERS, invoiceCustomer._id, uc);
       STATE.customers[invoiceCustomer._id] = {...uc, _id:invoiceCustomer._id};
     }
+    // Update customer credit if deposit shortfall is credit
+    if (invoiceCustomer && pt==='deposit') {
+      const sfMode = document.getElementById('s-deposit-sf-mode')?.value||'cash';
+      if (sfMode==='credit') {
+        const shortfall = window._saleDepositShortfall||0;
+        if (shortfall>0) {
+          const uc = {...invoiceCustomer, creditBalance:(invoiceCustomer.creditBalance||0)+shortfall};
+          await fsSave(COLS.CUSTOMERS, invoiceCustomer._id, uc);
+          STATE.customers[invoiceCustomer._id] = {...uc, _id:invoiceCustomer._id};
+        }
+      }
+    }
 
     // ── CASHFLOW RECORDING ──────────────────────────────────
     // Rule: Only record ACTUAL cash received — never credit sales
     // Credit    → ₦0 received now → NO cashflow entry
     // Part pay  → record only partAmt (what was actually received)
+    // Deposit   → record Deposit Applied (out) + shortfall cash only
     // Cash/POS/Transfer/Split → record full invoice total
     const grandTotalCalc = invoiceItems.reduce((a,l)=>a+Math.round(l.price*l.qty*(1-(l.discPct||0)/100)),0);
-    const payment_type = pt==='credit'?'credit':pt==='part'?'part':'paid';
-    if (payment_type !== 'credit') {
+    const payment_type = pt==='credit'?'credit':pt==='part'?'part':pt==='deposit'?'deposit':'paid';
+
+    if (payment_type === 'deposit') {
+      const depPortion = window._saleDepositPortion||0;
+      const shortfall  = window._saleDepositShortfall||0;
+      const sfMode = document.getElementById('s-deposit-sf-mode')?.value||'cash';
+      const sfBank = document.getElementById('s-deposit-sf-bank')?.value||'';
+      const custId = invoiceCustomer?._id||null;
+      // Record deposit used — internal tracking, NOT a new cash inflow
+      if (depPortion > 0) {
+        const depId = uid();
+        const depCf = {id:depId,type:'out',cat:'Deposit Applied',
+          desc:'Deposit applied - Inv #'+invNum+' - '+printName,
+          amount:depPortion,custId,date,month,invoiceNum:invNum,by:STATE.user.name};
+        await fsSave(COLS.CASHFLOW,depId,depCf);
+        if(!STATE.cashflow)STATE.cashflow={};STATE.cashflow[depId]={...depCf,_id:depId};
+      }
+      // Record shortfall cash received (only if not credit)
+      if (shortfall > 0 && sfMode !== 'credit') {
+        if (sfMode === 'split') {
+          const cashPortion = parseFloat(document.getElementById('s-deposit-sf-cash')?.value)||0;
+          const transferPortion = Math.max(0, shortfall - cashPortion);
+          if (cashPortion>0) {
+            const cId=uid(),cCf={id:cId,type:'in',cat:'Sales',desc:'Split cash deposit shortfall - Inv #'+invNum+' - '+printName,amount:cashPortion,payMode:'cash',custId,date,month,invoiceNum:invNum,by:STATE.user.name};
+            await fsSave(COLS.CASHFLOW,cId,cCf);STATE.cashflow[cId]={...cCf,_id:cId};
+          }
+          if (transferPortion>0) {
+            const tId=uid(),tCf={id:tId,type:'in',cat:'Sales',desc:'Split transfer deposit shortfall - Inv #'+invNum+' - '+printName,amount:transferPortion,payMode:'transfer',bankName:sfBank,custId,date,month,invoiceNum:invNum,by:STATE.user.name};
+            await fsSave(COLS.CASHFLOW,tId,tCf);STATE.cashflow[tId]={...tCf,_id:tId};
+          }
+        } else {
+          const sfId=uid(),sfCf={id:sfId,type:'in',cat:'Sales',desc:'Deposit shortfall ('+sfMode+') - Inv #'+invNum+' - '+printName,amount:shortfall,payMode:sfMode,bankName:sfBank,custId,date,month,invoiceNum:invNum,by:STATE.user.name};
+          await fsSave(COLS.CASHFLOW,sfId,sfCf);STATE.cashflow[sfId]={...sfCf,_id:sfId};
+        }
+      }
+    } else if (payment_type !== 'credit') {
       const cashReceived = payment_type==='part' ? partAmt : grandTotalCalc;
       if (cashReceived > 0) {
         if (pt==='split' && splitPayment) {
