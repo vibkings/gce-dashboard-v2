@@ -4384,59 +4384,41 @@ async function v2SaveSale(mode) {
     }
     // Update customer credit if credit/part
     if (invoiceCustomer && (pt==='credit'||pt==='part')) {
-      const gt = invoiceItems.reduce((a,l)=>a+l.price*l.qty,0);
+      // Always use discounted grand total
+      const gt = invoiceItems.reduce((a,l)=>a+Math.round(l.price*l.qty*(1-(l.discPct||0)/100)),0);
+      const existingCredit = invoiceCustomer.creditBalance||0;
       if (pt==='credit') {
-        // Full credit — full invoice added to balance
-        const uc = {...invoiceCustomer, creditBalance:(invoiceCustomer.creditBalance||0)+gt};
+        const uc = {...invoiceCustomer, creditBalance: existingCredit + gt};
         await fsSave(COLS.CUSTOMERS, invoiceCustomer._id, uc);
         STATE.customers[invoiceCustomer._id] = {...uc, _id:invoiceCustomer._id,_savedAt:Date.now()};
       } else {
-        // Part payment — partAmt was paid now
-        if (partAmt >= gt) {
-          // Overpayment — customer paid more than invoice total
-          const overpaid = partAmt - gt;
-          const existingCredit = invoiceCustomer.creditBalance||0;
-          if (existingCredit > 0) {
-            // Has outstanding balance — reduce it by the overpayment
-            const newCredit = Math.max(0, existingCredit - overpaid);
-            const remainingOver = overpaid - (existingCredit - newCredit);
-            const uc = {...invoiceCustomer, creditBalance: newCredit};
-            // If still excess after clearing credit, add to deposit
-            if (remainingOver > 0) {
-              // Record excess as a deposit
-              const depId = uid();
-              const depCf = {id:depId,type:'in',cat:'Customer Deposit',
-                desc:`Overpayment deposit — Inv #${invNum} — ${printName}`,
-                amount:remainingOver,payMode,bankName,custId:invoiceCustomer._id,
-                date,month,invoiceNum:invNum,by:STATE.user.name};
-              await fsSave(COLS.CASHFLOW,depId,depCf);
-              if(!STATE.cashflow)STATE.cashflow={};
-              STATE.cashflow[depId]={...depCf,_id:depId,_savedAt:Date.now()};
-              showToast(`Overpaid by ${fmt(overpaid)}. ${existingCredit>0?fmt(Math.min(overpaid,existingCredit))+' applied to balance. ':''}${remainingOver>0?fmt(remainingOver)+' added as deposit.':''}`, 'info');
-            } else {
-              showToast(`Overpaid by ${fmt(overpaid)} — applied to outstanding balance. New balance: ${fmt(newCredit)}`, 'info');
-            }
-            await fsSave(COLS.CUSTOMERS, invoiceCustomer._id, uc);
-            STATE.customers[invoiceCustomer._id] = {...uc, _id:invoiceCustomer._id,_savedAt:Date.now()};
-          } else {
-            // No outstanding balance — entire overpayment becomes deposit
-            const uc = {...invoiceCustomer};
-            await fsSave(COLS.CUSTOMERS, invoiceCustomer._id, uc);
-            STATE.customers[invoiceCustomer._id] = {...uc, _id:invoiceCustomer._id,_savedAt:Date.now()};
-            const depId = uid();
-            const depCf = {id:depId,type:'in',cat:'Customer Deposit',
-              desc:`Overpayment deposit — Inv #${invNum} — ${printName}`,
-              amount:overpaid,payMode,bankName,custId:invoiceCustomer._id,
-              date,month,invoiceNum:invNum,by:STATE.user.name};
+        // Part payment: owed = unpaid of this invoice, overpaid = excess above invoice total
+        const owed = Math.max(0, gt - partAmt);
+        const overpaid = Math.max(0, partAmt - gt);
+        if (overpaid > 0 && existingCredit > 0) {
+          // Paid more than invoice AND has old credit — reduce old balance first
+          const creditAfterOverpay = Math.max(0, existingCredit - overpaid);
+          const stillExcess = overpaid - (existingCredit - creditAfterOverpay);
+          const uc = {...invoiceCustomer, creditBalance: creditAfterOverpay};
+          await fsSave(COLS.CUSTOMERS, invoiceCustomer._id, uc);
+          STATE.customers[invoiceCustomer._id] = {...uc, _id:invoiceCustomer._id,_savedAt:Date.now()};
+          if (stillExcess > 0) {
+            const depId=uid(), depCf={id:depId,type:'in',cat:'Customer Deposit',desc:`Overpayment deposit — Inv #${invNum} — ${printName}`,amount:stillExcess,payMode,bankName,custId:invoiceCustomer._id,date,month,invoiceNum:invNum,by:STATE.user.name};
             await fsSave(COLS.CASHFLOW,depId,depCf);
-            if(!STATE.cashflow)STATE.cashflow={};
-            STATE.cashflow[depId]={...depCf,_id:depId,_savedAt:Date.now()};
-            showToast(`Overpaid by ${fmt(overpaid)} — added to customer deposit balance.`, 'info');
+            if(!STATE.cashflow)STATE.cashflow={};STATE.cashflow[depId]={...depCf,_id:depId,_savedAt:Date.now()};
+            showToast(`Overpaid by ${fmt(overpaid)}. ${fmt(existingCredit-creditAfterOverpay)} cleared from balance. ${fmt(stillExcess)} added as deposit.`,'info');
+          } else {
+            showToast(`Overpaid by ${fmt(overpaid)} — applied to outstanding balance. New balance: ${fmt(creditAfterOverpay)}.`,'info');
           }
+        } else if (overpaid > 0) {
+          // No existing credit — excess goes to deposit
+          const depId=uid(), depCf={id:depId,type:'in',cat:'Customer Deposit',desc:`Overpayment deposit — Inv #${invNum} — ${printName}`,amount:overpaid,payMode,bankName,custId:invoiceCustomer._id,date,month,invoiceNum:invNum,by:STATE.user.name};
+          await fsSave(COLS.CASHFLOW,depId,depCf);
+          if(!STATE.cashflow)STATE.cashflow={};STATE.cashflow[depId]={...depCf,_id:depId,_savedAt:Date.now()};
+          showToast(`Overpaid by ${fmt(overpaid)} — added to deposit balance.`,'info');
         } else {
-          // Normal part payment — unpaid portion added to credit balance
-          const owed = gt - partAmt;
-          const uc = {...invoiceCustomer, creditBalance:(invoiceCustomer.creditBalance||0)+owed};
+          // Normal part payment — add unpaid portion to credit balance
+          const uc = {...invoiceCustomer, creditBalance: existingCredit + owed};
           await fsSave(COLS.CUSTOMERS, invoiceCustomer._id, uc);
           STATE.customers[invoiceCustomer._id] = {...uc, _id:invoiceCustomer._id,_savedAt:Date.now()};
         }
@@ -4650,15 +4632,40 @@ function _buildInvoiceHTML(invNum, mode='a4', invTypeOverride='sales', showOutst
   // Outstanding balance (only if showOutstanding=true and customer has balance)
   const custId=s0.custId;
   const cust=custId?STATE.customers?.[custId]:null;
-  // Previous balance = what customer owed BEFORE this invoice
-  // cust.creditBalance is current total (already includes this invoice's credit)
-  // This invoice added: full gt if credit, (gt - partPayment) if part, 0 if paid/deposit
+
+  // Compute outstanding LIVE from all sales + payments (avoids drift)
+  let prevBalance = 0;
+  if (showOutstanding && cust) {
+    const custSales = Object.values(STATE.sales||{}).filter(s=>s.custId===custId&&!s._deleted);
+    const invGroups = {};
+    custSales.forEach(s=>{
+      const k=s.invoiceNum;
+      if(!invGroups[k]) invGroups[k]={total:0,payment:s.payment,partPayment:s.partPayment||0,isThisInv:k===invNum};
+      invGroups[k].total+=s.total||0;
+      if(s.partPayment) invGroups[k].partPayment=s.partPayment;
+    });
+    const totalCreditFromSales = Object.values(invGroups).reduce((a,g)=>{
+      if(g.payment==='credit') return a+(g.total||0);
+      if(g.payment==='part') return a+Math.max(0,(g.total||0)-(g.partPayment||0));
+      return a;
+    },0);
+    const totalCreditPaid = Object.values(STATE.cashflow||{})
+      .filter(cf=>cf.type==='in'&&cf.custId===custId&&cf.cat==='Credit Payment')
+      .reduce((a,p)=>a+(p.amount||0),0);
+    const totalWriteOff = Object.values(STATE.cashflow||{})
+      .filter(cf=>cf.custId===custId&&cf.cat==='Credit Write-Off')
+      .reduce((a,p)=>a+(p.amount||0),0);
+    const totalOutstanding = Math.max(0, totalCreditFromSales - totalCreditPaid - totalWriteOff);
+    // Previous balance = total outstanding MINUS what this specific invoice added
+    const thisInvoiceOwed = payment==='credit' ? gt : payment==='part' ? Math.max(0, gt-(s0.partPayment||0)) : 0;
+    prevBalance = Math.max(0, totalOutstanding - thisInvoiceOwed);
+  }
+
+  // What this invoice added to credit
   const thisInvoiceCredit = payment==='credit' ? gt
     : payment==='part' ? Math.max(0, gt-(s0.partPayment||0))
     : 0;
-  const currentCreditBal = showOutstanding&&cust ? (cust.creditBalance||0) : 0;
-  const prevBalance = Math.max(0, currentCreditBal - thisInvoiceCredit);
-  // Total owed after this invoice = prev balance + what this invoice added to credit
+  // Total owed after this invoice = prev balance + this invoice's credit portion
   const totalWithBalance = prevBalance + thisInvoiceCredit;
   const qrUrl=`https://api.qrserver.com/v1/create-qr-code/?size=90x90&data=https://greatchidelectro.com/invoice/${invNum}`;
 
@@ -4875,16 +4882,20 @@ ${totalWithBalance>0&&showOutstanding?`
 <!-- ═══ OUTSTANDING BALANCE BOX ═══ -->
 <div style="border:2px solid #c0392b;border-radius:4px;background:#fff5f5;padding:${fs('8px','10px')} ${fs('10px','14px')};margin-top:6px;margin-bottom:8px">
   <div style="font-size:${fs('9px','10px')};font-weight:700;color:#c0392b;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">💳 Account Statement</div>
+  <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid #f5c6c6">
+    <span style="font-size:${fs('10px','11px')};color:#555">This invoice:</span>
+    <span style="font-size:${fs('11px','12px')};font-weight:700;color:#1a1a1a">₦${gt.toLocaleString()}</span>
+  </div>
   ${prevBalance>0?`<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid #f5c6c6">
     <span style="font-size:${fs('10px','11px')};color:#555">Previous outstanding:</span>
     <span style="font-size:${fs('11px','12px')};font-weight:700;color:#c0392b">₦${prevBalance.toLocaleString()}</span>
   </div>`:''}
-  <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid #f5c6c6">
-    <span style="font-size:${fs('10px','11px')};color:#555">This invoice${payment==='part'?` (balance owed)`:payment==='credit'?' (full credit)':''}:</span>
-    <span style="font-size:${fs('11px','12px')};font-weight:700;color:#1a1a1a">₦${thisInvoiceCredit.toLocaleString()}</span>
-  </div>
+  ${amountPaid>0?`<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid #f5c6c6">
+    <span style="font-size:${fs('10px','11px')};color:#555">Amount paid now:</span>
+    <span style="font-size:${fs('11px','12px')};font-weight:700;color:#27ae60">₦${amountPaid.toLocaleString()}</span>
+  </div>`:''}
   <div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;margin-top:2px">
-    <span style="font-size:${fs('11px','12px')};font-weight:800;color:#c0392b">Total amount owed:</span>
+    <span style="font-size:${fs('11px','12px')};font-weight:800;color:#c0392b">Total outstanding:</span>
     <span style="font-size:${fs('13px','15px')};font-weight:900;color:#c0392b">₦${totalWithBalance.toLocaleString()}</span>
   </div>
   <div style="margin-top:6px;font-size:${fs('8.5px','9.5px')};color:#e57373;font-style:italic">⚠️ Please settle your outstanding balance at your earliest convenience.</div>
