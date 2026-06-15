@@ -3803,13 +3803,13 @@ function renderSales() {
         <div id="s-deposit-breakdown" style="background:#f5f0ff;border:1.5px solid #c4b5fd;border-radius:8px;padding:10px 14px;font-size:13px"></div>
       </div>
       <div class="form-group" id="s-deposit-shortfall-wrap" style="margin:0;display:none">
-        <label>Shortfall mode</label>
+        <label>Shortfall — how to handle remaining ₦?</label>
         <select class="form-input" id="s-deposit-sf-mode" onchange="v2OnDepositSfModeChange()">
-          <option value="cash">Cash</option>
-          <option value="transfer">Bank Transfer</option>
-          <option value="pos">POS</option>
-          <option value="split">Split (Cash + Transfer)</option>
-          ${(()=>{const c=invoiceCustomer;return(c&&(c.creditLimit||0)>0)?'<option value="credit">Credit (add to balance)</option>':'';})()} 
+          <option value="credit">Add to credit balance (pay later)</option>
+          <option value="cash">Cash (pay now)</option>
+          <option value="transfer">Bank Transfer (pay now)</option>
+          <option value="pos">POS (pay now)</option>
+          <option value="split">Split Cash + Transfer (pay now)</option>
         </select>
       </div>
       <div class="form-group" id="s-deposit-sf-bank-wrap" style="margin:0;display:none">
@@ -4192,17 +4192,21 @@ function v2UpdateDepositBreakdown() {
   const grandTotal = invoiceItems.reduce((a,l)=>a+Math.round(l.price*l.qty*(1-(l.discPct||0)/100)),0);
   const depPortion = Math.min(avail, grandTotal);
   const shortfall = Math.max(0, grandTotal - depPortion);
-  el.innerHTML =
-    `<div style="display:flex;justify-content:space-between;margin-bottom:4px"><span>Invoice total:</span><b>${fmt(grandTotal)}</b></div>
-     <div style="display:flex;justify-content:space-between;margin-bottom:4px;color:#8b5cf6"><span>Deposit applied:</span><b>− ${fmt(depPortion)}</b></div>
-     <div style="display:flex;justify-content:space-between;border-top:1px solid #c4b5fd;padding-top:6px;margin-top:4px;font-weight:700;color:${shortfall>0?'#d97706':'#15803d'}">
-       <span>${shortfall>0?'Shortfall to pay:':'Fully covered by deposit'}</span><b>${fmt(shortfall)}</b>
-     </div>`;
-  if (sfWrap) sfWrap.style.display = shortfall > 0 ? 'block' : 'none';
-  // store for use in save
+
+  // Store BEFORE any UI update so v2SaveSale always has correct values
   window._saleDepositAvail = avail;
   window._saleDepositPortion = depPortion;
   window._saleDepositShortfall = shortfall;
+
+  el.innerHTML =
+    `<div style="display:flex;justify-content:space-between;margin-bottom:4px"><span>Invoice total:</span><b>${fmt(grandTotal)}</b></div>
+     <div style="display:flex;justify-content:space-between;margin-bottom:4px;color:#8b5cf6"><span>Deposit available:</span><b>${fmt(avail)}</b></div>
+     <div style="display:flex;justify-content:space-between;margin-bottom:4px;color:#8b5cf6"><span>Deposit applied:</span><b>− ${fmt(depPortion)}</b></div>
+     <div style="display:flex;justify-content:space-between;border-top:1px solid #c4b5fd;padding-top:6px;margin-top:4px;font-weight:700;color:${shortfall>0?'#d97706':'#15803d'}">
+       <span>${shortfall>0?'Shortfall — pay now or add to credit:':'✅ Fully covered by deposit'}</span><b>${fmt(shortfall)}</b>
+     </div>`;
+  // Always show shortfall section when deposit doesn't cover full invoice
+  if (sfWrap) sfWrap.style.display = shortfall > 0 ? 'block' : 'none';
 }
 
 function v2TogglePaySubFields(mode) {
@@ -4478,20 +4482,20 @@ async function v2SaveSale(mode) {
         }
       }
     }
-    // Update customer credit if deposit shortfall is credit OR if deposit doesn't cover invoice
+    // Update customer credit if deposit shortfall exists
     if (invoiceCustomer && pt==='deposit') {
-      const sfMode = document.getElementById('s-deposit-sf-mode')?.value||'cash';
+      const sfMode = document.getElementById('s-deposit-sf-mode')?.value||'none';
       const depPortion = window._saleDepositPortion||0;
       const shortfall = window._saleDepositShortfall||0;
-      const gtCalc = invoiceItems.reduce((a,l)=>a+Math.round(l.price*l.qty*(1-(l.discPct||0)/100)),0);
-      if (sfMode==='credit' && shortfall>0) {
-        // Shortfall goes to credit balance
-        const uc = {...invoiceCustomer, creditBalance:(invoiceCustomer.creditBalance||0)+shortfall};
-        await fsSave(COLS.CUSTOMERS, invoiceCustomer._id, uc);
-        STATE.customers[invoiceCustomer._id] = {...uc, _id:invoiceCustomer._id,_savedAt:Date.now()};
+      if (shortfall > 0) {
+        if (sfMode==='credit' || sfMode==='none' || !sfMode) {
+          // Shortfall not paid in cash — add to customer's credit balance
+          const uc = {...invoiceCustomer, creditBalance:(invoiceCustomer.creditBalance||0)+shortfall};
+          await fsSave(COLS.CUSTOMERS, invoiceCustomer._id, uc);
+          STATE.customers[invoiceCustomer._id] = {...uc, _id:invoiceCustomer._id,_savedAt:Date.now()};
+        }
+        // If sfMode = cash/transfer/pos/split — shortfall was paid, cashflow recorded below
       }
-      // If deposit covered full invoice — nothing extra to add to credit
-      // If deposit was partial and shortfall was paid via cash/transfer/pos — also nothing
     }
 
     // ── CASHFLOW RECORDING ──────────────────────────────────
