@@ -11257,8 +11257,29 @@ async function renderCustomerProfile(id){
   });
   const invList=Object.values(invGroups).sort((a,b)=>(b.date||'').localeCompare(a.date||''));
   const totalSpent=invList.reduce((a,g)=>a+g.total,0);
-  const totalPayments=Object.values(STATE.cashflow||{}).filter(c2=>c2.type==='in'&&c2.custId===id).reduce((a,p)=>a+(p.amount||0),0);
-  const creditBalance=c.creditBalance||0;
+  // Total actual cash received from this customer (credit payments, deposits etc.)
+  const totalPayments=Object.values(STATE.cashflow||{}).filter(cf=>cf.type==='in'&&cf.custId===id&&cf.cat!=='Customer Deposit'&&cf.cat!=='Deposit Applied').reduce((a,p)=>a+(p.amount||0),0);
+
+  // Compute credit balance LIVE from sales and payments to avoid drift
+  // Sum of all unpaid credit portions across all invoices
+  const totalCreditFromSales = invList.reduce((a,g)=>{
+    if (g.payment==='credit') return a + (g.total||0);
+    if (g.payment==='part') return a + Math.max(0,(g.total||0)-(g.items[0]?.partPayment||0));
+    return a;
+  }, 0);
+  // Sum of all credit payments made (cashflow type=in, cat=Credit Payment)
+  const totalCreditPaid = Object.values(STATE.cashflow||{}).filter(cf=>cf.type==='in'&&cf.custId===id&&cf.cat==='Credit Payment').reduce((a,p)=>a+(p.amount||0),0);
+  // Credit write-offs
+  const totalWriteOff = Object.values(STATE.cashflow||{}).filter(cf=>cf.custId===id&&cf.cat==='Credit Write-Off').reduce((a,p)=>a+(p.amount||0),0);
+  // Live computed credit balance
+  const liveCreditBalance = Math.max(0, totalCreditFromSales - totalCreditPaid - totalWriteOff);
+  // Use live computed value; also sync back to customer record if drifted
+  const creditBalance = liveCreditBalance;
+  if (Math.abs((c.creditBalance||0) - liveCreditBalance) > 1) {
+    // Silently fix the stored value if it's drifted
+    const fixed = {...c, creditBalance: liveCreditBalance};
+    fsSave(COLS.CUSTOMERS, id, fixed).then(()=>{ STATE.customers[id]={...fixed,_id:id}; }).catch(()=>{});
+  }
   const deposits=Object.values(STATE.cashflow||{}).filter(cf=>cf.type==='in'&&cf.custId===id&&cf.cat==='Customer Deposit');
   const depositBalance=Math.max(0, deposits.reduce((a,d)=>a+(d.amount||0),0) - Object.values(STATE.cashflow||{}).filter(cf=>cf.custId===id&&cf.cat==='Deposit Applied').reduce((a,d)=>a+(d.amount||0),0));
   const commissions=Object.values(STATE.cashflow||{}).filter(cf=>cf.custId===id&&cf.cat==='Commission');
