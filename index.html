@@ -3073,7 +3073,7 @@ async function saveAddItem() {
   setSyncStatus('saving');
   try {
     await fsSave(COLS.INVENTORY, id, item);
-    STATE.inventory[id] = {...item, _id: id};
+    STATE.inventory[id] = {...item, _id: id,_savedAt:Date.now()};
     closeModal();
     renderInventory();
     renderOverviewIfActive();
@@ -3152,7 +3152,7 @@ async function saveEditItem(id) {
   setSyncStatus('saving');
   try {
     await fsSave(COLS.INVENTORY, id, updated);
-    STATE.inventory[id] = {...updated, _id: id};
+    STATE.inventory[id] = {...updated, _id: id,_savedAt:Date.now()};
     closeModal();
     renderInventory();
     setSyncStatus('synced');
@@ -3181,7 +3181,7 @@ async function saveInlineAddItem() {
   setSyncStatus('saving');
   try {
     await fsSave(COLS.INVENTORY, id, item);
-    STATE.inventory[id] = {...item, _id:id};
+    STATE.inventory[id] = {...item, _id:id,_savedAt:Date.now()};
     // Clear inline form
     ['inv-inline-name','inv-inline-qty','inv-inline-min','inv-inline-cost','inv-inline-sell'].forEach(x=>{
       const el=document.getElementById(x); if(el) el.value='';
@@ -3262,7 +3262,7 @@ async function handleInvImportFile(input) {
       sell: parseFloat(get(['sell','price']))||0,
       createdAt: new Date().toISOString(), createdBy: STATE.user?.name||''};
     item.costPrice = item.cost; item.sellPrice = item.sell;
-    try { await fsSave(COLS.INVENTORY, id, item); STATE.inventory[id]={...item,_id:id}; added++; } catch(e) {}
+    try { await fsSave(COLS.INVENTORY, id, item); STATE.inventory[id]={...item,_id:id,_savedAt:Date.now()}; added++; } catch(e) {}
   }
   input.value = '';
   renderInventory(); renderOverviewIfActive(); updateInventoryBadge();
@@ -3337,7 +3337,7 @@ async function applyStockAdj(id) {
   setSyncStatus('saving');
   try {
     await fsSave(COLS.INVENTORY, id, updated);
-    STATE.inventory[id] = {...updated, _id: id};
+    STATE.inventory[id] = {...updated, _id: id,_savedAt:Date.now()};
     closeModal();
     renderInventory();
     updateInventoryBadge();
@@ -4132,13 +4132,13 @@ async function v2SaveSale(mode) {
         pendingSupply:document.getElementById('s-pending-supply')?.checked||false
       };
       await saveSaleDoc(month, saleId, sale);
-      STATE.sales[saleId] = {...sale, _id:saleId};
+      STATE.sales[saleId] = {...sale, _id:saleId,_savedAt:Date.now()};
       // Deduct inventory
       const inv = STATE.inventory[l.itemId];
       if (inv) {
         const u = {...inv, qty:Math.max(0,(inv.qty||0)-l.qty)};
         await fsSave(COLS.INVENTORY, l.itemId, u);
-        STATE.inventory[l.itemId] = {...u, _id:l.itemId};
+        STATE.inventory[l.itemId] = {...u, _id:l.itemId,_savedAt:Date.now()};
       }
     }
     // Update customer credit if credit/part
@@ -4147,7 +4147,7 @@ async function v2SaveSale(mode) {
       const owed = pt==='credit' ? gt : Math.max(0,gt-partAmt);
       const uc = {...invoiceCustomer, creditBalance:(invoiceCustomer.creditBalance||0)+owed};
       await fsSave(COLS.CUSTOMERS, invoiceCustomer._id, uc);
-      STATE.customers[invoiceCustomer._id] = {...uc, _id:invoiceCustomer._id};
+      STATE.customers[invoiceCustomer._id] = {...uc, _id:invoiceCustomer._id,_savedAt:Date.now()};
     }
     // Update customer credit if deposit shortfall is credit
     if (invoiceCustomer && pt==='deposit') {
@@ -4157,7 +4157,7 @@ async function v2SaveSale(mode) {
         if (shortfall>0) {
           const uc = {...invoiceCustomer, creditBalance:(invoiceCustomer.creditBalance||0)+shortfall};
           await fsSave(COLS.CUSTOMERS, invoiceCustomer._id, uc);
-          STATE.customers[invoiceCustomer._id] = {...uc, _id:invoiceCustomer._id};
+          STATE.customers[invoiceCustomer._id] = {...uc, _id:invoiceCustomer._id,_savedAt:Date.now()};
         }
       }
     }
@@ -4184,7 +4184,7 @@ async function v2SaveSale(mode) {
           desc:'Deposit applied - Inv #'+invNum+' - '+printName,
           amount:depPortion,custId,date,month,invoiceNum:invNum,by:STATE.user.name};
         await fsSave(COLS.CASHFLOW,depId,depCf);
-        if(!STATE.cashflow)STATE.cashflow={};STATE.cashflow[depId]={...depCf,_id:depId};
+        if(!STATE.cashflow)STATE.cashflow={};STATE.cashflow[depId]={...depCf,_id:depId,_savedAt:Date.now()};
       }
       // Record shortfall cash received (only if not credit)
       if (shortfall > 0 && sfMode !== 'credit') {
@@ -4193,15 +4193,15 @@ async function v2SaveSale(mode) {
           const transferPortion = Math.max(0, shortfall - cashPortion);
           if (cashPortion>0) {
             const cId=uid(),cCf={id:cId,type:'in',cat:'Sales',desc:'Split cash deposit shortfall - Inv #'+invNum+' - '+printName,amount:cashPortion,payMode:'cash',custId,date,month,invoiceNum:invNum,by:STATE.user.name};
-            await fsSave(COLS.CASHFLOW,cId,cCf);STATE.cashflow[cId]={...cCf,_id:cId};
+            await fsSave(COLS.CASHFLOW,cId,cCf);STATE.cashflow[cId]={...cCf,_id:cId,_savedAt:Date.now()};
           }
           if (transferPortion>0) {
             const tId=uid(),tCf={id:tId,type:'in',cat:'Sales',desc:'Split transfer deposit shortfall - Inv #'+invNum+' - '+printName,amount:transferPortion,payMode:'transfer',bankName:sfBank,custId,date,month,invoiceNum:invNum,by:STATE.user.name};
-            await fsSave(COLS.CASHFLOW,tId,tCf);STATE.cashflow[tId]={...tCf,_id:tId};
+            await fsSave(COLS.CASHFLOW,tId,tCf);STATE.cashflow[tId]={...tCf,_id:tId,_savedAt:Date.now()};
           }
         } else {
           const sfId=uid(),sfCf={id:sfId,type:'in',cat:'Sales',desc:'Deposit shortfall ('+sfMode+') - Inv #'+invNum+' - '+printName,amount:shortfall,payMode:sfMode,bankName:sfBank,custId,date,month,invoiceNum:invNum,by:STATE.user.name};
-          await fsSave(COLS.CASHFLOW,sfId,sfCf);STATE.cashflow[sfId]={...sfCf,_id:sfId};
+          await fsSave(COLS.CASHFLOW,sfId,sfCf);STATE.cashflow[sfId]={...sfCf,_id:sfId,_savedAt:Date.now()};
         }
       }
     } else if (payment_type !== 'credit') {
@@ -4218,7 +4218,7 @@ async function v2SaveSale(mode) {
               custId:invoiceCustomer?._id||null,custName:invoiceCustomer?.name||'Walk-in',
               date,month,by:STATE.user.name};
             await fsSave(COLS.CASHFLOW,cfId,cf);
-            if(!STATE.cashflow)STATE.cashflow={};STATE.cashflow[cfId]={...cf,_id:cfId};
+            if(!STATE.cashflow)STATE.cashflow={};STATE.cashflow[cfId]={...cf,_id:cfId,_savedAt:Date.now()};
           }
         } else {
           const cfId=uid();
@@ -4231,7 +4231,7 @@ async function v2SaveSale(mode) {
             custId:invoiceCustomer?._id||null,custName:invoiceCustomer?.name||'Walk-in',
             date,month,by:STATE.user.name};
           await fsSave(COLS.CASHFLOW,cfId,cf);
-          if(!STATE.cashflow)STATE.cashflow={};STATE.cashflow[cfId]={...cf,_id:cfId};
+          if(!STATE.cashflow)STATE.cashflow={};STATE.cashflow[cfId]={...cf,_id:cfId,_savedAt:Date.now()};
         }
       }
     }
@@ -4261,7 +4261,7 @@ async function _saveProformaRecord(invNum, custName, date){
   try{
     await fsSave(COLS.PROFORMAS, prf.id, prf);
     if(!STATE.proformas)STATE.proformas={};
-    STATE.proformas[prf.id]={...prf,_id:prf.id};
+    STATE.proformas[prf.id]={...prf,_id:prf.id,_savedAt:Date.now()};
     showToast(`📄 Proforma ${prf.prfNum} saved.`,'success');
     logActivity('Proforma saved',`${prf.prfNum} — ${custName} — ${fmt(prf.grandTotal)}`,'');
   }catch(e){showToast('Failed to save proforma.','error');}
@@ -5144,7 +5144,7 @@ async function saveCustSig(invNum, source) {
     for (const s of items) {
       const updated = {...s, custSigUrl:dataUrl};
       await fsSave(COLS.SALES, s._id, updated);
-      STATE.sales[s._id] = {...updated, _id:s._id};
+      STATE.sales[s._id] = {...updated, _id:s._id,_savedAt:Date.now()};
     }
     setSyncStatus('synced');
     _stopCustCamera();
@@ -5170,7 +5170,7 @@ async function saveInvoiceNote(invNum) {
   const items = Object.values(STATE.sales||{}).filter(s=>s.invoiceNum===invNum);
   setSyncStatus('saving');
   try {
-    for(const s of items){const upd={...s,note};await fsSave(COLS.SALES,s._id,upd);STATE.sales[s._id]={...upd,_id:s._id};}
+    for(const s of items){const upd={...s,note};await fsSave(COLS.SALES,s._id,upd);STATE.sales[s._id]={...upd,_id:s._id,_savedAt:Date.now()};}
     closeModal(); setSyncStatus('synced'); showToast('Note saved.','success');
     logActivity('Invoice note',`Note added to Invoice #${invNum}`,note.slice(0,40));
   } catch(e){setSyncStatus('error');showToast('Failed.','error');}
@@ -5276,7 +5276,7 @@ async function saveEditedInvoice(invNum) {
       } else {
         await fsSave(COLS.SALES, s._id, upd);
       }
-      STATE.sales[s._id] = {...upd, _id: s._id};
+      STATE.sales[s._id] = {...upd, _id: s._id,_savedAt:Date.now()};
     }
     closeModal();
     setSyncStatus('synced');
@@ -5329,7 +5329,7 @@ async function saveCommission(invNum) {
   setSyncStatus('saving');
   try {
     await fsSave(COLS.CASHFLOW,cfId,cf);
-    if(!STATE.cashflow)STATE.cashflow={};STATE.cashflow[cfId]={...cf,_id:cfId};
+    if(!STATE.cashflow)STATE.cashflow={};STATE.cashflow[cfId]={...cf,_id:cfId,_savedAt:Date.now()};
     closeModal();setSyncStatus('synced');
     showToast(`Commission of ${fmt(amt)} added for ${custName}.`,'success');
     logActivity('Commission added',`${fmt(amt)} for ${custName} — Invoice #${invNum}`,note);
@@ -5345,7 +5345,7 @@ async function voidInvoice(invNum) {
     for (const s of items) {
       await fsDelete(COLS.SALES, s._id); delete STATE.sales[s._id];
       const inv = STATE.inventory[s.itemId];
-      if (inv) { const u={...inv,qty:(inv.qty||0)+s.qty}; await fsSave(COLS.INVENTORY,s.itemId,u); STATE.inventory[s.itemId]={...u,_id:s.itemId}; }
+      if (inv) { const u={...inv,qty:(inv.qty||0)+s.qty}; await fsSave(COLS.INVENTORY,s.itemId,u); STATE.inventory[s.itemId]={...u,_id:s.itemId,_savedAt:Date.now()}; }
     }
     setSyncStatus('synced'); showToast(`Invoice #${invNum} voided.`,'info');
     logActivity('Invoice voided',`Invoice #${invNum} voided`,'');
@@ -5837,14 +5837,14 @@ async function savePurchaseRecord() {
           payMode:mode, bankName, date, month, by:STATE.user?.name};
         await fsSave(COLS.PURCHASES, purchId, purch);
         if (!STATE.purchases) STATE.purchases={};
-        STATE.purchases[purchId]={...purch,_id:purchId};
+        STATE.purchases[purchId]={...purch,_id:purchId,_savedAt:Date.now()};
 
         // Update inventory
         if (item.itemId && STATE.inventory?.[item.itemId]) {
           const inv = STATE.inventory[item.itemId];
           const upd = {...inv, qty:(inv.qty||0)+receivedQty, cost:item.cost, costPrice:item.cost};
           await fsSave(COLS.INVENTORY, item.itemId, upd);
-          STATE.inventory[item.itemId]={...upd,_id:item.itemId};
+          STATE.inventory[item.itemId]={...upd,_id:item.itemId,_savedAt:Date.now()};
         }
         // Cashflow (non-credit)
         if (payType!=='credit') {
@@ -5853,7 +5853,7 @@ async function savePurchaseRecord() {
             amount:receivedQty*item.cost-(item.discAmt||0),payMode:mode,date,month,supplier,by:STATE.user?.name};
           await fsSave(COLS.CASHFLOW, cfId, cf);
           if(!STATE.cashflow)STATE.cashflow={};
-          STATE.cashflow[cfId]={...cf,_id:cfId};
+          STATE.cashflow[cfId]={...cf,_id:cfId,_savedAt:Date.now()};
         } else {
           // Credit — add to supplier owed
           const sup=Object.values(STATE.suppliers||{}).find(s=>s.name===supplier);
@@ -5870,7 +5870,7 @@ async function savePurchaseRecord() {
           supplier,orderedQty,receivedQty,costPrice:item.cost,payMode:mode,date,month,by:STATE.user?.name};
         await fsSave('v2_pendingDeliveries',pendId,pend);
         if(!STATE.pendingDeliveries)STATE.pendingDeliveries={};
-        STATE.pendingDeliveries[pendId]={...pend,_id:pendId};
+        STATE.pendingDeliveries[pendId]={...pend,_id:pendId,_savedAt:Date.now()};
       }
     }
 
@@ -5957,14 +5957,14 @@ async function receivePendingItem(pendId) {
       totalCost:qty*pend.costPrice, payMode:pend.payMode, date, month, by:STATE.user?.name};
     await fsSave('v2_purchases', purchId, purch);
     if (!STATE.purchases) STATE.purchases={};
-    STATE.purchases[purchId] = {...purch, _id:purchId};
+    STATE.purchases[purchId] = {...purch, _id:purchId,_savedAt:Date.now()};
 
     // Update inventory
     if (pend.itemId && STATE.inventory?.[pend.itemId]) {
       const inv = STATE.inventory[pend.itemId];
       const upd = {...inv, qty:(inv.qty||0)+qty};
       await fsSave('v2_inventory', pend.itemId, upd);
-      STATE.inventory[pend.itemId] = {...upd, _id:pend.itemId};
+      STATE.inventory[pend.itemId] = {...upd, _id:pend.itemId,_savedAt:Date.now()};
     }
 
     // Update or delete pending record
@@ -5974,7 +5974,7 @@ async function receivePendingItem(pendId) {
     } else {
       const updPend = {...pend, receivedQty:newReceived};
       await fsSave('v2_pendingDeliveries', pendId, updPend);
-      STATE.pendingDeliveries[pendId] = {...updPend, _id:pendId};
+      STATE.pendingDeliveries[pendId] = {...updPend, _id:pendId,_savedAt:Date.now()};
     }
 
     setSyncStatus('synced');
@@ -6306,7 +6306,7 @@ async function saveAddCustomer(){
     address:document.getElementById('ac-addr').value.trim(),creditLimit:parseFloat(document.getElementById('ac-limit').value)||0,
     creditBalance:parseFloat(document.getElementById('ac-opening').value)||0,createdAt:new Date().toISOString()};
   setSyncStatus('saving');
-  try{await fsSave(COLS.CUSTOMERS,id,cust);STATE.customers[id]={...cust,_id:id};closeModal();renderCustomers();setSyncStatus('synced');showToast(`✅ ${name} added.`,'success');logActivity('Customer added',`${name}`,'');}
+  try{await fsSave(COLS.CUSTOMERS,id,cust);STATE.customers[id]={...cust,_id:id,_savedAt:Date.now()};closeModal();renderCustomers();setSyncStatus('synced');showToast(`✅ ${name} added.`,'success');logActivity('Customer added',`${name}`,'');}
   catch(e){setSyncStatus('error');showToast('Failed.','error');}
 }
 function showAddCustomerModal(){showAddCustModal();}
@@ -6387,7 +6387,7 @@ async function saveAddSupplier(){
   const sup={id,name,phone:document.getElementById('as-phone').value.trim(),contact:document.getElementById('as-contact').value.trim(),
     address:document.getElementById('as-addr').value.trim(),openingBalance:opening,owedToSupplier:opening,totalPurchased:0,createdAt:new Date().toISOString()};
   setSyncStatus('saving');
-  try{await fsSave(COLS.SUPPLIERS,id,sup);STATE.suppliers[id]={...sup,_id:id};closeModal();renderSuppliers();setSyncStatus('synced');showToast(`✅ ${name} added.`,'success');logActivity('Supplier added',`${name}`,'');}
+  try{await fsSave(COLS.SUPPLIERS,id,sup);STATE.suppliers[id]={...sup,_id:id,_savedAt:Date.now()};closeModal();renderSuppliers();setSyncStatus('synced');showToast(`✅ ${name} added.`,'success');logActivity('Supplier added',`${name}`,'');}
   catch(e){setSyncStatus('error');showToast('Failed.','error');}
 }
 function showEditSupplierModal(id){
@@ -6406,7 +6406,7 @@ async function saveEditSupplier(id){
   setSyncStatus('saving');
   try{
     await fsSave(COLS.SUPPLIERS,id,updated);
-    STATE.suppliers[id]={...updated,_id:id};
+    STATE.suppliers[id]={...updated,_id:id,_savedAt:Date.now()};
     closeModal();
     setSyncStatus('synced');
     showToast('✅ Supplier updated.','success');
@@ -6499,7 +6499,7 @@ async function saveEditUser(id) {
   setSyncStatus('saving');
   try {
     await fsSave(COLS.USERS, id, updated);
-    STATE.users[id] = {...updated, _id: id};
+    STATE.users[id] = {...updated, _id: id,_savedAt:Date.now()};
     closeModal();
     renderUsers();
     setSyncStatus('synced');
@@ -6520,7 +6520,7 @@ async function resetUserPassword(id) {
   setSyncStatus('saving');
   try {
     await fsSave(COLS.USERS, id, updated);
-    STATE.users[id] = {...updated, _id: id};
+    STATE.users[id] = {...updated, _id: id,_savedAt:Date.now()};
     setSyncStatus('synced');
     showToast(`✅ Password reset for ${u.name||u.username}.`, 'success');
     logActivity('Password reset',`Password reset for ${u.name||u.username}`,'');
@@ -6991,7 +6991,7 @@ async function saveInlineExpense() {
   try {
     await fsSave(COLS.CASHFLOW,id,exp);
     if(!STATE.cashflow)STATE.cashflow={};
-    STATE.cashflow[id]={...exp,_id:id};
+    STATE.cashflow[id]={...exp,_id:id,_savedAt:Date.now()};
     // Clear form
     ['exp-desc','exp-amt','exp-date'].forEach(x=>{const el=document.getElementById(x);if(el)el.value='';});
     const mEl=document.getElementById('exp-mode');if(mEl)mEl.value='cash';
@@ -7180,7 +7180,7 @@ async function saveExpense() {
   try {
     await fsSave('v2_cashflow', id, exp);
     if (!STATE.cashflow) STATE.cashflow = {};
-    STATE.cashflow[id] = {...exp, _id:id};
+    STATE.cashflow[id] = {...exp, _id:id,_savedAt:Date.now()};
     closeModal(); renderExpenses(); setSyncStatus('synced');
     showToast(`✅ Expense recorded: ${fmt(amt)}`,'success');
   } catch(e) { setSyncStatus('error'); showToast('Failed to save.','error'); }
@@ -7719,7 +7719,7 @@ function editWhMinQty(id) {
   if(val===null) return;
   const newMin = parseInt(val)||0;
   fsSave('v2_warehouse', id, {...w, minQty:newMin}).then(()=>{
-    STATE.warehouse[id]={...w,minQty:newMin,_id:id};
+    STATE.warehouse[id]={...w,minQty:newMin,_id:id,_savedAt:Date.now()};
     renderWarehouse();
     showToast(`Min qty updated: ${w.name} → ${newMin}`,'success');
     logActivity('Min qty updated',`${w.name}: min qty → ${newMin}`,'');
@@ -7754,16 +7754,16 @@ async function saveAddWarehouseStock() {
   try{
     if(existing){
       const upd={...existing,qty:(existing.qty||0)+qty,minQty};
-      await fsSave('v2_warehouse',existing._id,upd);STATE.warehouse[existing._id]={...upd,_id:existing._id};
+      await fsSave('v2_warehouse',existing._id,upd);STATE.warehouse[existing._id]={...upd,_id:existing._id,_savedAt:Date.now()};
     } else {
       const wid=uid();const wItem={id:wid,name:inv.name,cat:inv.cat||'',qty,minQty,cost:inv.costPrice||inv.cost||0,itemId};
-      await fsSave('v2_warehouse',wid,wItem);if(!STATE.warehouse)STATE.warehouse={};STATE.warehouse[wid]={...wItem,_id:wid};
+      await fsSave('v2_warehouse',wid,wItem);if(!STATE.warehouse)STATE.warehouse={};STATE.warehouse[wid]={...wItem,_id:wid,_savedAt:Date.now()};
     }
     // Log
     const logId=uid();
     const logEntry={id:logId,waybill:'OPENING-STOCK',itemName:inv.name,itemId,qty,direction:'to_warehouse',date,by:STATE.user?.name};
     await fsSave('v2_transferLog',logId,logEntry);
-    if(!STATE.transferLog)STATE.transferLog={};STATE.transferLog[logId]={...logEntry,_id:logId};
+    if(!STATE.transferLog)STATE.transferLog={};STATE.transferLog[logId]={...logEntry,_id:logId,_savedAt:Date.now()};
     closeModal();setSyncStatus('synced');showToast(`✅ ${qty} × ${inv.name} added to warehouse.`,'success');renderWarehouse();
     logActivity('Warehouse add',`${qty}× ${inv.name} added to warehouse`,'');
   }catch(e){setSyncStatus('error');showToast('Failed.','error');}
@@ -7825,11 +7825,11 @@ async function saveAddWhItem() {
     const whItem = {id, name, cat, qty, minQty, cost, createdAt:new Date().toISOString()};
     await fsSave('v2_warehouse', id, whItem);
     if (!STATE.warehouse) STATE.warehouse = {};
-    STATE.warehouse[id] = {...whItem, _id:id};
+    STATE.warehouse[id] = {...whItem, _id:id,_savedAt:Date.now()};
     // Add to shop inventory with qty 0
     const invItem = {id, name, cat, qty:0, minQty, cost, sell, supplierName:'', supId:null, createdAt:new Date().toISOString()};
     await fsSave(COLS.INVENTORY, id, invItem);
-    STATE.inventory[id] = {...invItem, _id:id};
+    STATE.inventory[id] = {...invItem, _id:id,_savedAt:Date.now()};
     closeModal();
     renderWarehouse();
     updateInventoryBadge();
@@ -7893,13 +7893,13 @@ async function saveTransfer(direction) {
       const wh=STATE.warehouse?.[selId]; if(!wh){showToast('Warehouse item not found.','error');return;}
       if(qty>(wh.qty||0)){showToast(`Only ${wh.qty||0} in warehouse.`,'error');return;}
       const updWh={...wh,qty:(wh.qty||0)-qty};
-      await fsSave('v2_warehouse',selId,updWh);STATE.warehouse[selId]={...updWh,_id:selId};
+      await fsSave('v2_warehouse',selId,updWh);STATE.warehouse[selId]={...updWh,_id:selId,_savedAt:Date.now()};
       // Add to shop
       const shopItem=Object.values(STATE.inventory||{}).find(i=>i.name?.toLowerCase()===wh.name?.toLowerCase());
       if(shopItem){const updSh={...shopItem,qty:(shopItem.qty||0)+qty};await fsSave(COLS.INVENTORY,shopItem._id,updSh);STATE.inventory[shopItem._id]={...updSh};}
       // Log
       const logId=uid();const entry={id:logId,waybill,itemId:selId,itemName:wh.name,qty,direction,note,date,by:STATE.user?.name};
-      await fsSave('v2_transferLog',logId,entry);if(!STATE.transferLog)STATE.transferLog={};STATE.transferLog[logId]={...entry,_id:logId};
+      await fsSave('v2_transferLog',logId,entry);if(!STATE.transferLog)STATE.transferLog={};STATE.transferLog[logId]={...entry,_id:logId,_savedAt:Date.now()};
       showToast(`✅ ${qty} × ${wh.name} transferred to shop.`,'success');
     } else {
       // Shop → Warehouse
@@ -7910,10 +7910,10 @@ async function saveTransfer(direction) {
       // Add to warehouse
       const whItem=Object.values(STATE.warehouse||{}).find(w=>w.name?.toLowerCase()===inv.name?.toLowerCase());
       if(whItem){const updWh={...whItem,qty:(whItem.qty||0)+qty};await fsSave('v2_warehouse',whItem._id,updWh);STATE.warehouse[whItem._id]={...updWh};}
-      else{const wid=uid();const newWh={id:wid,name:inv.name,cat:inv.cat||'',qty,minQty:inv.minQty||5,cost:inv.costPrice||inv.cost||0,itemId:selId};await fsSave('v2_warehouse',wid,newWh);if(!STATE.warehouse)STATE.warehouse={};STATE.warehouse[wid]={...newWh,_id:wid};}
+      else{const wid=uid();const newWh={id:wid,name:inv.name,cat:inv.cat||'',qty,minQty:inv.minQty||5,cost:inv.costPrice||inv.cost||0,itemId:selId};await fsSave('v2_warehouse',wid,newWh);if(!STATE.warehouse)STATE.warehouse={};STATE.warehouse[wid]={...newWh,_id:wid,_savedAt:Date.now()};}
       // Log
       const logId=uid();const entry={id:logId,waybill,itemId:selId,itemName:inv.name,qty,direction,note,date,by:STATE.user?.name};
-      await fsSave('v2_transferLog',logId,entry);if(!STATE.transferLog)STATE.transferLog={};STATE.transferLog[logId]={...entry,_id:logId};
+      await fsSave('v2_transferLog',logId,entry);if(!STATE.transferLog)STATE.transferLog={};STATE.transferLog[logId]={...entry,_id:logId,_savedAt:Date.now()};
       showToast(`✅ ${qty} × ${inv.name} transferred to warehouse.`,'success');
     }
     closeModal();setSyncStatus('synced');renderWarehouse();renderInventory();updateInventoryBadge();
@@ -7933,17 +7933,17 @@ async function saveTransferToShop(whId) {
     // Deduct from warehouse
     const updWh = {...wh, qty:(wh.qty||0)-qty};
     await fsSave('v2_warehouse', whId, updWh);
-    STATE.warehouse[whId] = {...updWh, _id:whId};
+    STATE.warehouse[whId] = {...updWh, _id:whId,_savedAt:Date.now()};
     // Add to shop inventory
     if (shopItem) {
       const updInv = {...shopItem, qty:(shopItem.qty||0)+qty};
       await fsSave(COLS.INVENTORY, shopItem._id, updInv);
-      STATE.inventory[shopItem._id] = {...updInv, _id:shopItem._id};
+      STATE.inventory[shopItem._id] = {...updInv, _id:shopItem._id,_savedAt:Date.now()};
     } else {
       const newId = wh._id || uid();
       const newItem = {id:newId, name:wh.name, cat:wh.cat||'', qty, minQty:wh.minQty||5, cost:wh.cost||0, sell:wh.cost||0, supplierName:'', supId:null};
       await fsSave(COLS.INVENTORY, newId, newItem);
-      STATE.inventory[newId] = {...newItem, _id:newId};
+      STATE.inventory[newId] = {...newItem, _id:newId,_savedAt:Date.now()};
     }
     closeModal();
     renderWarehouse();
@@ -7997,7 +7997,7 @@ async function applyWhStockAdj(whId) {
   setSyncStatus('saving');
   try {
     await fsSave('v2_warehouse', whId, updated);
-    STATE.warehouse[whId] = {...updated, _id:whId};
+    STATE.warehouse[whId] = {...updated, _id:whId,_savedAt:Date.now()};
     closeModal();
     renderWarehouse();
     setSyncStatus('synced');
@@ -8035,19 +8035,19 @@ async function saveShopToWh() {
   try {
     const updInv = {...invItem, qty:(invItem.qty||0)-qty};
     await fsSave(COLS.INVENTORY, itemId, updInv);
-    STATE.inventory[itemId] = {...updInv, _id:itemId};
+    STATE.inventory[itemId] = {...updInv, _id:itemId,_savedAt:Date.now()};
     // Find or create warehouse entry
     const whItem = Object.values(STATE.warehouse||{}).find(w=>w._id===itemId||w.name?.toLowerCase()===invItem.name?.toLowerCase());
     if (whItem) {
       const updWh = {...whItem, qty:(whItem.qty||0)+qty};
       await fsSave('v2_warehouse', whItem._id, updWh);
-      STATE.warehouse[whItem._id] = {...updWh, _id:whItem._id};
+      STATE.warehouse[whItem._id] = {...updWh, _id:whItem._id,_savedAt:Date.now()};
     } else {
       const whId = uid();
       const newWh = {id:whId, name:invItem.name, cat:invItem.cat||'', qty, minQty:invItem.minQty||5, cost:invItem.cost||0};
       await fsSave('v2_warehouse', whId, newWh);
       if (!STATE.warehouse) STATE.warehouse = {};
-      STATE.warehouse[whId] = {...newWh, _id:whId};
+      STATE.warehouse[whId] = {...newWh, _id:whId,_savedAt:Date.now()};
     }
     closeModal();
     renderWarehouse();
@@ -8552,7 +8552,7 @@ async function migrateFromLiveFirestore() {
         try {
           const id = String(item.id||uid());
           await fsSave(COLS.INVENTORY, id, {...item, id, _v1migrated:true});
-          STATE.inventory[id] = {...item, id, _id:id};
+          STATE.inventory[id] = {...item, id, _id:id,_savedAt:Date.now()};
           counts.inventory++;
         } catch(e) { console.warn('inv save failed:', e.message); }
       }
@@ -8567,7 +8567,7 @@ async function migrateFromLiveFirestore() {
         try {
           const id = String(c.id||uid());
           await fsSave(COLS.CUSTOMERS, id, {...c, id, _v1migrated:true});
-          STATE.customers[id] = {...c, id, _id:id};
+          STATE.customers[id] = {...c, id, _id:id,_savedAt:Date.now()};
           counts.customers++;
         } catch(e) {}
       }
@@ -8582,7 +8582,7 @@ async function migrateFromLiveFirestore() {
         try {
           const id = String(s.id||uid());
           await fsSave(COLS.SUPPLIERS, id, {...s, id, _v1migrated:true});
-          STATE.suppliers[id] = {...s, id, _id:id};
+          STATE.suppliers[id] = {...s, id, _id:id,_savedAt:Date.now()};
           counts.suppliers++;
         } catch(e) {}
       }
@@ -8598,7 +8598,7 @@ async function migrateFromLiveFirestore() {
           const id = String(w.id||uid());
           await fsSave('v2_warehouse', id, {...w, id, _v1migrated:true});
           if (!STATE.warehouse) STATE.warehouse = {};
-          STATE.warehouse[id] = {...w, id, _id:id};
+          STATE.warehouse[id] = {...w, id, _id:id,_savedAt:Date.now()};
           counts.warehouse++;
         } catch(e) {}
       }
@@ -8661,7 +8661,7 @@ async function importV1Backup() {
         try {
           const id = String(item.id || uid());
           await fsSave(COLS.INVENTORY, id, {...item, id, _v1migrated:true});
-          STATE.inventory[id] = {...item, id, _id:id};
+          STATE.inventory[id] = {...item, id, _id:id,_savedAt:Date.now()};
           invCount++;
           if (invCount % 50 === 0) {
             progress.innerHTML = `<div class="alert alert-info">⏳ Inventory: ${invCount}/${inv.length}... please wait</div>`;
@@ -8677,7 +8677,7 @@ async function importV1Backup() {
         try {
           const id = String(c.id || uid());
           await fsSave(COLS.CUSTOMERS, id, {...c, id, _v1migrated:true});
-          STATE.customers[id] = {...c, id, _id:id};
+          STATE.customers[id] = {...c, id, _id:id,_savedAt:Date.now()};
           custCount++;
         } catch(e) { errCount++; }
       }
@@ -8690,7 +8690,7 @@ async function importV1Backup() {
         try {
           const id = String(s.id || uid());
           await fsSave(COLS.SUPPLIERS, id, {...s, id, _v1migrated:true});
-          STATE.suppliers[id] = {...s, id, _id:id};
+          STATE.suppliers[id] = {...s, id, _id:id,_savedAt:Date.now()};
           supCount++;
         } catch(e) { errCount++; }
       }
@@ -8702,7 +8702,7 @@ async function importV1Backup() {
           const id = String(w.id || uid());
           await fsSave('v2_warehouse', id, {...w, id, _v1migrated:true});
           if (!STATE.warehouse) STATE.warehouse = {};
-          STATE.warehouse[id] = {...w, id, _id:id};
+          STATE.warehouse[id] = {...w, id, _id:id,_savedAt:Date.now()};
         } catch(e) { errCount++; }
       }
 
@@ -8788,9 +8788,9 @@ async function saveStockAdjById(id,type,qty,reason){
   const now=new Date();const date=now.toLocaleDateString();const month=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
   setSyncStatus('saving');
   try{
-    const upd={...item,qty:newQty};await fsSave(COLS.INVENTORY,id,upd);STATE.inventory[id]={...upd,_id:id};
+    const upd={...item,qty:newQty};await fsSave(COLS.INVENTORY,id,upd);STATE.inventory[id]={...upd,_id:id,_savedAt:Date.now()};
     const logId=uid();const logEntry={id:logId,itemId:id,itemName:item.name,type,qty,newQty,reason,date,month,by:STATE.user?.name};
-    await fsSave('v2_adjLog',logId,logEntry);if(!STATE.adjLog)STATE.adjLog={};STATE.adjLog[logId]={...logEntry,_id:logId};
+    await fsSave('v2_adjLog',logId,logEntry);if(!STATE.adjLog)STATE.adjLog={};STATE.adjLog[logId]={...logEntry,_id:logId,_savedAt:Date.now()};
     setSyncStatus('synced');showToast(`Stock adjusted: ${item.name} → ${newQty}`,'success');renderStockMgmt();updateInventoryBadge();
   }catch(e){setSyncStatus('error');showToast('Failed.','error');}
 }
@@ -8810,9 +8810,9 @@ async function saveCatCount(cat){
   items.forEach(i=>{const inp=document.getElementById(`cc-${i._id||i.id}`);if(!inp||inp.value==='')return;const counted=parseInt(inp.value)||0;if(counted!==(i.qty||0)){variances++;updates.push({id:i._id||i.id,item:i,counted});}});
   setSyncStatus('saving');
   try{
-    for(const u of updates){const upd={...u.item,qty:u.counted};await fsSave(COLS.INVENTORY,u.id,upd);STATE.inventory[u.id]={...upd,_id:u.id};}
+    for(const u of updates){const upd={...u.item,qty:u.counted};await fsSave(COLS.INVENTORY,u.id,upd);STATE.inventory[u.id]={...upd,_id:u.id,_savedAt:Date.now()};}
     const logId=uid();const now=new Date();const entry={id:logId,date:now.toLocaleDateString(),by:STATE.user?.name,cat,items:items.length,variances};
-    await fsSave('v2_stockCounts',logId,entry);if(!STATE.stockCounts)STATE.stockCounts={};STATE.stockCounts[logId]={...entry,_id:logId};
+    await fsSave('v2_stockCounts',logId,entry);if(!STATE.stockCounts)STATE.stockCounts={};STATE.stockCounts[logId]={...entry,_id:logId,_savedAt:Date.now()};
     setSyncStatus('synced');showToast(`Count saved for "${cat}" — ${variances} variance${variances!==1?'s':''}`,variances>0?'warning':'success');renderStockMgmt();updateInventoryBadge();
   }catch(e){setSyncStatus('error');showToast('Failed.','error');}
 }
@@ -8941,9 +8941,9 @@ async function saveBorrow() {
   const borrow={id,source,itemId,itemName:item.name,qty,qtyRemaining:qty,unitCost:cost,customer,note,date,borrowedAt:now.getTime(),status:'pending',by:STATE.user?.name};
   setSyncStatus('saving');
   try{
-    await fsSave('v2_borrows',id,borrow);if(!STATE.borrows)STATE.borrows={};STATE.borrows[id]={...borrow,_id:id};
+    await fsSave('v2_borrows',id,borrow);if(!STATE.borrows)STATE.borrows={};STATE.borrows[id]={...borrow,_id:id,_savedAt:Date.now()};
     const updItem={...item,qty:(item.qty||0)+qty};
-    await fsSave(COLS.INVENTORY,itemId,updItem);STATE.inventory[itemId]={...updItem,_id:itemId};
+    await fsSave(COLS.INVENTORY,itemId,updItem);STATE.inventory[itemId]={...updItem,_id:itemId,_savedAt:Date.now()};
     closeBorrowModal();setSyncStatus('synced');
     showToast(`✅ Borrowed ${qty}x ${item.name} from ${source}. Added to inventory.`,'success');
     renderBorrows();updateInventoryBadge();
@@ -8954,7 +8954,7 @@ async function markBorrowReturned(id){
   const b=STATE.borrows?.[id];if(!b||!confirm(`Mark "${b.itemName}" as returned?`))return;
   const upd={...b,status:'returned',qtyRemaining:0,returnedAt:new Date().toISOString()};
   setSyncStatus('saving');
-  try{await fsSave('v2_borrows',id,upd);STATE.borrows[id]={...upd,_id:id};setSyncStatus('synced');showToast('Marked as returned.','success');renderBorrows();}
+  try{await fsSave('v2_borrows',id,upd);STATE.borrows[id]={...upd,_id:id,_savedAt:Date.now()};setSyncStatus('synced');showToast('Marked as returned.','success');renderBorrows();}
   catch(e){setSyncStatus('error');showToast('Failed.','error');}
 }
 
@@ -8964,7 +8964,7 @@ async function markBorrowPaid(id){
   if(amt===null)return;
   const upd={...b,status:'paid',paidAt:new Date().toISOString(),paidAmt:parseFloat(amt)||0};
   setSyncStatus('saving');
-  try{await fsSave('v2_borrows',id,upd);STATE.borrows[id]={...upd,_id:id};setSyncStatus('synced');showToast('Borrow converted to paid.','success');renderBorrows();}
+  try{await fsSave('v2_borrows',id,upd);STATE.borrows[id]={...upd,_id:id,_savedAt:Date.now()};setSyncStatus('synced');showToast('Borrow converted to paid.','success');renderBorrows();}
   catch(e){setSyncStatus('error');showToast('Failed.','error');}
 }
 
@@ -8986,7 +8986,7 @@ function renderProformas(){
   el.innerHTML=`<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:1.25rem"><div class="kpi-card"><div class="kpi-label">Pending</div><div class="kpi-value" style="color:var(--warning)">${pending.length}</div><div class="kpi-sub">${fmt(pending.reduce((a,p)=>a+(p.grandTotal||0),0))} value</div></div><div class="kpi-card"><div class="kpi-label">Converted</div><div class="kpi-value" style="color:var(--success)">${converted.length}</div><div class="kpi-sub">To invoices</div></div><div class="kpi-card"><div class="kpi-label">Cancelled</div><div class="kpi-value" style="color:var(--text3)">${cancelled.length}</div><div class="kpi-sub">All time</div></div><div class="kpi-card"><div class="kpi-label">Total</div><div class="kpi-value">${proformas.length}</div><div class="kpi-sub">All proformas</div></div></div><div style="display:flex;justify-content:flex-end;margin-bottom:.75rem"><button class="btn btn-primary" onclick="navigateTo('sales');setTimeout(()=>{},200)">+ Create from Sales</button></div>${rows?`<div class="tbl-wrap"><table><thead><tr><th>PRF #</th><th>Date</th><th>Customer</th><th>Items</th><th style="text-align:center">Count</th><th style="text-align:right">Total</th><th>Valid Until</th><th>Status</th><th>By</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`:'<div class="empty-state"><div class="empty-state-icon">📄</div><div>No proforma invoices yet. Create one from the Sales tab.</div></div>'}`;
 }
 
-async function cancelProforma(id){if(!confirm('Cancel this proforma?'))return;const p=STATE.proformas?.[id];if(!p)return;const upd={...p,status:'cancelled'};setSyncStatus('saving');try{await fsSave('v2_proformas',id,upd);STATE.proformas[id]={...upd,_id:id};setSyncStatus('synced');showToast('Proforma cancelled.','info');renderProformas();}catch(e){setSyncStatus('error');showToast('Failed.','error');}}
+async function cancelProforma(id){if(!confirm('Cancel this proforma?'))return;const p=STATE.proformas?.[id];if(!p)return;const upd={...p,status:'cancelled'};setSyncStatus('saving');try{await fsSave('v2_proformas',id,upd);STATE.proformas[id]={...upd,_id:id,_savedAt:Date.now()};setSyncStatus('synced');showToast('Proforma cancelled.','info');renderProformas();}catch(e){setSyncStatus('error');showToast('Failed.','error');}}
 async function convertProforma(id){showToast('Load this proforma in the Sales tab to convert it.','info');}
 function printProformaInvoice(id){
   const p=STATE.proformas?.[id];if(!p){showToast('Not found.','error');return;}
@@ -9148,7 +9148,7 @@ function renderDemoSales(){
 function v2DemoFilterDd(term){const box=document.getElementById('demo-item-dd');if(!box)return;if(!term){box.style.display='none';return;}const matches=Object.values(STATE.inventory||{}).filter(i=>(i.name||'').toLowerCase().includes(term.toLowerCase())).slice(0,10);if(!matches.length){box.style.display='none';return;}box.style.display='block';box.innerHTML=matches.map(i=>`<div style="padding:8px 10px;cursor:pointer;border-bottom:1px solid var(--border)" onmousedown="selectDemoItem('${i._id||i.id}','${esc(i.name).replace(/'/g,"\\'")}',${i.sellPrice||i.sell||0})"><b>${esc(i.name)}</b><span style="float:right;font-size:11px;color:var(--text3)">${fmt(i.sellPrice||i.sell||0)}</span></div>`).join('');}
 function selectDemoItem(id,name,price){const inp=document.getElementById('demo-item-search');const hid=document.getElementById('demo-item-id');const priceInp=document.getElementById('demo-price');const box=document.getElementById('demo-item-dd');if(inp)inp.value=name;if(hid)hid.value=id;if(box)box.style.display='none';if(priceInp&&!priceInp.value)priceInp.value=price;}
 function addDemoItem(){const id=document.getElementById('demo-item-id')?.value;const name=document.getElementById('demo-item-search')?.value.trim();const qty=parseInt(document.getElementById('demo-qty')?.value)||1;const price=parseFloat(document.getElementById('demo-price')?.value)||0;if(!name){showToast('Select an item first.','error');return;}if(!window._demoItems)window._demoItems=[];window._demoItems.push({id,name,qty,price,total:qty*price});renderDemoSales();}
-async function saveDemoSale(){if(!window._demoItems||!window._demoItems.length){showToast('Add items first.','error');return;}const id=uid();const now=new Date();const date=now.toLocaleDateString();const invoiceNum='DEM-'+Date.now().toString().slice(-6);const printName=document.getElementById('demo-print-name')?.value.trim()||'Walk-in';const grandTotal=window._demoItems.reduce((a,i)=>a+i.price*i.qty,0);const demo={id,invoiceNum,printName,custName:printName,items:[...window._demoItems],grandTotal,date,by:STATE.user?.name};setSyncStatus('saving');try{await fsSave('v2_demoSales',id,demo);if(!STATE.demoSales)STATE.demoSales={};STATE.demoSales[id]={...demo,_id:id};window._demoItems=[];setSyncStatus('synced');showToast('Demo recorded.','success');printDemoInvoice(id);window._demoSub='list';renderDemoSales();}catch(e){setSyncStatus('error');showToast('Failed.','error');}}
+async function saveDemoSale(){if(!window._demoItems||!window._demoItems.length){showToast('Add items first.','error');return;}const id=uid();const now=new Date();const date=now.toLocaleDateString();const invoiceNum='DEM-'+Date.now().toString().slice(-6);const printName=document.getElementById('demo-print-name')?.value.trim()||'Walk-in';const grandTotal=window._demoItems.reduce((a,i)=>a+i.price*i.qty,0);const demo={id,invoiceNum,printName,custName:printName,items:[...window._demoItems],grandTotal,date,by:STATE.user?.name};setSyncStatus('saving');try{await fsSave('v2_demoSales',id,demo);if(!STATE.demoSales)STATE.demoSales={};STATE.demoSales[id]={...demo,_id:id,_savedAt:Date.now()};window._demoItems=[];setSyncStatus('synced');showToast('Demo recorded.','success');printDemoInvoice(id);window._demoSub='list';renderDemoSales();}catch(e){setSyncStatus('error');showToast('Failed.','error');}}
 function printDemoInvoice(id){const d=STATE.demoSales?.[id];if(!d)return;const rows=(d.items||[]).map((i,idx)=>`<tr><td>${idx+1}</td><td>${esc(i.name)}</td><td style="text-align:center">${i.qty}</td><td style="text-align:right">N${(i.price||0).toLocaleString()}</td><td style="text-align:right"><b>N${((i.price||0)*i.qty).toLocaleString()}</b></td></tr>`).join('');const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Demo ${d.invoiceNum}</title><style>body{font-family:Arial;max-width:600px;margin:20px auto;padding:16px}table{width:100%;border-collapse:collapse}thead tr{background:#7c3aed;color:#fff}thead th{padding:7px;font-size:11px;text-align:left}@media print{body{padding:4px}}</style></head><body><div style="text-align:center;border-bottom:3px solid #7c3aed;padding-bottom:10px;margin-bottom:14px"><div style="font-size:18px;font-weight:900;color:#c0392b">GREAT CHID ELECTRO (NIG.)</div><div style="font-size:16px;font-weight:900;color:#1a237e">GLOBAL DOORS LTD</div><div style="display:inline-block;background:#f59e0b;color:#fff;padding:4px 24px;border-radius:4px;font-weight:800;letter-spacing:2px;margin-top:10px">DEMO SALES</div></div><div style="display:flex;justify-content:space-between;margin-bottom:12px;font-size:13px"><div><b>Customer:</b> ${esc(d.printName||'Walk-in')}</div><div style="text-align:right"><b>#:</b> ${esc(d.invoiceNum)}<br><b>Date:</b> ${d.date}</div></div><table><thead><tr><th>#</th><th>Item</th><th style="text-align:center">Qty</th><th style="text-align:right">Price</th><th style="text-align:right">Total</th></tr></thead><tbody>${rows}</tbody><tfoot><tr style="font-weight:800;border-top:2px solid #7c3aed"><td colspan="4" style="padding:8px;text-align:right">TOTAL</td><td style="padding:8px;text-align:right;color:#7c3aed;font-size:16px">N${(d.grandTotal||0).toLocaleString()}</td></tr></tfoot></table><div style="margin-top:14px;text-align:center;font-size:11px;color:#888;font-style:italic">DEMO SALE - Stock not deducted.</div><script>setTimeout(()=>window.print(),400)<\/script></body></html>`;const w=window.open('','_blank','width=640,height=850');if(w){w.document.write(html);w.document.close();}}
 async function deleteDemoSale(id){if(!confirm('Delete this demo sale?'))return;setSyncStatus('saving');try{await fsDelete('v2_demoSales',id);delete STATE.demoSales[id];setSyncStatus('synced');showToast('Deleted.','info');renderDemoSales();}catch(e){setSyncStatus('error');showToast('Failed.','error');}}
 
@@ -9162,7 +9162,7 @@ function renderCredit(){
   el.innerHTML=`<div class="kpi-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:1rem"><div class="kpi-card"><div class="kpi-label">Credit customers</div><div class="kpi-value">${custs.length}</div><div class="kpi-sub">With active limits</div></div><div class="kpi-card"><div class="kpi-label" style="color:var(--warning)">Total owed</div><div class="kpi-value" style="color:var(--warning)">${fmt(totalOwed)}</div><div class="kpi-sub">Outstanding credit</div></div><div class="kpi-card"><div class="kpi-label" style="color:var(--danger)">At limit</div><div class="kpi-value" style="color:var(--danger)">${atLimit}</div><div class="kpi-sub">Cannot buy more</div></div></div>${rows?`<div class="tbl-wrap"><table><thead><tr><th>Customer</th><th>Phone</th><th class="td-right">Credit limit</th><th class="td-right">Amount owed</th><th class="td-right">Available</th><th>Usage</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`:'<div class="empty-state"><div class="empty-state-icon">💳</div><div>No customers with credit limits yet.</div></div>'}`;
 }
 
-async function clearCustomerCredit(id){const c=STATE.customers?.[id];if(!c)return;if(!confirm(`Clear all debt for ${c.name}? (${fmt(c.creditBalance||0)})`))return;const upd={...c,creditBalance:0};setSyncStatus('saving');try{await fsSave(COLS.CUSTOMERS,id,upd);STATE.customers[id]={...upd,_id:id};setSyncStatus('synced');showToast(`Credit cleared for ${c.name}.`,'success');renderCredit();}catch(e){setSyncStatus('error');showToast('Failed.','error');}}
+async function clearCustomerCredit(id){const c=STATE.customers?.[id];if(!c)return;if(!confirm(`Clear all debt for ${c.name}? (${fmt(c.creditBalance||0)})`))return;const upd={...c,creditBalance:0};setSyncStatus('saving');try{await fsSave(COLS.CUSTOMERS,id,upd);STATE.customers[id]={...upd,_id:id,_savedAt:Date.now()};setSyncStatus('synced');showToast(`Credit cleared for ${c.name}.`,'success');renderCredit();}catch(e){setSyncStatus('error');showToast('Failed.','error');}}
 
 // ── SUPPLIER OVERVIEW ─────────────────────────────────────
 function renderSupplierOverview() {
@@ -10075,7 +10075,7 @@ async function saveEditReturn(id) {
   setSyncStatus('saving');
   try{
     await fsSave('v2_salesReturns',id,updated);
-    STATE.salesReturns[id]={...updated,_id:id};
+    STATE.salesReturns[id]={...updated,_id:id,_savedAt:Date.now()};
     closeModal();renderReturnsTracker();setSyncStatus('synced');
     showToast('Return updated.','success');
     logActivity('Sales return',`Return updated`,updated?.refundType||'');
@@ -10815,14 +10815,14 @@ function logActivity(action,detail,extra){
   const id=uid();const now=new Date();
   const entry={id,action,detail:detail||'',extra:extra||'',by:STATE.user?.name||'Unknown',user:STATE.user?.name||'Unknown',time:now.toLocaleTimeString(),date:now.toLocaleDateString()};
   fsSave('v2_activityLog',id,entry).catch(()=>{});
-  if(!STATE.activityLog)STATE.activityLog={};STATE.activityLog[id]={...entry,_id:id};
+  if(!STATE.activityLog)STATE.activityLog={};STATE.activityLog[id]={...entry,_id:id,_savedAt:Date.now()};
 }
 
 async function sendToRecycleBin(type,data,label){
   const id=uid();const expiresAt=new Date(Date.now()+BIN_RETENTION_DAYS*86400000).toISOString();
   const entry={id,type,data,label,expiresAt,deletedAt:new Date().toISOString(),deletedBy:STATE.user?.name||'Unknown'};
   await fsSave('v2_recycleBin',id,entry);
-  if(!STATE.recycleBin)STATE.recycleBin={};STATE.recycleBin[id]={...entry,_id:id};
+  if(!STATE.recycleBin)STATE.recycleBin={};STATE.recycleBin[id]={...entry,_id:id,_savedAt:Date.now()};
 }
 
 function getSupName(supId){
@@ -11262,10 +11262,10 @@ async function recordInlineCredit(id){
   try{
     const newBal=Math.max(0,(c.creditBalance||0)-amt);
     const upd={...c,creditBalance:newBal};
-    await fsSave(COLS.CUSTOMERS,id,upd);STATE.customers[id]={...upd,_id:id};
+    await fsSave(COLS.CUSTOMERS,id,upd);STATE.customers[id]={...upd,_id:id,_savedAt:Date.now()};
     const cfId=uid();
     await fsSave(COLS.CASHFLOW,cfId,{id:cfId,type:'in',cat:'Credit Payment',desc:`Credit payment — ${c.name}`,amount:amt,payMode:mode,bankName,custId:id,date,month,by:STATE.user?.name});
-    if(!STATE.cashflow)STATE.cashflow={};STATE.cashflow[cfId]={id:cfId,_id:cfId,type:'in',cat:'Credit Payment',amount:amt,custId:id,date,month};
+    if(!STATE.cashflow)STATE.cashflow={};STATE.cashflow[cfId]={id:cfId,_id:cfId,type:'in',cat:'Credit Payment',amount:amt,custId:id,date,month,_savedAt:Date.now()};
     setSyncStatus('synced');showToast(`${fmt(amt)} payment recorded. New balance: ${fmt(newBal)}`,'success');
     logActivity('Credit payment',`Paid ${fmt(amt)} — balance: ${fmt(newBal)}`,mode||'');
     renderCustomers();
@@ -11339,18 +11339,18 @@ async function saveFullPayment(id){
       if (creditBal<=0){showToast(c.name+' has no outstanding balance.','error');return;}
       const newBal = Math.max(0, creditBal - amt);
       const upd = {...c, creditBalance:newBal};
-      await fsSave(COLS.CUSTOMERS,id,upd); STATE.customers[id]={...upd,_id:id};
+      await fsSave(COLS.CUSTOMERS,id,upd); STATE.customers[id]={...upd,_id:id,_savedAt:Date.now()};
       const cfId = uid();
       const cf = {id:cfId,type:'in',cat:'Credit Payment',desc:'Credit payment - '+c.name+(note?' - '+note:''),amount:amt,payMode:mode,bankName,custId:id,date,month,by:STATE.user?.name||''};
       await fsSave(COLS.CASHFLOW,cfId,cf);
-      if(!STATE.cashflow)STATE.cashflow={}; STATE.cashflow[cfId]={...cf,_id:cfId};
+      if(!STATE.cashflow)STATE.cashflow={}; STATE.cashflow[cfId]={...cf,_id:cfId,_savedAt:Date.now()};
       showToast(fmt(amt)+' payment recorded. Balance: '+fmt(newBal)+'.','success');
       logActivity('Credit payment',c.name+' paid '+fmt(amt)+' balance: '+fmt(newBal),mode);
     } else {
       const cfId = uid();
       const cf = {id:cfId,type:'in',cat:'Customer Deposit',desc:'Advance deposit - '+c.name+(note?' - '+note:''),amount:amt,payMode:mode,bankName,custId:id,date,month,by:STATE.user?.name||''};
       await fsSave(COLS.CASHFLOW,cfId,cf);
-      if(!STATE.cashflow)STATE.cashflow={}; STATE.cashflow[cfId]={...cf,_id:cfId};
+      if(!STATE.cashflow)STATE.cashflow={}; STATE.cashflow[cfId]={...cf,_id:cfId,_savedAt:Date.now()};
       showToast(fmt(amt)+' deposit recorded for '+c.name+'.','success');
       logActivity('Customer deposit',c.name+' - '+fmt(amt)+' advance',mode);
     }
@@ -11486,24 +11486,24 @@ async function saveApplyDeposit(id) {
     const depCf = {id:depId,type:'out',cat:'Deposit Applied',desc:'Deposit applied'+(invoiceNum?' - Inv #'+invoiceNum:'')+' - '+c.name,amount:depositPortion,custId:id,date,month,invoiceNum,by:STATE.user?.name||''};
     await fsSave(COLS.CASHFLOW,depId,depCf);
     if(!STATE.cashflow)STATE.cashflow={};
-    STATE.cashflow[depId]={...depCf,_id:depId};
+    STATE.cashflow[depId]={...depCf,_id:depId,_savedAt:Date.now()};
     if (shortfall > 0) {
       const sfMode = document.getElementById('ad-sf-mode')?.value||'cash';
       const sfBank = document.getElementById('ad-sf-bank')?.value||'';
       if (sfMode==='credit') {
         const newCreditBal = (c.creditBalance||0) + shortfall;
         const upd = {...c, creditBalance:newCreditBal};
-        await fsSave(COLS.CUSTOMERS,id,upd); STATE.customers[id]={...upd,_id:id};
+        await fsSave(COLS.CUSTOMERS,id,upd); STATE.customers[id]={...upd,_id:id,_savedAt:Date.now()};
         logActivity('Deposit + credit shortfall',c.name+': deposit '+fmt(depositPortion)+', credit '+fmt(shortfall),invoiceNum);
       } else if (sfMode==='split') {
         const cashPortion = parseFloat(document.getElementById('ad-sf-cash')?.value)||0;
         const transferPortion = Math.max(0, shortfall - cashPortion);
-        if (cashPortion>0) { const cId=uid(),cCf={id:cId,type:'in',cat:'Invoice Payment',desc:'Split cash'+(invoiceNum?' Inv #'+invoiceNum:'')+' - '+c.name,amount:cashPortion,payMode:'cash',custId:id,date,month,by:STATE.user?.name||''}; await fsSave(COLS.CASHFLOW,cId,cCf); STATE.cashflow[cId]={...cCf,_id:cId}; }
-        if (transferPortion>0) { const tId=uid(),tCf={id:tId,type:'in',cat:'Invoice Payment',desc:'Split transfer'+(invoiceNum?' Inv #'+invoiceNum:'')+' - '+c.name,amount:transferPortion,payMode:'transfer',bankName:sfBank,custId:id,date,month,by:STATE.user?.name||''}; await fsSave(COLS.CASHFLOW,tId,tCf); STATE.cashflow[tId]={...tCf,_id:tId}; }
+        if (cashPortion>0) { const cId=uid(),cCf={id:cId,type:'in',cat:'Invoice Payment',desc:'Split cash'+(invoiceNum?' Inv #'+invoiceNum:'')+' - '+c.name,amount:cashPortion,payMode:'cash',custId:id,date,month,by:STATE.user?.name||''}; await fsSave(COLS.CASHFLOW,cId,cCf); STATE.cashflow[cId]={...cCf,_id:cId,_savedAt:Date.now()}; }
+        if (transferPortion>0) { const tId=uid(),tCf={id:tId,type:'in',cat:'Invoice Payment',desc:'Split transfer'+(invoiceNum?' Inv #'+invoiceNum:'')+' - '+c.name,amount:transferPortion,payMode:'transfer',bankName:sfBank,custId:id,date,month,by:STATE.user?.name||''}; await fsSave(COLS.CASHFLOW,tId,tCf); STATE.cashflow[tId]={...tCf,_id:tId,_savedAt:Date.now()}; }
         logActivity('Deposit + split shortfall',c.name+': deposit '+fmt(depositPortion)+', shortfall '+fmt(shortfall),invoiceNum);
       } else {
         const sfId=uid(),sfCf={id:sfId,type:'in',cat:'Invoice Payment',desc:'Shortfall'+(invoiceNum?' Inv #'+invoiceNum:'')+' - '+c.name+(note?' - '+note:''),amount:shortfall,payMode:sfMode,bankName:sfBank,custId:id,date,month,by:STATE.user?.name||''};
-        await fsSave(COLS.CASHFLOW,sfId,sfCf); STATE.cashflow[sfId]={...sfCf,_id:sfId};
+        await fsSave(COLS.CASHFLOW,sfId,sfCf); STATE.cashflow[sfId]={...sfCf,_id:sfId,_savedAt:Date.now()};
         logActivity('Deposit + shortfall paid',c.name+': deposit '+fmt(depositPortion)+', paid '+fmt(shortfall)+' ('+sfMode+')',invoiceNum);
       }
     } else {
@@ -11522,7 +11522,7 @@ async function writeOffCredit(id){
   setSyncStatus('saving');
   try{
     const upd={...c,creditBalance:0};
-    await fsSave(COLS.CUSTOMERS,id,upd);STATE.customers[id]={...upd,_id:id};
+    await fsSave(COLS.CUSTOMERS,id,upd);STATE.customers[id]={...upd,_id:id,_savedAt:Date.now()};
     setSyncStatus('synced');showToast('Credit written off.','success');
     logActivity('Credit written off',`Credit written off for ${c.name}`,fmt(c.creditBalance||0));renderCustomers();
   }catch(e){setSyncStatus('error');showToast('Failed.','error');}
@@ -11550,7 +11550,7 @@ async function saveCustomerDeposit(id){
   try{
     const cfId=uid();
     await fsSave(COLS.CASHFLOW,cfId,{id:cfId,type:'in',cat:'Customer Deposit',desc:`Deposit from ${c.name}${note?' — '+note:''}`,amount:amt,payMode:mode,bankName,custId:id,date,month,by:STATE.user?.name});
-    if(!STATE.cashflow)STATE.cashflow={};STATE.cashflow[cfId]={id:cfId,_id:cfId,type:'in',cat:'Customer Deposit',amount:amt,custId:id,date,month};
+    if(!STATE.cashflow)STATE.cashflow={};STATE.cashflow[cfId]={id:cfId,_id:cfId,type:'in',cat:'Customer Deposit',amount:amt,custId:id,date,month,_savedAt:Date.now()};
     closeModal();setSyncStatus('synced');showToast(`Deposit of ${fmt(amt)} recorded for ${c.name}.`,'success');
     logActivity('Customer deposit',`${fmt(amt)} deposit from ${c.name}`,mode||'');
     logActivity('Customer deposit',`${fmt(amt)} deposit from ${c.name}`,mode||'');renderCustomers();
@@ -11604,7 +11604,7 @@ async function saveEditCustomer(id) {
   setSyncStatus('saving');
   try {
     await fsSave(COLS.CUSTOMERS, id, updated);
-    STATE.customers[id] = {...updated, _id: id};
+    STATE.customers[id] = {...updated, _id: id,_savedAt:Date.now()};
     closeModal();
     setSyncStatus('synced');
     showToast(`✅ ${name} updated.`, 'success');
@@ -12176,7 +12176,7 @@ async function saveInlineNewUser(){
   setSyncStatus('saving');
   try{
     await fsSave(COLS.USERS,id,user);
-    if(!STATE.users)STATE.users={};STATE.users[id]={...user,_id:id};
+    if(!STATE.users)STATE.users={};STATE.users[id]={...user,_id:id,_savedAt:Date.now()};
     ['nu-name','nu-user','nu-pass'].forEach(x=>{const el=document.getElementById(x);if(el)el.value='';});
     setSyncStatus('synced');showToast(`User "${name}" created.`,'success');
     logActivity('User created',`New user: ${name} (@${username}) — ${role}`,'');renderUsers();
@@ -12199,14 +12199,14 @@ async function saveNewUser(){
   const id=uid();
   const user={id,name,username,password:btoa(pass),role,permissions:{},createdAt:new Date().toISOString()};
   setSyncStatus('saving');
-  try{await fsSave(COLS.USERS,id,user);if(!STATE.users)STATE.users={};STATE.users[id]={...user,_id:id};closeModal();setSyncStatus('synced');showToast(`User "${name}" created.`,'success');renderUsers();}
+  try{await fsSave(COLS.USERS,id,user);if(!STATE.users)STATE.users={};STATE.users[id]={...user,_id:id,_savedAt:Date.now()};closeModal();setSyncStatus('synced');showToast(`User "${name}" created.`,'success');renderUsers();}
   catch(e){setSyncStatus('error');showToast('Failed.','error');}
 }
 
 async function toggleUserPerm(userId,perm,val){
   const u=STATE.users?.[userId];if(!u)return;
   const perms={...(u.permissions||{}),[perm]:val};const upd={...u,permissions:perms};
-  try{await fsSave(COLS.USERS,userId,upd);STATE.users[userId]={...upd,_id:userId};}
+  try{await fsSave(COLS.USERS,userId,upd);STATE.users[userId]={...upd,_id:userId,_savedAt:Date.now()};}
   catch(e){showToast('Failed to update permission.','error');}
 }
 
@@ -12215,7 +12215,7 @@ function adminResetPassword(userId){
   if(!newPass||newPass.length<6){if(newPass!==null)showToast('Min 6 characters.','error');return;}
   const u=STATE.users?.[userId];if(!u)return;
   const upd={...u,password:btoa(newPass)};
-  fsSave(COLS.USERS,userId,upd).then(()=>{STATE.users[userId]={...upd,_id:userId};showToast('Password reset.','success');}).catch(()=>showToast('Failed.','error'));
+  fsSave(COLS.USERS,userId,upd).then(()=>{STATE.users[userId]={...upd,_id:userId,_savedAt:Date.now()};showToast('Password reset.','success');}).catch(()=>showToast('Failed.','error'));
 }
 
 async function deleteUser(userId){
@@ -12233,7 +12233,7 @@ async function saveMyProfile(){
   const upd={...STATE.user,name};
   if(pass&&pass.length>=6)upd.password=btoa(pass);
   setSyncStatus('saving');
-  try{await fsSave(COLS.USERS,userId,upd);STATE.users[userId]={...upd,_id:userId};STATE.user={...STATE.user,name};const el=document.getElementById('user-name');if(el)el.textContent=name;setSyncStatus('synced');showToast('Profile updated.','success');
+  try{await fsSave(COLS.USERS,userId,upd);STATE.users[userId]={...upd,_id:userId,_savedAt:Date.now()};STATE.user={...STATE.user,name};const el=document.getElementById('user-name');if(el)el.textContent=name;setSyncStatus('synced');showToast('Profile updated.','success');
     logActivity('Profile updated',`${STATE.user?.name||''} updated profile`,'');}
   catch(e){setSyncStatus('error');showToast('Failed.','error');}
 }
@@ -12454,7 +12454,7 @@ async function addBankByType(type){
   const acct=document.getElementById(acctId)?.value.trim()||'';
   const id=uid();const bank={id,name,type,acct};
   setSyncStatus('saving');
-  try{await fsSave('v2_banks',id,bank);if(!STATE.banks)STATE.banks={};STATE.banks[id]={...bank,_id:id};
+  try{await fsSave('v2_banks',id,bank);if(!STATE.banks)STATE.banks={};STATE.banks[id]={...bank,_id:id,_savedAt:Date.now()};
     document.getElementById(nameId).value='';document.getElementById(acctId).value='';
     setSyncStatus('synced');showToast(`${type==='pos'?'POS terminal':'Bank'} "${name}" added.`,'success');renderSettings();}
   catch(e){setSyncStatus('error');showToast('Failed.','error');}
@@ -12751,7 +12751,7 @@ async function saveSupplierDeposit(supId) {
     };
     await fsSave(COLS.CASHFLOW, cfId, cf);
     if (!STATE.cashflow) STATE.cashflow = {};
-    STATE.cashflow[cfId] = {...cf, _id: cfId};
+    STATE.cashflow[cfId] = {...cf, _id: cfId,_savedAt:Date.now()};
 
     // Reduce owed amount if supplier owes us
     const owed = s.owedToSupplier || 0;
@@ -12886,7 +12886,7 @@ async function addHeldChange() {
     const entry = { id, custName, amount, invoiceNum, note, date, month, status: 'pending', by: STATE.user?.name||'' };
     await fsSave(COLS.HELDCHANGE, id, entry);
     if (!STATE.heldChange) STATE.heldChange = {};
-    STATE.heldChange[id] = {...entry, _id: id};
+    STATE.heldChange[id] = {...entry, _id: id,_savedAt:Date.now()};
     ['hc-cust','hc-amount','hc-invoice','hc-note'].forEach(fid => { const el=document.getElementById(fid); if(el) el.value=''; });
     setSyncStatus('synced');
     showToast(`✅ Held change of ${fmt(amount)} recorded for ${custName}.`, 'success');
@@ -12903,7 +12903,7 @@ async function settleHeldChange(id) {
   try {
     const updated = {...entry, status:'settled', settledDate:new Date().toISOString().slice(0,10), settledBy:STATE.user?.name||''};
     await fsSave(COLS.HELDCHANGE, id, updated);
-    STATE.heldChange[id] = {...updated, _id: id};
+    STATE.heldChange[id] = {...updated, _id: id,_savedAt:Date.now()};
     setSyncStatus('synced');
     showToast(`✅ ${fmt(entry.amount)} change returned to ${entry.custName||'customer'}.`,'success');
     logActivity('Held Change settled', `${entry.custName||'Walk-in'} — ${fmt(entry.amount)}`,'');
