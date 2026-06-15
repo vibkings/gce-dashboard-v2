@@ -1825,6 +1825,13 @@ async function loadCollection(col, stateKey) {
 async function _refreshFromFirestore(col, stateKey) {
   try {
     const docs = await _fsList(col);
+    // CRITICAL: If Firestore returns 0 docs but we have local data, something is wrong
+    // (quota exceeded, network blip, etc.) — never wipe existing data with empty response
+    const localCount = Object.keys(STATE[stateKey]||{}).length;
+    if (!docs.length && localCount > 0) {
+      console.warn(`_refreshFromFirestore: ${col} returned 0 docs but we have ${localCount} locally — skipping to protect data`);
+      return;
+    }
     if (!docs.length) return;
     const store = _lfStore(col);
     // Snapshot queued IDs at the moment of merge (prevents race condition)
@@ -1858,7 +1865,6 @@ async function _refreshFromFirestore(col, stateKey) {
 // Load monthly sales collection (on demand for reports/overview)
 async function loadMonthlySales(year, month) {
   const col = salesCol(year, month);
-  const key = `sales_${year}_${String(month).padStart(2,'0')}`;
   let items = [];
   try {
     const store = _lfStore(col);
@@ -1866,12 +1872,16 @@ async function loadMonthlySales(year, month) {
   } catch(e) {}
   if (!items.length) {
     try {
-      items = await _fsList(col);
-      const store = _lfStore(col);
-      if (store) items.forEach(d => store.setItem(d._id, d).catch(()=>{}));
+      const fetched = await _fsList(col);
+      // Only use Firestore result if it returned something meaningful
+      if (fetched.length > 0) {
+        items = fetched;
+        const store = _lfStore(col);
+        if (store) items.forEach(d => store.setItem(d._id, d).catch(()=>{}));
+      }
     } catch(e) { items = []; }
   }
-  // Merge into STATE.sales
+  // Merge into STATE.sales — never delete existing entries, only add/update
   items.forEach(item => { STATE.sales[item._id||item.id] = item; });
   return items;
 }
@@ -10912,10 +10922,33 @@ function renderCustomersFull(){
     </div>`:'<div class="empty-state"><div class="empty-state-icon">👥</div><div>No customers yet. Click + Add customer.</div></div>'}`;
 }
 
-function renderCustomerProfile(id){
+async function renderCustomerProfile(id){
   const el=document.getElementById('customers-content');if(!el)return;
   const c=STATE.customers?.[id];
   if(!c){window._custProfileId=null;renderCustomersFull();return;}
+
+  // Ensure we have all monthly sales loaded for this customer
+  // Load last 12 months (covers most cases) if we haven't already
+  const _profNow=new Date();
+  const monthsToCheck=[];
+  for(let i=0;i<12;i++){
+    const d=new Date(_profNow.getFullYear(),_profNow.getMonth()-i,1);
+    monthsToCheck.push({y:d.getFullYear(),m:d.getMonth()+1});
+  }
+  // Load any months not yet in STATE (non-blocking for first render, then re-render)
+  const missingMonths=monthsToCheck.filter(({y,m})=>{
+    const key=`v2_sales_${y}_${String(m).padStart(2,'0')}`;
+    return !window._loadedSalesMonths?.has(key);
+  });
+  if(missingMonths.length){
+    if(!window._loadedSalesMonths)window._loadedSalesMonths=new Set();
+    // Load all missing months then re-render
+    await Promise.all(missingMonths.map(async({y,m})=>{
+      const key=`v2_sales_${y}_${String(m).padStart(2,'0')}`;
+      window._loadedSalesMonths.add(key);
+      try{await loadMonthlySales(y,m);}catch(e){}
+    }));
+  }
 
   const tabs=`<div class="subtabs">
     <button class="subtab" onclick="window._custProfileId=null;window._custTab='list';renderCustomers()">All Customers</button>
