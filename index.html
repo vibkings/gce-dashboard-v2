@@ -1488,10 +1488,15 @@ function cashflowCol(year, month) {
 // ── localForage stores ───────────────────────────────────
 // One store per collection, keyed by doc id
 let _lf = null; // localForage instance
+const _lfStoreCache = {}; // cache per collection name
 
 function _lfStore(col) {
   if (!_lf) return null;
-  return _lf.createInstance({ name: 'gce_v2', storeName: col.replace(/[^a-z0-9_]/gi, '_') });
+  const key = col.replace(/[^a-z0-9_]/gi, '_');
+  if (!_lfStoreCache[key]) {
+    _lfStoreCache[key] = _lf.createInstance({ name: 'gce_v2', storeName: key });
+  }
+  return _lfStoreCache[key];
 }
 
 // ── Sync Queue ───────────────────────────────────────────
@@ -1734,15 +1739,18 @@ async function fsGet(col, id) {
 }
 
 async function fsSave(col, id, data) {
-  const record = {...data, _id: id, _updatedAt: new Date().toISOString()};
+  const now = new Date().toISOString();
+  const record = {...data, _id: id, _updatedAt: now, _savedAt: Date.now()};
   // 1. Write to IndexedDB immediately (never fails, works offline)
   try {
     const store = _lfStore(col);
     if (store) await store.setItem(id, record);
   } catch(e) { console.warn('IndexedDB write failed:', e); }
-  // 2. Queue Firestore sync
+  // 2. Update STATE immediately so UI reflects change right away
+  // (caller also does this, but belt-and-suspenders)
+  // 3. Queue Firestore sync
   _enqueue(col, id, record, 'patch');
-  // 3. If online, attempt immediate sync (non-blocking)
+  // 4. If online, attempt immediate sync (non-blocking)
   if (_online) {
     runSyncQueue(); // fire-and-forget
   }
@@ -1774,8 +1782,9 @@ async function loadCollection(col, stateKey) {
     // Seed STATE immediately from local data
     STATE[stateKey] = {};
     items.forEach(item => { STATE[stateKey][item._id||item.id] = item; });
-    // Background-refresh from Firestore (non-blocking)
-    _refreshFromFirestore(col, stateKey);
+    // Delay background-refresh to avoid race: let the UI render first
+    // and give any in-flight fsSave calls time to stamp their _savedAt
+    setTimeout(() => _refreshFromFirestore(col, stateKey), 3000);
     return; // ← return early — app already has data
   }
 
@@ -1846,7 +1855,10 @@ async function _refreshFromFirestore(col, stateKey) {
 
       const localDoc = STATE[stateKey]?.[docId];
       // Timestamp-based conflict resolution: server wins only if newer
-      if (localDoc?._updatedAt && serverDoc._updatedAt && serverDoc._updatedAt < localDoc._updatedAt) {
+      // Use _savedAt (epoch ms) for precision, fall back to _updatedAt ISO string
+      const localTs = localDoc?._savedAt || (localDoc?._updatedAt ? new Date(localDoc._updatedAt).getTime() : 0);
+      const serverTs = serverDoc?._savedAt || (serverDoc?._updatedAt ? new Date(serverDoc._updatedAt).getTime() : 0);
+      if (localTs && serverTs && serverTs < localTs) {
         // Local is newer — skip server version, re-queue local to sync up
         if (!isAppendOnly(col)) {
           _enqueue(col, docId, localDoc, 'patch');
