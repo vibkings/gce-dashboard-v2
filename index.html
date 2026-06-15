@@ -1439,6 +1439,7 @@ const COLS = {
   SALES:      'v2_sales',
   BORROWS:    'v2_borrows',
   ADJLOG:     'v2_adjLog',
+  HELDCHANGE: 'v2_heldChange',
 };
 
 // ── Nav Config ─────────────────────────────────────────────
@@ -1916,6 +1917,7 @@ async function initDataLayer() {
     loadCollection(COLS.ADJLOG,       'adjLog'),
     loadCollection('v2_pendingDeliveries', 'pendingDeliveries'),
     loadCollection(COLS.SALESRETURNS, 'salesReturns'),
+    loadCollection(COLS.HELDCHANGE,   'heldChange'),
   ]), TIMEOUT);
 
   // Load current month's sales (with timeout)
@@ -6290,7 +6292,17 @@ async function saveEditSupplier(id){
   const updated={...s,name:document.getElementById('es-name').value.trim(),phone:document.getElementById('es-phone').value.trim(),
     contact:document.getElementById('es-contact').value.trim(),address:document.getElementById('es-addr').value.trim()};
   setSyncStatus('saving');
-  try{await fsSave(COLS.SUPPLIERS,id,updated);STATE.suppliers[id]={...updated,_id:id};closeModal();renderSuppliers();setSyncStatus('synced');showToast('✅ Updated.','success');}
+  try{
+    await fsSave(COLS.SUPPLIERS,id,updated);
+    STATE.suppliers[id]={...updated,_id:id};
+    closeModal();
+    setSyncStatus('synced');
+    showToast('✅ Supplier updated.','success');
+    logActivity('Supplier edited',updated.name||'','');
+    // Refresh supplier profile if it's open, otherwise list
+    if(window._supProfileId===id) renderSupplierProfile(id);
+    else renderSuppliers();
+  }
   catch(e){setSyncStatus('error');showToast('Failed.','error');}
 }
 
@@ -11156,6 +11168,180 @@ async function saveCustomerDeposit(id){
   }catch(e){setSyncStatus('error');showToast('Failed.','error');}
 }
 
+// ── editCustomer ─────────────────────────────────────────
+function editCustomer(id) {
+  const c = STATE.customers?.[id]; if (!c) return;
+  showModal(`✏️ Edit — ${esc(c.name)}`, `<div class="form-grid c2">
+    <div class="form-group" style="grid-column:1/-1"><label>Full Name <span class="req">*</span></label>
+      <input class="form-input" id="ec-name" value="${esc(c.name||'')}"></div>
+    <div class="form-group"><label>Phone</label>
+      <input class="form-input" id="ec-phone" value="${esc(c.phone||'')}"></div>
+    <div class="form-group"><label>Type</label>
+      <select class="form-input" id="ec-type">
+        <option value="Retail" ${(c.type||'Retail')==='Retail'?'selected':''}>Retail</option>
+        <option value="Wholesale" ${c.type==='Wholesale'?'selected':''}>Wholesale</option>
+        <option value="Contractor" ${c.type==='Contractor'?'selected':''}>Contractor</option>
+        <option value="VIP" ${c.type==='VIP'?'selected':''}>VIP</option>
+      </select></div>
+    <div class="form-group" style="grid-column:1/-1"><label>Address</label>
+      <input class="form-input" id="ec-addr" value="${esc(c.address||'')}"></div>
+    <div class="form-group"><label>Business / Company</label>
+      <input class="form-input" id="ec-biz" value="${esc(c.biz||'')}"></div>
+    <div class="form-group"><label>Email</label>
+      <input class="form-input" id="ec-email" value="${esc(c.email||'')}"></div>
+    <div class="form-group"><label>Credit Limit (₦)</label>
+      <input class="form-input" id="ec-limit" type="number" min="0" value="${c.creditLimit||0}"></div>
+    <div class="form-group"><label>Notes</label>
+      <input class="form-input" id="ec-notes" value="${esc(c.notes||'')}"></div>
+  </div>`,
+  [{label:'Cancel',action:'close',style:''},{label:'✓ Save',action:`saveEditCustomer('${id}')`,style:'btn-primary'}]);
+}
+
+async function saveEditCustomer(id) {
+  const c = STATE.customers?.[id]; if (!c) return;
+  const name = document.getElementById('ec-name')?.value.trim();
+  if (!name) { showToast('Name is required.','error'); return; }
+  const updated = {
+    ...c,
+    name,
+    phone:       document.getElementById('ec-phone')?.value.trim()||'',
+    type:        document.getElementById('ec-type')?.value||'Retail',
+    address:     document.getElementById('ec-addr')?.value.trim()||'',
+    biz:         document.getElementById('ec-biz')?.value.trim()||'',
+    email:       document.getElementById('ec-email')?.value.trim()||'',
+    creditLimit: parseFloat(document.getElementById('ec-limit')?.value)||0,
+    notes:       document.getElementById('ec-notes')?.value.trim()||'',
+  };
+  setSyncStatus('saving');
+  try {
+    await fsSave(COLS.CUSTOMERS, id, updated);
+    STATE.customers[id] = {...updated, _id: id};
+    closeModal();
+    setSyncStatus('synced');
+    showToast(`✅ ${name} updated.`, 'success');
+    logActivity('Customer edited', name, '');
+    // Refresh whichever customer view is active
+    if (window._custProfileId === id) showCustProfile(id);
+    else renderCustomers();
+  } catch(e) { setSyncStatus('error'); showToast('Failed: '+e.message,'error'); }
+}
+
+// ── printCustomerStatement ────────────────────────────────
+function printCustomerStatement(id) {
+  const c = STATE.customers?.[id]; if (!c) { showToast('Customer not found.','error'); return; }
+  const allSales = Object.values(STATE.sales||{}).filter(s => s.custId===id).sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+  const deposits = Object.values(STATE.cashflow||{}).filter(cf => cf.custId===id && cf.cat==='Customer Deposit').sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+  const totalSpent = allSales.reduce((a,s)=>a+(s.total||0),0);
+  const totalDeposits = deposits.reduce((a,d)=>a+(d.amount||0),0);
+  const creditBal = c.creditBalance||0;
+  const today = new Date().toLocaleDateString('en-NG',{day:'2-digit',month:'short',year:'numeric'});
+
+  // Group sales by invoice
+  const invMap = {};
+  allSales.forEach(s => {
+    const n = s.invoiceNum||'';
+    if (!invMap[n]) invMap[n] = {invoiceNum:n, date:s.date, items:[], total:0, payment:s.payment, payMode:s.payMode};
+    invMap[n].items.push(s);
+    invMap[n].total += s.total||0;
+  });
+  const invoices = Object.values(invMap).slice(-50); // last 50 invoices
+
+  const saleRows = invoices.map((inv,i) => `
+    <tr style="background:${i%2===0?'#f9fafb':'#fff'}">
+      <td style="padding:7px 10px;font-size:12px;color:#6b7280">${inv.date||'—'}</td>
+      <td style="padding:7px 10px;font-size:12px;font-weight:600">#${inv.invoiceNum}</td>
+      <td style="padding:7px 10px;font-size:12px">${inv.items.map(s=>esc(s.name||s.itemName||'')).join(', ').slice(0,60)}</td>
+      <td style="padding:7px 10px;font-size:12px;text-align:right;font-weight:600">₦${(inv.total||0).toLocaleString()}</td>
+      <td style="padding:7px 10px;font-size:11px;color:${inv.payment==='credit'?'#dc2626':inv.payment==='part'?'#d97706':'#15803d'}">${inv.payment==='credit'?'Credit':inv.payment==='part'?'Part':'Paid'}</td>
+    </tr>`).join('');
+
+  const depRows = deposits.map((d,i) => `
+    <tr style="background:${i%2===0?'#f0fdf4':'#fff'}">
+      <td style="padding:7px 10px;font-size:12px;color:#6b7280">${d.date||'—'}</td>
+      <td style="padding:7px 10px;font-size:12px;color:#15803d;font-weight:600">₦${(d.amount||0).toLocaleString()}</td>
+      <td style="padding:7px 10px;font-size:12px">${esc(d.desc||d.note||'Deposit')}</td>
+    </tr>`).join('');
+
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
+  <title>Customer Statement — ${c.name}</title>
+  <style>
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{font-family:'Segoe UI',Arial,sans-serif;font-size:13px;color:#1e293b;padding:24px}
+    .header{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #1d4ed8;padding-bottom:12px;margin-bottom:16px}
+    .biz-name{font-size:18px;font-weight:800;color:#1d4ed8}
+    .biz-sub{font-size:11px;color:#6b7280;margin-top:2px}
+    .stmt-title{font-size:14px;font-weight:700;color:#374151;text-align:right}
+    .stmt-date{font-size:11px;color:#6b7280;margin-top:2px}
+    .cust-box{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 16px;margin-bottom:16px;display:flex;justify-content:space-between}
+    .kpi-row{display:flex;gap:16px;margin-bottom:16px}
+    .kpi{flex:1;background:#f0f4ff;border:1px solid #c7d2fe;border-radius:8px;padding:10px 14px;text-align:center}
+    .kpi-val{font-size:18px;font-weight:800;color:#1d4ed8}
+    .kpi-lbl{font-size:10px;color:#6b7280;text-transform:uppercase;margin-top:2px}
+    table{width:100%;border-collapse:collapse;margin-bottom:16px}
+    th{background:#1d4ed8;color:#fff;padding:8px 10px;font-size:11px;text-align:left;font-weight:700}
+    .sec-hdr{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#374151;margin:14px 0 6px;padding:6px 0;border-bottom:1px solid #e2e8f0}
+    .balance-row{background:#fef2f2;border:1px solid #fca5a5;border-radius:6px;padding:10px 14px;display:flex;justify-content:space-between;align-items:center;margin-top:8px}
+    .balance-amt{font-size:20px;font-weight:800;color:#dc2626}
+    .footer{margin-top:20px;text-align:center;font-size:10px;color:#9ca3af;border-top:1px solid #e2e8f0;padding-top:10px}
+    @media print{body{padding:10px}}
+  </style></head><body>
+  <div class="header">
+    <div>
+      <div class="biz-name">Great Chid Electro / Global Doors Ltd</div>
+      <div class="biz-sub">Ogbomoso & Ilorin, Nigeria &nbsp;|&nbsp; +2348067458837</div>
+    </div>
+    <div style="text-align:right">
+      <div class="stmt-title">📄 Customer Account Statement</div>
+      <div class="stmt-date">As at ${today}</div>
+    </div>
+  </div>
+
+  <div class="cust-box">
+    <div>
+      <div style="font-size:15px;font-weight:800">${esc(c.name)}</div>
+      <div style="font-size:12px;color:#6b7280;margin-top:3px">${esc(c.phone||'—')} &nbsp;|&nbsp; ${esc(c.type||'Retail')}</div>
+      ${c.address?`<div style="font-size:12px;color:#6b7280">${esc(c.address)}</div>`:''}
+    </div>
+    <div style="text-align:right">
+      <div style="font-size:11px;color:#6b7280">Credit Limit</div>
+      <div style="font-size:14px;font-weight:700">₦${(c.creditLimit||0).toLocaleString()}</div>
+    </div>
+  </div>
+
+  <div class="kpi-row">
+    <div class="kpi"><div class="kpi-val">₦${totalSpent.toLocaleString()}</div><div class="kpi-lbl">Total Purchased</div></div>
+    <div class="kpi"><div class="kpi-val">${invoices.length}</div><div class="kpi-lbl">Invoices</div></div>
+    <div class="kpi"><div class="kpi-val">₦${totalDeposits.toLocaleString()}</div><div class="kpi-lbl">Total Deposits</div></div>
+    <div class="kpi" style="background:#fef2f2;border-color:#fca5a5"><div class="kpi-val" style="color:#dc2626">₦${creditBal.toLocaleString()}</div><div class="kpi-lbl">Balance Owed</div></div>
+  </div>
+
+  ${invoices.length ? `<div class="sec-hdr">🧾 Purchase History (${invoices.length} invoices)</div>
+  <table><thead><tr><th>Date</th><th>Invoice</th><th>Items</th><th style="text-align:right">Amount</th><th>Status</th></tr></thead>
+  <tbody>${saleRows}</tbody></table>` : ''}
+
+  ${deposits.length ? `<div class="sec-hdr">💰 Deposit History</div>
+  <table><thead><tr><th>Date</th><th>Amount</th><th>Description</th></tr></thead>
+  <tbody>${depRows}</tbody></table>` : ''}
+
+  ${creditBal > 0 ? `<div class="balance-row">
+    <div><b style="font-size:13px">OUTSTANDING BALANCE</b><div style="font-size:11px;color:#6b7280">Amount still owed to Great Chid Electro</div></div>
+    <div class="balance-amt">₦${creditBal.toLocaleString()}</div>
+  </div>` : `<div style="background:#f0fdf4;border:1px solid #86efac;border-radius:6px;padding:10px 14px;text-align:center;color:#15803d;font-weight:700">✅ Account fully settled — no outstanding balance</div>`}
+
+  <div class="footer">Generated by GCE Business Dashboard v2 &nbsp;|&nbsp; ${today} &nbsp;|&nbsp; greatchidelectro.com</div>
+  <script>window.onload=()=>window.print();<\/script>
+  </body></html>`;
+
+  const w = window.open('','_blank','width=800,height=900');
+  if (w) { w.document.write(html); w.document.close(); }
+  else showToast('Allow popups to print the statement.','error');
+}
+
+// ── editSupplier (alias for profile button) ───────────────
+function editSupplier(id) {
+  showEditSupplierModal(id);
+}
+
 function deleteCustomerConfirm(id){
   const c=STATE.customers?.[id];if(!c)return;
   showModal(`🗑️ Delete "${esc(c.name)}"?`,`<p>This will permanently delete this customer. Cannot be undone.</p>`,[
@@ -12199,21 +12385,17 @@ async function saveSupplierDeposit(supId) {
 }
 
 // ════════════════════════════════════════════════════════════
-// #1 — HELD CHANGE REGISTER
+// #1 — HELD CHANGE REGISTER (own collection, not cashflow)
 // ════════════════════════════════════════════════════════════
-// Held change = when customer gives ₦X, you owe them the difference to collect later
-
 function renderHeldChange() {
   const el = document.getElementById('held-change-content');
   if (!el) return;
 
-  const entries = Object.values(STATE.cashflow || {})
-    .filter(c => c.cat === 'Held Change')
+  const entries = Object.values(STATE.heldChange || {})
     .sort((a,b) => (b.date||'').localeCompare(a.date||''));
   const pending = entries.filter(e => e.status === 'pending');
   const settled = entries.filter(e => e.status !== 'pending');
   const totalHeld = pending.reduce((a,e) => a + (e.amount||0), 0);
-
   const isAdmin = STATE.user?.role === 'admin';
 
   const pendingRows = pending.map(e => `<tr>
@@ -12240,7 +12422,6 @@ function renderHeldChange() {
   </tr>`).join('');
 
   el.innerHTML = `
-    <!-- KPIs -->
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:1.5rem">
       <div class="kpi-card" style="border-left:3px solid var(--brand)">
         <div class="kpi-label" style="color:var(--brand)">TOTAL HELD</div>
@@ -12248,18 +12429,17 @@ function renderHeldChange() {
         <div class="kpi-sub">${pending.length} customer${pending.length!==1?'s':''} waiting</div>
       </div>
       <div class="kpi-card" style="border-left:3px solid var(--success)">
-        <div class="kpi-label" style="color:var(--success)">SETTLED</div>
-        <div class="kpi-value" style="font-size:26px;font-weight:800">${settled.length}</div>
-        <div class="kpi-sub">Change returned</div>
+        <div class="kpi-label" style="color:var(--success)">SETTLED TODAY</div>
+        <div class="kpi-value" style="font-size:26px;font-weight:800">${settled.filter(e=>e.settledDate===new Date().toISOString().slice(0,10)).length}</div>
+        <div class="kpi-sub">${settled.length} total settled</div>
       </div>
       <div class="kpi-card" style="border-left:3px solid var(--warning)">
         <div class="kpi-label" style="color:var(--warning)">PENDING</div>
         <div class="kpi-value" style="font-size:26px;font-weight:800;color:var(--warning)">${pending.length}</div>
-        <div class="kpi-sub">Not yet collected</div>
+        <div class="kpi-sub">Not yet returned</div>
       </div>
     </div>
 
-    <!-- Add new held change -->
     <div class="form-card" style="margin-bottom:1.5rem">
       <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--brand);margin-bottom:14px;display:flex;align-items:center;gap:6px">
         <span style="width:3px;height:14px;background:var(--brand);border-radius:2px;display:inline-block"></span>
@@ -12288,20 +12468,17 @@ function renderHeldChange() {
       </div>
     </div>
 
-    <!-- Pending -->
-    <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.07em;color:var(--warning);margin-bottom:8px">⏳ Pending — Change Not Yet Collected (${pending.length})</div>
+    <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.07em;color:var(--warning);margin-bottom:8px">⏳ Pending — Change Not Yet Returned (${pending.length})</div>
     ${pending.length ? `<div class="tbl-wrap" style="margin-bottom:1.5rem">
-      <table><thead><tr>
-        <th>Date</th><th>Customer</th><th class="td-right">Amount</th><th>Note</th><th>By</th><th>Action</th>
-      </tr></thead><tbody>${pendingRows}</tbody></table>
+      <table><thead><tr><th>Date</th><th>Customer</th><th class="td-right">Amount</th><th>Note</th><th>By</th><th>Action</th></tr></thead>
+      <tbody>${pendingRows}</tbody></table>
     </div>` : `<div class="empty-state" style="margin-bottom:1.5rem"><div class="empty-state-icon">✅</div><div>No pending held change — all clear!</div></div>`}
 
-    <!-- Settled -->
-    ${settled.length ? `<div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.07em;color:var(--success);margin-bottom:8px">✅ Settled History</div>
+    ${settled.length ? `
+    <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.07em;color:var(--success);margin-bottom:8px">✅ Settled History</div>
     <div class="tbl-wrap">
-      <table><thead><tr>
-        <th>Date</th><th>Customer</th><th class="td-right">Amount</th><th>Note</th><th>Settled on</th><th>Status</th>
-      </tr></thead><tbody>${settledRows}</tbody></table>
+      <table><thead><tr><th>Date</th><th>Customer</th><th class="td-right">Amount</th><th>Note</th><th>Settled On</th><th>Status</th></tr></thead>
+      <tbody>${settledRows}</tbody></table>
     </div>` : ''}
   `;
 }
@@ -12317,61 +12494,44 @@ async function addHeldChange() {
   setSyncStatus('saving');
   try {
     const id = uid();
-    const entry = {
-      id, cat: 'Held Change', type: 'liability',
-      custName, amount, invoiceNum, note,
-      date, month, status: 'pending',
-      by: STATE.user?.name || ''
-    };
-    await fsSave(COLS.CASHFLOW, id, entry);
-    if (!STATE.cashflow) STATE.cashflow = {};
-    STATE.cashflow[id] = {...entry, _id: id};
-    // Clear form
-    ['hc-cust','hc-amount','hc-invoice','hc-note'].forEach(id => {
-      const el = document.getElementById(id); if (el) el.value = '';
-    });
+    const entry = { id, custName, amount, invoiceNum, note, date, month, status: 'pending', by: STATE.user?.name||'' };
+    await fsSave(COLS.HELDCHANGE, id, entry);
+    if (!STATE.heldChange) STATE.heldChange = {};
+    STATE.heldChange[id] = {...entry, _id: id};
+    ['hc-cust','hc-amount','hc-invoice','hc-note'].forEach(fid => { const el=document.getElementById(fid); if(el) el.value=''; });
     setSyncStatus('synced');
     showToast(`✅ Held change of ${fmt(amount)} recorded for ${custName}.`, 'success');
     logActivity('Held Change recorded', `${custName} — ${fmt(amount)}`, note.slice(0,40));
     renderHeldChange();
-  } catch(e) {
-    setSyncStatus('error');
-    showToast('Failed: ' + e.message, 'error');
-  }
+  } catch(e) { setSyncStatus('error'); showToast('Failed: '+e.message,'error'); }
 }
 
 async function settleHeldChange(id) {
-  const entry = STATE.cashflow?.[id];
-  if (!entry) { showToast('Entry not found.', 'error'); return; }
-  if (!confirm(`Mark ${fmt(entry.amount)} change for ${entry.custName||'Walk-in'} as settled (returned to customer)?`)) return;
+  const entry = STATE.heldChange?.[id];
+  if (!entry) { showToast('Entry not found.','error'); return; }
+  if (!confirm(`Mark ${fmt(entry.amount)} for ${entry.custName||'Walk-in'} as settled (change returned)?`)) return;
   setSyncStatus('saving');
   try {
-    const updated = {...entry, status: 'settled', settledDate: new Date().toISOString().slice(0,10), settledBy: STATE.user?.name||''};
-    await fsSave(COLS.CASHFLOW, id, updated);
-    STATE.cashflow[id] = {...updated, _id: id};
+    const updated = {...entry, status:'settled', settledDate:new Date().toISOString().slice(0,10), settledBy:STATE.user?.name||''};
+    await fsSave(COLS.HELDCHANGE, id, updated);
+    STATE.heldChange[id] = {...updated, _id: id};
     setSyncStatus('synced');
-    showToast(`✅ Change of ${fmt(entry.amount)} marked as settled.`, 'success');
-    logActivity('Held Change settled', `${entry.custName||'Walk-in'} — ${fmt(entry.amount)}`, '');
+    showToast(`✅ ${fmt(entry.amount)} change returned to ${entry.custName||'customer'}.`,'success');
+    logActivity('Held Change settled', `${entry.custName||'Walk-in'} — ${fmt(entry.amount)}`,'');
     renderHeldChange();
-  } catch(e) {
-    setSyncStatus('error');
-    showToast('Failed: ' + e.message, 'error');
-  }
+  } catch(e) { setSyncStatus('error'); showToast('Failed: '+e.message,'error'); }
 }
 
 async function deleteHeldChange(id) {
-  if (!confirm('Delete this held change entry?')) return;
+  if (!confirm('Delete this entry?')) return;
   setSyncStatus('saving');
   try {
-    await fsDelete(COLS.CASHFLOW, id);
-    if (STATE.cashflow) delete STATE.cashflow[id];
+    await fsDelete(COLS.HELDCHANGE, id);
+    if (STATE.heldChange) delete STATE.heldChange[id];
     setSyncStatus('synced');
-    showToast('Entry deleted.', 'info');
+    showToast('Entry deleted.','info');
     renderHeldChange();
-  } catch(e) {
-    setSyncStatus('error');
-    showToast('Failed: ' + e.message, 'error');
-  }
+  } catch(e) { setSyncStatus('error'); showToast('Failed: '+e.message,'error'); }
 }
 
 
