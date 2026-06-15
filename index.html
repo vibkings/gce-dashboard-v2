@@ -1758,12 +1758,27 @@ async function fsSave(col, id, data) {
 }
 
 async function fsDelete(col, id) {
-  // 1. Delete from IndexedDB
+  const now = new Date().toISOString();
+  const nowMs = Date.now();
+  // Write a tombstone instead of hard-deleting.
+  // Tombstone: { _id, _deleted:true, _deletedAt, _savedAt }
+  // BiSync sees tombstone → knows doc was intentionally deleted → doesn't push it back.
+  // Append-only collections (sales, cashflow, etc.) still hard-delete — those records
+  // are voided/returned via their own audit trail, not deleted outright.
+  if (!isAppendOnly(col)) {
+    const tombstone = { _id: id, _deleted: true, _deletedAt: now, _savedAt: nowMs, _updatedAt: now };
+    try {
+      const store = _lfStore(col);
+      if (store) await store.setItem(id, tombstone);
+    } catch(e) {}
+    _enqueue(col, id, tombstone, 'patch'); // write tombstone to Firestore (not a delete)
+    return;
+  }
+  // Append-only: hard delete (these are audit records, not entities)
   try {
     const store = _lfStore(col);
     if (store) await store.removeItem(id);
   } catch(e) { console.warn('IndexedDB delete failed:', e); }
-  // 2. Queue Firestore delete
   _enqueue(col, id, null, 'delete');
 }
 
@@ -1779,9 +1794,11 @@ async function loadCollection(col, stateKey) {
   } catch(e) { console.warn(`IndexedDB read failed for ${col}:`, e); }
 
   if (items.length) {
-    // Seed STATE immediately from local data
+    // Seed STATE immediately from local data — filter out tombstones
     STATE[stateKey] = {};
-    items.forEach(item => { STATE[stateKey][item._id||item.id] = item; });
+    items.forEach(item => {
+      if (!item._deleted) STATE[stateKey][item._id||item.id] = item;
+    });
     // Delay background-refresh to avoid race: let the UI render first
     // and give any in-flight fsSave calls time to stamp their _savedAt
     setTimeout(() => _refreshFromFirestore(col, stateKey), 3000);
@@ -1868,8 +1885,14 @@ async function _refreshFromFirestore(col, stateKey) {
 
       // Server version is same age or newer — accept it
       if (!STATE[stateKey]) STATE[stateKey] = {};
-      STATE[stateKey][docId] = serverDoc;
-      if (store) store.setItem(docId, serverDoc).catch(()=>{});
+      if (serverDoc._deleted) {
+        // Server tombstone — remove from local STATE and IndexedDB
+        delete STATE[stateKey][docId];
+        if (store) store.setItem(docId, serverDoc).catch(()=>{}); // keep tombstone in IDB
+      } else {
+        STATE[stateKey][docId] = serverDoc;
+        if (store) store.setItem(docId, serverDoc).catch(()=>{});
+      }
     }
   } catch(e) { /* silent background refresh failure */ }
 }
@@ -1934,18 +1957,35 @@ async function runBiSync(col, stateKey) {
       const localDoc = localMap[id];
       if (!localDoc) {
         if (!STATE[stateKey]) STATE[stateKey] = {};
-        STATE[stateKey][id] = serverDoc;
-        if (store) store.setItem(id, serverDoc).catch(()=>{});
-        pulled++;
+        if (serverDoc._deleted) {
+          // Tombstone from server — store it locally so we remember it's deleted
+          if (store) store.setItem(id, serverDoc).catch(()=>{});
+          // Don't add to STATE — keep it absent
+        } else {
+          STATE[stateKey][id] = serverDoc;
+          if (store) store.setItem(id, serverDoc).catch(()=>{});
+          pulled++;
+        }
       } else {
         const lTs = localDoc._savedAt || (localDoc._updatedAt ? new Date(localDoc._updatedAt).getTime() : 0);
         const sTs = serverDoc._savedAt || (serverDoc._updatedAt ? new Date(serverDoc._updatedAt).getTime() : 0);
         if (sTs > lTs) {
-          STATE[stateKey][id] = serverDoc;
-          if (store) store.setItem(id, serverDoc).catch(()=>{});
+          if (serverDoc._deleted) {
+            // Server has newer tombstone — remove from STATE
+            delete STATE[stateKey][id];
+            if (store) store.setItem(id, serverDoc).catch(()=>{});
+          } else {
+            STATE[stateKey][id] = serverDoc;
+            if (store) store.setItem(id, serverDoc).catch(()=>{});
+          }
           resolved++;
         } else if (lTs > sTs && !isAppendOnly(col)) {
-          _enqueue(col, id, localDoc, 'patch');
+          if (localDoc._deleted) {
+            // Local tombstone is newer — push tombstone to server
+            _enqueue(col, id, localDoc, 'patch');
+          } else {
+            _enqueue(col, id, localDoc, 'patch');
+          }
           resolved++;
         }
       }
@@ -1954,6 +1994,8 @@ async function runBiSync(col, stateKey) {
     // B: We have → Firestore doesn't
     for (const [id, localDoc] of Object.entries(localMap)) {
       if (serverIds.has(id) || queuedIds.has(id)) continue;
+      // CRITICAL: Never push back a tombstoned doc — it was deleted on purpose
+      if (localDoc._deleted) continue;
       _enqueue(col, id, localDoc, 'patch');
       pushed++;
     }
@@ -1989,11 +2031,11 @@ async function runBiSyncSalesMonth(y, m) {
         pulled++;
       }
     }
-    // Push local docs server doesn't have
+    // Push local docs server doesn't have (skip tombstones — never resurrect deleted sales)
     for (const [id, localDoc] of Object.entries(STATE.sales)) {
       const docCol = localDoc.month ? salesCol(...localDoc.month.split('-').map(Number)) : null;
       if (docCol !== col) continue;
-      if (!serverIds.has(id) && !queuedIds.has(id)) {
+      if (!serverIds.has(id) && !queuedIds.has(id) && !localDoc._deleted) {
         _enqueue(col, id, localDoc, 'patch');
         pushed++;
       }
