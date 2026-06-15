@@ -6192,40 +6192,11 @@ function showCustProfile(id){
 }
 
 function showRecordPaymentModal(id){
-  const c=STATE.customers[id];if(!c)return;
-  if(!(c.creditBalance>0)){showToast(`${c.name} has no outstanding balance.`,'info');return;}
-  showModal(`💳 Payment — ${esc(c.name)}`,`
-    <div class="alert alert-warning">Outstanding: <b>${fmt(c.creditBalance)}</b></div>
-    <div class="form-grid">
-      <div class="form-group"><label>Amount (₦) <span class="req">*</span></label><input class="form-input" id="rp-amt" type="number" min="0" placeholder="${c.creditBalance}"></div>
-      <div class="form-group"><label>Mode</label><select class="form-input" id="rp-mode" onchange="toggleGenericBankField('rp','in')"><option value="cash">Cash</option><option value="transfer">Transfer</option><option value="pos">POS</option></select></div>
-      <div class="form-group" id="rp-bank-wrap" style="display:none;grid-column:1/-1"><label id="rp-bank-label">Bank Account</label><select class="form-input" id="rp-bank">${bankSelectOpts('transfer')}</select></div>
-      <div class="form-group"><label>Date</label><input class="form-input" id="rp-date" type="date"></div>
-      <div class="form-group"><label>Note</label><input class="form-input" id="rp-note" placeholder="Optional"></div>
-    </div>
-  `,[{label:'Cancel',action:'close',style:''},{label:'✓ Record',action:`saveRecordPayment('${id}')`,style:'btn-success'}]);
+  // Route through the full payment modal which handles all cases
+  showFullPaymentModal(id);
 }
-async function saveRecordPayment(id){
-  const c=STATE.customers[id];
-  const amt=parseFloat(document.getElementById('rp-amt').value)||0;
-  if(amt<=0){showToast('Enter valid amount.','error');return;}
-  const mode=document.getElementById('rp-mode').value;
-  const bankName=document.getElementById('rp-bank')?.value||'';
-  const dateVal=document.getElementById('rp-date').value;
-  const note=document.getElementById('rp-note').value.trim();
-  const dateObj=dateVal?(()=>{const dp=dateVal.split('-');return new Date(+dp[0],+dp[1]-1,+dp[2]);})():new Date();
-  const date=dateObj.toLocaleDateString();
-  const newBal=Math.max(0,(c.creditBalance||0)-amt);
-  const updated={...c,creditBalance:newBal};
-  setSyncStatus('saving');
-  try{
-    await fsSave(COLS.CUSTOMERS,id,updated);STATE.customers[id]={...updated,_id:id};
-    const payId=uid();
-    await fsSave(COLS.CASHFLOW,payId,{id:payId,desc:`Credit payment — ${c.name}${note?' — '+note:''}`,amount:amt,type:'in',cat:'Credit Payment',payMode:mode,bankName,custId:id,date,month:dateObj.getFullYear()+'-'+String(dateObj.getMonth()+1).padStart(2,'0'),by:STATE.user.name});
-    closeModal();renderCustomers();setSyncStatus('synced');
-    showToast(`✅ Payment recorded. New balance: ${fmt(newBal)}`,'success');
-    logActivity('Credit payment',`${c.name} — paid ${fmt(amt)} — balance: ${fmt(newBal)}`,mode||'');
-  }catch(e){setSyncStatus('error');showToast('Failed.','error');}
+function showCreditPayModal(id){
+  showFullPaymentModal(id);
 }
 
 // ════════════════════════════════════════════════════════════
@@ -10847,7 +10818,7 @@ function renderCustomerProfile(id){
   const totalPayments=Object.values(STATE.cashflow||{}).filter(c2=>c2.type==='in'&&c2.custId===id).reduce((a,p)=>a+(p.amount||0),0);
   const creditBalance=c.creditBalance||0;
   const deposits=Object.values(STATE.cashflow||{}).filter(cf=>cf.type==='in'&&cf.custId===id&&cf.cat==='Customer Deposit');
-  const depositBalance=deposits.reduce((a,d)=>a+(d.amount||0),0);
+  const depositBalance=Math.max(0, deposits.reduce((a,d)=>a+(d.amount||0),0) - Object.values(STATE.cashflow||{}).filter(cf=>cf.custId===id&&cf.cat==='Deposit Applied').reduce((a,d)=>a+(d.amount||0),0));
   const commissions=Object.values(STATE.cashflow||{}).filter(cf=>cf.custId===id&&cf.cat==='Commission');
   const totalCommEarned=commissions.filter(cf=>cf.type==='in'||cf.commType==='earned').reduce((a,c)=>a+(c.amount||0),0);
   const totalCommPaid=commissions.filter(cf=>cf.type==='out'||cf.commType==='paid').reduce((a,c)=>a+(c.amount||0),0);
@@ -10965,26 +10936,36 @@ function renderCustomerProfile(id){
       </div>
     </div>
 
-    <!-- Credit payment bar (shown when owing) -->
-    ${creditBalance>0?`
-    <div style="background:#fff8f0;border:1.5px solid #fcd34d;border-radius:var(--radius-lg);padding:14px 16px;margin-bottom:1.25rem">
-      <div style="font-size:12px;font-weight:700;color:var(--warning);margin-bottom:10px">💳 Record credit payment — owes ${fmt(creditBalance)}</div>
-      <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
+    <!-- Payment action bar — always visible -->
+    <div style="background:var(--surface);border:1.5px solid var(--border);border-radius:var(--radius-lg);padding:14px 16px;margin-bottom:1.25rem">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:${creditBalance>0||depositBalance>0?'12px':'0'}">
+        <div style="font-size:12px;font-weight:700;color:var(--text1)">
+          💳 Payments
+          ${creditBalance>0?`<span style="color:var(--danger);margin-left:8px">Owes ${fmt(creditBalance)}</span>`:''}
+          ${depositBalance>0?`<span style="color:#8b5cf6;margin-left:8px">Deposit: ${fmt(depositBalance)}</span>`:''}
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <button class="btn btn-sm btn-primary" onclick="showFullPaymentModal('${id}')" style="font-size:12px">+ Record Payment</button>
+          ${depositBalance>0?`<button class="btn btn-sm" onclick="showApplyDepositModal('${id}')" style="font-size:12px;color:#8b5cf6;border-color:#c4b5fd">💜 Apply Deposit</button>`:''}
+          ${creditBalance>0?`<button class="btn btn-sm" onclick="writeOffCredit('${id}')" style="font-size:12px;background:#f59e0b;border-color:#f59e0b;color:#fff">✕ Write-off</button>`:''}
+        </div>
+      </div>
+      ${creditBalance>0?`<div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
         <div><div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);margin-bottom:3px">AMOUNT PAID (₦)</div>
-          <input class="form-input" id="cpr-amt" type="number" min="0" placeholder="0" style="width:160px"></div>
+          <input class="form-input" id="cpr-amt" type="number" min="0" placeholder="0" style="width:150px" oninput="document.getElementById('cpr-calc').textContent=this.value>0?'Remaining: '+new Intl.NumberFormat('en-NG',{style:'currency',currency:'NGN',minimumFractionDigits:0}).format(Math.max(0,${creditBalance}-parseFloat(this.value||0))):''">
+        </div>
         <div><div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);margin-bottom:3px">PAYMENT MODE</div>
-          <select class="form-input" id="cpr-mode" style="width:160px" onchange="toggleGenericBankField('cpr','in')">
+          <select class="form-input" id="cpr-mode" style="width:150px" onchange="toggleGenericBankField('cpr','in')">
             <option value="cash">Cash</option><option value="transfer">Transfer</option><option value="pos">POS</option>
           </select></div>
         <div id="cpr-bank-wrap" style="display:none"><div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);margin-bottom:3px" id="cpr-bank-label">BANK</div>
-          <select class="form-input" id="cpr-bank" style="width:160px">${bankSelectOpts('transfer')}</select></div>
+          <select class="form-input" id="cpr-bank" style="width:150px">${bankSelectOpts('transfer')}</select></div>
         <div><div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);margin-bottom:3px">PAYMENT DATE</div>
-          <input class="form-input" id="cpr-date" type="date" style="width:160px"></div>
+          <input class="form-input" id="cpr-date" type="date" style="width:150px" value="${new Date().toISOString().slice(0,10)}"></div>
         <button class="btn btn-primary" onclick="recordInlineCredit('${id}')" style="background:#22c55e;border-color:#22c55e">✓ Record payment</button>
-        <button class="btn" onclick="writeOffCredit('${id}')" style="background:#f59e0b;border-color:#f59e0b;color:#fff">✕ Write-off</button>
       </div>
-      <div id="cpr-calc" style="font-size:12px;color:var(--text3);margin-top:8px"></div>
-    </div>`:''}
+      <div id="cpr-calc" style="font-size:12px;color:var(--text3);margin-top:6px"></div>`:``}
+    </div>
 
     <!-- Full Transaction History -->
     <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px 16px;margin-bottom:1.25rem">
@@ -11125,6 +11106,322 @@ async function recordInlineCredit(id){
     logActivity('Credit payment',`Paid ${fmt(amt)} — balance: ${fmt(newBal)}`,mode||'');
     renderCustomers();
   }catch(e){setSyncStatus('error');showToast('Failed.','error');}
+}
+
+// ── showFullPaymentModal — record any payment (credit or advance) ──
+function showFullPaymentModal(id) {
+  const c = STATE.customers?.[id]; if (!c) return;
+  const hasCreditLimit = (c.creditLimit||0) > 0;
+  const creditBal = c.creditBalance || 0;
+  const banks = Object.values(STATE.banks||{}).filter(b=>!b._deleted);
+  const bankOpts = banks.map(b=>`<option value="${esc(b.name)}">${esc(b.name)}${b.acct?' · '+b.acct:''}</option>`).join('');
+
+  showModal(`💳 Record Payment — ${esc(c.name)}`,`
+    ${creditBal>0?`<div class="alert alert-warning" style="margin-bottom:12px">Outstanding balance: <b>${fmt(creditBal)}</b></div>`:''}
+    <div class="form-grid c2">
+      <div class="form-group">
+        <label>Payment type <span class="req">*</span></label>
+        <select class="form-input" id="fp-type" onchange="fpTypeChange()">
+          <option value="credit_payment" ${creditBal>0?'':'disabled'}>💳 Credit payment ${creditBal>0?'(owes '+fmt(creditBal)+')':'(no balance)'}</option>
+          <option value="advance">💰 Advance / deposit payment</option>
+          ${hasCreditLimit?'':''}
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Amount (₦) <span class="req">*</span></label>
+        <input class="form-input" id="fp-amount" type="number" min="1" placeholder="0" oninput="fpCalc()">
+      </div>
+      <div class="form-group">
+        <label>Payment mode</label>
+        <select class="form-input" id="fp-mode" onchange="document.getElementById('fp-bank-row').style.display=this.value==='transfer'||this.value==='pos'?'block':'none'">
+          <option value="cash">Cash</option>
+          <option value="transfer">Bank Transfer</option>
+          <option value="pos">POS</option>
+        </select>
+      </div>
+      <div class="form-group" id="fp-bank-row" style="display:none">
+        <label>Bank</label>
+        <select class="form-input" id="fp-bank">${bankOpts||'<option value="">No banks added</option>'}</select>
+      </div>
+      <div class="form-group">
+        <label>Date</label>
+        <input class="form-input" id="fp-date" type="date" value="${new Date().toISOString().slice(0,10)}">
+      </div>
+      <div class="form-group">
+        <label>Note (optional)</label>
+        <input class="form-input" id="fp-note" placeholder="Optional note">
+      </div>
+    </div>
+    <div id="fp-calc" style="font-size:12px;color:var(--text3);margin-top:4px"></div>
+  `,[
+    {label:'Cancel',action:'close',style:''},
+    {label:'✓ Record Payment',action:`saveFullPayment('${id}')`,style:'btn-primary'}
+  ]);
+  // Default to advance if no credit balance
+  if (creditBal <= 0) {
+    setTimeout(()=>{ const el=document.getElementById('fp-type'); if(el) el.value='advance'; },50);
+  }
+}
+function fpTypeChange(){
+  const type=document.getElementById('fp-type')?.value;
+  const calcEl=document.getElementById('fp-calc');
+  if(calcEl) calcEl.textContent='';
+  fpCalc();
+}
+function fpCalc(){
+  const type=document.getElementById('fp-type')?.value||'advance';
+  const amt=parseFloat(document.getElementById('fp-amount')?.value)||0;
+  const calcEl=document.getElementById('fp-calc');
+  if(!calcEl||!amt)return;
+  if(type==='credit_payment'){
+    // get creditBalance from current customers state
+    const allC=Object.values(STATE.customers||{});
+    // can't easily get id here, just show generic
+    calcEl.textContent='Will reduce outstanding credit balance.';
+  } else {
+    calcEl.textContent=`${fmt(amt)} will be recorded as advance — available to apply against future invoices.`;
+  }
+}
+async function saveFullPayment(id){
+  const c=STATE.customers?.[id]; if(!c) return;
+  const type=document.getElementById('fp-type')?.value||'advance';
+  const amt=parseFloat(document.getElementById('fp-amount')?.value)||0;
+  if(!amt||amt<=0){showToast('Enter a valid amount.','error');return;}
+  const mode=document.getElementById('fp-mode')?.value||'cash';
+  const bankName=document.getElementById('fp-bank')?.value||'';
+  const note=document.getElementById('fp-note')?.value.trim()||'';
+  const dateStr=document.getElementById('fp-date')?.value||new Date().toISOString().slice(0,10);
+  const dp=dateStr.split('-');
+  const dateObj=new Date(+dp[0],+dp[1]-1,+dp[2]);
+  const date=dateObj.toLocaleDateString();
+  const month=dateStr.slice(0,7);
+  setSyncStatus('saving');
+  try{
+    if(type==='credit_payment'){
+      const creditBal=c.creditBalance||0;
+      if(creditBal<=0){showToast(`${c.name} has no outstanding balance.`,'error');return;}
+      const newBal=Math.max(0,creditBal-amt);
+      const upd={...c,creditBalance:newBal};
+      await fsSave(COLS.CUSTOMERS,id,upd); STATE.customers[id]={...upd,_id:id};
+      const cfId=uid();
+      const cf={id:cfId,type:'in',cat:'Credit Payment',desc:`Credit payment — ${c.name}${note?' — '+note:''}`,amount:amt,payMode:mode,bankName,custId:id,date,month,by:STATE.user?.name||''};
+      await fsSave(COLS.CASHFLOW,cfId,cf);
+      if(!STATE.cashflow)STATE.cashflow={};STATE.cashflow[cfId]={...cf,_id:cfId};
+      showToast(`✅ ${fmt(amt)} payment recorded. Balance: ${fmt(newBal)}.`,'success');
+      logActivity('Credit payment',`${c.name} paid ${fmt(amt)} — balance: ${fmt(newBal)}`,mode);
+    } else {
+      // Advance / deposit — enters cashflow immediately (real money received)
+      const cfId=uid();
+      const cf={id:cfId,type:'in',cat:'Customer Deposit',desc:`Advance deposit — ${c.name}${note?' — '+note:''}`,amount:amt,payMode:mode,bankName,custId:id,date,month,by:STATE.user?.name||''};
+      await fsSave(COLS.CASHFLOW,cfId,cf);
+      if(!STATE.cashflow)STATE.cashflow={};STATE.cashflow[cfId]={...cf,_id:cfId};
+      showToast(`✅ ${fmt(amt)} deposit recorded for ${c.name}.`,'success');
+      logActivity('Customer deposit',`${c.name} — ${fmt(amt)} advance`,mode);
+    }
+    closeModal(); setSyncStatus('synced');
+    showCustProfile(id);
+  }catch(e){setSyncStatus('error');showToast('Failed: '+e.message,'error');}
+}
+
+// ── showApplyDepositModal — apply deposit to invoice shortfall ──
+function showApplyDepositModal(id) {
+  const c = STATE.customers?.[id]; if (!c) return;
+
+  // Calculate available deposit (total deposits minus already-used amounts)
+  const allDeposits = Object.values(STATE.cashflow||{}).filter(cf=>cf.custId===id && cf.cat==='Customer Deposit');
+  const totalDeposited = allDeposits.reduce((a,d)=>a+(d.amount||0),0);
+  const totalUsed = Object.values(STATE.cashflow||{}).filter(cf=>cf.custId===id && cf.cat==='Deposit Applied').reduce((a,d)=>a+(d.amount||0),0);
+  const availDeposit = Math.max(0, totalDeposited - totalUsed);
+  const creditBal = c.creditBalance||0;
+  const hasCreditLimit = (c.creditLimit||0) > 0;
+  const banks = Object.values(STATE.banks||{}).filter(b=>!b._deleted);
+  const bankOpts = banks.map(b=>`<option value="${esc(b.name)}">${esc(b.name)}${b.acct?' · '+b.acct:''}</option>`).join('');
+
+  if (availDeposit <= 0) { showToast('No available deposit to apply.','info'); return; }
+
+  showModal(`💜 Apply Deposit — ${esc(c.name)}`,`
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
+      <div class="kpi-card" style="border-left:3px solid #8b5cf6">
+        <div class="kpi-label" style="color:#8b5cf6">AVAILABLE DEPOSIT</div>
+        <div class="kpi-value" style="font-size:20px;font-weight:800;color:#8b5cf6">${fmt(availDeposit)}</div>
+      </div>
+      ${creditBal>0?`<div class="kpi-card" style="border-left:3px solid var(--danger)">
+        <div class="kpi-label" style="color:var(--danger)">CREDIT OWED</div>
+        <div class="kpi-value" style="font-size:20px;font-weight:800;color:var(--danger)">${fmt(creditBal)}</div>
+      </div>`:'<div></div>'}
+    </div>
+    <div class="form-grid c2">
+      <div class="form-group" style="grid-column:1/-1">
+        <label>Invoice amount / total to settle (₦) <span class="req">*</span></label>
+        <input class="form-input" id="ad-invoice-amt" type="number" min="1" placeholder="e.g. 50000" oninput="adCalc(${availDeposit},${hasCreditLimit?1:0})">
+      </div>
+      <div class="form-group" style="grid-column:1/-1">
+        <label>Invoice # (optional)</label>
+        <input class="form-input" id="ad-invoice-num" placeholder="e.g. 2026/0412">
+      </div>
+    </div>
+    <div id="ad-breakdown" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px;margin:10px 0;display:none">
+      <div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;margin-bottom:8px">Payment breakdown</div>
+      <div id="ad-breakdown-content"></div>
+    </div>
+    <div id="ad-shortfall-section" style="display:none">
+      <div style="font-size:12px;font-weight:700;color:var(--warning);margin-bottom:8px">⚠️ Shortfall — how to pay the remaining amount:</div>
+      <div class="form-grid c2">
+        <div class="form-group">
+          <label>Shortfall payment mode</label>
+          <select class="form-input" id="ad-sf-mode" onchange="
+            const v=this.value;
+            document.getElementById('ad-sf-bank-row').style.display=(v==='transfer'||v==='pos')?'block':'none';
+            document.getElementById('ad-sf-split-row').style.display=v==='split'?'block':'none';
+            document.getElementById('ad-sf-credit-row').style.display=v==='credit'?'block':'none';
+          ">
+            <option value="cash">Cash</option>
+            <option value="transfer">Bank Transfer</option>
+            <option value="pos">POS</option>
+            <option value="split">Split Payment</option>
+            ${hasCreditLimit?`<option value="credit">Credit (add to balance)</option>`:''}
+          </select>
+        </div>
+        <div class="form-group" id="ad-sf-bank-row" style="display:none">
+          <label>Bank</label>
+          <select class="form-input" id="ad-sf-bank">${bankOpts||'<option>No banks</option>'}</select>
+        </div>
+        <div class="form-group" id="ad-sf-split-row" style="display:none;grid-column:1/-1">
+          <label>Split: Cash (₦)</label>
+          <input class="form-input" id="ad-sf-cash" type="number" min="0" placeholder="0" oninput="adSplitCalc()">
+          <div id="ad-sf-split-info" style="font-size:11px;color:var(--text3);margin-top:4px"></div>
+        </div>
+        <div class="form-group" id="ad-sf-credit-row" style="display:none;grid-column:1/-1">
+          <div class="alert" style="background:#fff8f0;border-color:#fcd34d;font-size:12px">
+            ⚠️ Shortfall will be added to ${esc(c.name)}'s credit balance.
+            ${hasCreditLimit?`Credit limit: ${fmt(c.creditLimit||0)} · Used: ${fmt(creditBal)}`:''}
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Date</label>
+          <input class="form-input" id="ad-date" type="date" value="${new Date().toISOString().slice(0,10)}">
+        </div>
+        <div class="form-group">
+          <label>Note (optional)</label>
+          <input class="form-input" id="ad-note" placeholder="Optional">
+        </div>
+      </div>
+    </div>
+  `,[
+    {label:'Cancel',action:'close',style:''},
+    {label:'💜 Apply Deposit',action:`saveApplyDeposit('${id}',${availDeposit})`,style:'btn-primary'}
+  ]);
+}
+
+function adCalc(availDeposit, hasCreditLimit) {
+  const invoiceAmt = parseFloat(document.getElementById('ad-invoice-amt')?.value)||0;
+  const breakdownEl = document.getElementById('ad-breakdown');
+  const breakdownContent = document.getElementById('ad-breakdown-content');
+  const shortfallSection = document.getElementById('ad-shortfall-section');
+  if (!invoiceAmt || !breakdownEl) return;
+
+  const depositPortion = Math.min(availDeposit, invoiceAmt);
+  const shortfall = Math.max(0, invoiceAmt - depositPortion);
+
+  breakdownEl.style.display = 'block';
+  breakdownContent.innerHTML = `
+    <div style="display:flex;justify-content:space-between;padding:4px 0;font-size:13px">
+      <span>Invoice total</span><b>${fmt(invoiceAmt)}</b>
+    </div>
+    <div style="display:flex;justify-content:space-between;padding:4px 0;font-size:13px;color:#8b5cf6">
+      <span>💜 From deposit</span><b>− ${fmt(depositPortion)}</b>
+    </div>
+    <div style="display:flex;justify-content:space-between;padding:4px 0;font-size:13px;border-top:1px solid var(--border);margin-top:4px;font-weight:700;color:${shortfall>0?'var(--warning)':'var(--success)'}">
+      <span>${shortfall>0?'⚠️ Shortfall to pay':'✅ Fully covered by deposit'}</span><b>${fmt(shortfall)}</b>
+    </div>`;
+
+  if (shortfallSection) shortfallSection.style.display = shortfall > 0 ? 'block' : 'none';
+}
+
+function adSplitCalc() {
+  const shortfallEl = document.getElementById('ad-invoice-amt');
+  const availDepEl = document.getElementById('ad-breakdown-content');
+  // Read shortfall from breakdown
+  const cashEl = document.getElementById('ad-sf-cash');
+  const infoEl = document.getElementById('ad-sf-split-info');
+  if (!cashEl || !infoEl) return;
+  // Get shortfall value from the last calculated value stored in the breakdown
+  const cashAmt = parseFloat(cashEl.value)||0;
+  infoEl.textContent = cashAmt > 0 ? `Transfer/POS portion: ${fmt(Math.max(0, parseFloat(document.getElementById('ad-invoice-amt')?.value||0) - Math.min(parseFloat(document.getElementById('ad-invoice-amt')?.value||0) - 0, /* availDeposit approximation */ cashAmt)))}` : '';
+}
+
+async function saveApplyDeposit(id, availDeposit) {
+  const c = STATE.customers?.[id]; if (!c) return;
+  const invoiceAmt = parseFloat(document.getElementById('ad-invoice-amt')?.value)||0;
+  if (!invoiceAmt||invoiceAmt<=0){showToast('Enter the invoice amount.','error');return;}
+
+  const depositPortion = Math.min(availDeposit, invoiceAmt);
+  const shortfall = Math.max(0, invoiceAmt - depositPortion);
+  const invoiceNum = document.getElementById('ad-invoice-num')?.value.trim()||'';
+  const dateStr = document.getElementById('ad-date')?.value||new Date().toISOString().slice(0,10);
+  const note = document.getElementById('ad-note')?.value.trim()||'';
+  const dp = dateStr.split('-');
+  const dateObj = new Date(+dp[0],+dp[1]-1,+dp[2]);
+  const date = dateObj.toLocaleDateString();
+  const month = dateStr.slice(0,7);
+
+  let sfMode='', sfBank='', sfCash=0;
+  if (shortfall > 0) {
+    sfMode = document.getElementById('ad-sf-mode')?.value||'cash';
+    sfBank = document.getElementById('ad-sf-bank')?.value||'';
+    sfCash = parseFloat(document.getElementById('ad-sf-cash')?.value)||0;
+  }
+
+  setSyncStatus('saving');
+  try {
+    // 1. Record deposit usage (no cashflow — deposit already entered cashflow when received)
+    const depAppliedId = uid();
+    const depApplied = {
+      id:depAppliedId, type:'out', cat:'Deposit Applied',
+      desc:`Deposit applied${invoiceNum?' — Inv #'+invoiceNum:''} — ${c.name}`,
+      amount:depositPortion, custId:id, date, month, invoiceNum, by:STATE.user?.name||''
+    };
+    await fsSave(COLS.CASHFLOW, depAppliedId, depApplied);
+    if(!STATE.cashflow) STATE.cashflow={};
+    STATE.cashflow[depAppliedId]={...depApplied,_id:depAppliedId};
+
+    // 2. Handle shortfall
+    if (shortfall > 0) {
+      if (sfMode==='credit') {
+        // Add shortfall to credit balance
+        const newCreditBal = (c.creditBalance||0) + shortfall;
+        const upd={...c,creditBalance:newCreditBal};
+        await fsSave(COLS.CUSTOMERS,id,upd); STATE.customers[id]={...upd,_id:id};
+        logActivity('Deposit applied + credit shortfall',`${c.name} — deposit: ${fmt(depositPortion)}, credit: ${fmt(shortfall)}`, invoiceNum);
+      } else if (sfMode==='split') {
+        // Cash portion
+        const transferPortion = Math.max(0, shortfall - sfCash);
+        if (sfCash > 0) {
+          const cashId=uid();
+          const cashCf={id:cashId,type:'in',cat:'Invoice Payment',desc:`Split cash${invoiceNum?' — Inv #'+invoiceNum:''} — ${c.name}`,amount:sfCash,payMode:'cash',custId:id,date,month,by:STATE.user?.name||''};
+          await fsSave(COLS.CASHFLOW,cashId,cashCf); STATE.cashflow[cashId]={...cashCf,_id:cashId};
+        }
+        if (transferPortion > 0) {
+          const tfrId=uid();
+          const tfrCf={id:tfrId,type:'in',cat:'Invoice Payment',desc:`Split transfer${invoiceNum?' — Inv #'+invoiceNum:''} — ${c.name}`,amount:transferPortion,payMode:'transfer',bankName:sfBank,custId:id,date,month,by:STATE.user?.name||''};
+          await fsSave(COLS.CASHFLOW,tfrId,tfrCf); STATE.cashflow[tfrId]={...tfrCf,_id:tfrId};
+        }
+        logActivity('Deposit applied + split shortfall',`${c.name} — deposit: ${fmt(depositPortion)}, shortfall: ${fmt(shortfall)}`, invoiceNum);
+      } else {
+        // Single mode (cash / transfer / pos)
+        const sfId=uid();
+        const sfCf={id:sfId,type:'in',cat:'Invoice Payment',desc:`Shortfall payment${invoiceNum?' — Inv #'+invoiceNum:''} — ${c.name}${note?' — '+note:''}`,amount:shortfall,payMode:sfMode,bankName:sfBank,custId:id,date,month,by:STATE.user?.name||''};
+        await fsSave(COLS.CASHFLOW,sfId,sfCf); STATE.cashflow[sfId]={...sfCf,_id:sfId};
+        logActivity('Deposit applied + shortfall paid',`${c.name} — deposit: ${fmt(depositPortion)}, paid: ${fmt(shortfall)} (${sfMode})`, invoiceNum);
+      }
+    } else {
+      logActivity('Deposit fully applied',`${c.name} — ${fmt(depositPortion)} applied to invoice${invoiceNum?' #'+invoiceNum:''}`, '');
+    }
+
+    closeModal(); setSyncStatus('synced');
+    showToast(`✅ Deposit of ${fmt(depositPortion)} applied.${shortfall>0?' Shortfall '+fmt(shortfall)+' handled.':''}`, 'success');
+    showCustProfile(id);
+  } catch(e) { setSyncStatus('error'); showToast('Failed: '+e.message,'error'); }
 }
 
 async function writeOffCredit(id){
