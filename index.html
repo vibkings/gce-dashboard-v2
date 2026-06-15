@@ -4419,7 +4419,7 @@ async function v2SaveSale(mode) {
         discount:l.discAmt||0,
         payment:(pt==='credit'?'credit':pt==='part'?'part':pt==='deposit'?'deposit':'paid'),
         payMode:(pt==='credit'||pt==='part'?'cash':pt==='deposit'?'deposit':payMode), splitPayment,
-        partPayment:pt==='part'?partAmt:0, bankName, posName,
+        partPayment: pt==='part' ? partAmt : pt==='deposit' ? (window._saleDepositPortion||0) : 0, bankName, posName,
         custId:invoiceCustomer?._id||null, custName:invoiceCustomer?.name||'Walk-in',
         printName, date, month, seller:STATE.user.name, deliveryAddr,
         dueDate:(pt==='credit'||pt==='part')?(document.getElementById('s-credit-due-date')?.value||''):'',
@@ -4478,17 +4478,20 @@ async function v2SaveSale(mode) {
         }
       }
     }
-    // Update customer credit if deposit shortfall is credit
+    // Update customer credit if deposit shortfall is credit OR if deposit doesn't cover invoice
     if (invoiceCustomer && pt==='deposit') {
       const sfMode = document.getElementById('s-deposit-sf-mode')?.value||'cash';
-      if (sfMode==='credit') {
-        const shortfall = window._saleDepositShortfall||0;
-        if (shortfall>0) {
-          const uc = {...invoiceCustomer, creditBalance:(invoiceCustomer.creditBalance||0)+shortfall};
-          await fsSave(COLS.CUSTOMERS, invoiceCustomer._id, uc);
-          STATE.customers[invoiceCustomer._id] = {...uc, _id:invoiceCustomer._id,_savedAt:Date.now()};
-        }
+      const depPortion = window._saleDepositPortion||0;
+      const shortfall = window._saleDepositShortfall||0;
+      const gtCalc = invoiceItems.reduce((a,l)=>a+Math.round(l.price*l.qty*(1-(l.discPct||0)/100)),0);
+      if (sfMode==='credit' && shortfall>0) {
+        // Shortfall goes to credit balance
+        const uc = {...invoiceCustomer, creditBalance:(invoiceCustomer.creditBalance||0)+shortfall};
+        await fsSave(COLS.CUSTOMERS, invoiceCustomer._id, uc);
+        STATE.customers[invoiceCustomer._id] = {...uc, _id:invoiceCustomer._id,_savedAt:Date.now()};
       }
+      // If deposit covered full invoice — nothing extra to add to credit
+      // If deposit was partial and shortfall was paid via cash/transfer/pos — also nothing
     }
 
     // ── CASHFLOW RECORDING ──────────────────────────────────
@@ -4674,6 +4677,7 @@ function _buildInvoiceHTML(invNum, mode='a4', invTypeOverride='sales', showOutst
   let amountPaid=gt;
   if(payment==='credit') amountPaid=0;
   else if(payment==='part') amountPaid=s0.partPayment||0;
+  else if(payment==='deposit') amountPaid=s0.partPayment||0; // partPayment stores deposit portion
   const balance=Math.max(0,gt-amountPaid);
   const tendered=s0.tenderedAmt||amountPaid;
   const change=Math.max(0,tendered-gt);
@@ -4700,7 +4704,7 @@ function _buildInvoiceHTML(invNum, mode='a4', invTypeOverride='sales', showOutst
     });
     const totalCreditFromSales = Object.values(invGroups).reduce((a,g)=>{
       if(g.payment==='credit') return a+(g.total||0);
-      if(g.payment==='part') return a+Math.max(0,(g.total||0)-(g.partPayment||0));
+      if(g.payment==='part'||g.payment==='deposit') return a+Math.max(0,(g.total||0)-(g.partPayment||0));
       return a;
     },0);
     const totalCreditPaid = Object.values(STATE.cashflow||{})
@@ -4710,14 +4714,18 @@ function _buildInvoiceHTML(invNum, mode='a4', invTypeOverride='sales', showOutst
       .filter(cf=>cf.custId===custId&&cf.cat==='Credit Write-Off')
       .reduce((a,p)=>a+(p.amount||0),0);
     const totalOutstanding = Math.max(0, totalCreditFromSales - totalCreditPaid - totalWriteOff);
-    // Previous balance = total outstanding MINUS what this specific invoice added
-    const thisInvoiceOwed = payment==='credit' ? gt : payment==='part' ? Math.max(0, gt-(s0.partPayment||0)) : 0;
+    // What this invoice added to credit (unpaid portion)
+    const thisInvoiceOwed = payment==='credit' ? gt
+      : payment==='part' ? Math.max(0, gt-(s0.partPayment||0))
+      : payment==='deposit' ? Math.max(0, gt-(s0.partPayment||0)) // shortfall after deposit
+      : 0;
     prevBalance = Math.max(0, totalOutstanding - thisInvoiceOwed);
   }
 
   // What this invoice added to credit
   const thisInvoiceCredit = payment==='credit' ? gt
     : payment==='part' ? Math.max(0, gt-(s0.partPayment||0))
+    : payment==='deposit' ? Math.max(0, gt-(s0.partPayment||0)) // shortfall after deposit
     : 0;
   // Total owed after this invoice = prev balance + this invoice's credit portion
   const totalWithBalance = prevBalance + thisInvoiceCredit;
@@ -5048,7 +5056,7 @@ function _showPrintModeModal(invNum) {
     });
     const totalCreditFromSales = Object.values(invGroups).reduce((a,g)=>{
       if(g.payment==='credit') return a+(g.total||0);
-      if(g.payment==='part') return a+Math.max(0,(g.total||0)-(g.partPayment||0));
+      if(g.payment==='part'||g.payment==='deposit') return a+Math.max(0,(g.total||0)-(g.partPayment||0));
       return a;
     },0);
     const totalCreditPaid = Object.values(STATE.cashflow||{})
@@ -5213,6 +5221,7 @@ function showInvoiceViewModal(invNum) {
   let amountPaid=grandTotal;
   if(payment==='credit') amountPaid=0;
   else if(payment==='part') amountPaid=partPayment;
+  else if(payment==='deposit') amountPaid=partPayment; // partPayment stores deposit portion
   const balance=Math.max(0,grandTotal-amountPaid);
 
   // Find customer for commission link
@@ -11397,7 +11406,7 @@ async function renderCustomerProfile(id){
   // Sum of all unpaid credit portions across all invoices
   const totalCreditFromSales = invList.reduce((a,g)=>{
     if (g.payment==='credit') return a + (g.total||0);
-    if (g.payment==='part') return a + Math.max(0,(g.total||0)-(g.items[0]?.partPayment||0));
+    if (g.payment==='part'||g.payment==='deposit') return a + Math.max(0,(g.total||0)-(g.items[0]?.partPayment||0));
     return a;
   }, 0);
   // Sum of all credit payments made (cashflow type=in, cat=Credit Payment)
