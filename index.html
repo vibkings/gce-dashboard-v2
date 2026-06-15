@@ -4472,15 +4472,30 @@ async function v2SaveSale(mode) {
       }
     }
     // ── CHANGE DISPOSITION ───────────────────────────────────
-    // If customer overpaid (change > 0) and chose to apply it
-    if (changeAmt > 0 && invoiceCustomer && changeDisp !== 'cash') {
-      if (changeDisp === 'credit') {
-        // Apply change to reduce outstanding credit balance
+    // When customer overpays and change > 0:
+    // - 'cash': change left the till as physical cash. If customer has outstanding,
+    //   reduce their credit balance (the overpayment came from them). No cashflow entry
+    //   (cash out is tracked in TILL, not cashflow).
+    // - 'credit': explicitly applied to balance. Record as Credit Payment in cashflow.
+    // - 'deposit': add to customer deposit balance. Record as Customer Deposit in cashflow.
+    if (changeAmt > 0 && invoiceCustomer) {
+      if (changeDisp === 'cash') {
+        // Physical cash returned — reduce outstanding balance silently (no cashflow entry)
+        // The till already shows this as cash out
+        const existingBal = invoiceCustomer.creditBalance||0;
+        if (existingBal > 0) {
+          const newBal = Math.max(0, existingBal - changeAmt);
+          const upd = {...invoiceCustomer, creditBalance: newBal};
+          await fsSave(COLS.CUSTOMERS, invoiceCustomer._id, upd);
+          STATE.customers[invoiceCustomer._id] = {...upd, _id:invoiceCustomer._id, _savedAt:Date.now()};
+        }
+        // If no outstanding, cash change just leaves till — nothing to record
+      } else if (changeDisp === 'credit') {
+        // Applied to balance — reduce credit + record in cashflow
         const newBal = Math.max(0, (invoiceCustomer.creditBalance||0) - changeAmt);
         const upd = {...invoiceCustomer, creditBalance: newBal};
         await fsSave(COLS.CUSTOMERS, invoiceCustomer._id, upd);
         STATE.customers[invoiceCustomer._id] = {...upd, _id:invoiceCustomer._id, _savedAt:Date.now()};
-        // Record as credit payment in cashflow
         const cfId = uid();
         const cf = {id:cfId,type:'in',cat:'Credit Payment',
           desc:`Overpayment applied to balance — Inv #${invNum} — ${printName}`,
@@ -4489,9 +4504,8 @@ async function v2SaveSale(mode) {
         await fsSave(COLS.CASHFLOW,cfId,cf);
         if(!STATE.cashflow)STATE.cashflow={};
         STATE.cashflow[cfId]={...cf,_id:cfId,_savedAt:Date.now()};
-        showToast(`✅ ${fmt(changeAmt)} overpayment applied to outstanding balance. New balance: ${fmt(newBal)}.`,'success');
+        showToast(`✅ ${fmt(changeAmt)} applied to outstanding. New balance: ${fmt(newBal)}.`,'success');
       } else if (changeDisp === 'deposit') {
-        // Add change to customer deposit
         const cfId = uid();
         const cf = {id:cfId,type:'in',cat:'Customer Deposit',
           desc:`Overpayment deposit — Inv #${invNum} — ${printName}`,
@@ -4500,7 +4514,7 @@ async function v2SaveSale(mode) {
         await fsSave(COLS.CASHFLOW,cfId,cf);
         if(!STATE.cashflow)STATE.cashflow={};
         STATE.cashflow[cfId]={...cf,_id:cfId,_savedAt:Date.now()};
-        showToast(`✅ ${fmt(changeAmt)} overpayment added to deposit balance.`,'success');
+        showToast(`✅ ${fmt(changeAmt)} added to deposit balance.`,'success');
       }
     }
 
@@ -4798,10 +4812,14 @@ function _buildInvoiceHTML(invNum, mode='a4', invTypeOverride='sales', showOutst
   // If change was applied to credit (not given as cash), it reduced the outstanding
   const changeAppliedToCredit = (s0.changeDisp==='credit' && (s0.changeAmt||0)>0) ? (s0.changeAmt||0) : 0;
   const changeAppliedToDeposit = (s0.changeDisp==='deposit' && (s0.changeAmt||0)>0) ? (s0.changeAmt||0) : 0;
-  // amountPaid shown in statement = what actually paid THIS invoice (not change going elsewhere)
+  // Any change given back (cash or credit) reduces what the customer owes on the statement
+  // Cash change: customer received it but it came from their overpayment → reduces outstanding
+  // Credit change: explicitly applied to balance → also reduces outstanding
+  const totalChangeReduction = s0.changeAmt||0;
+  // amountPaid shown in statement = what actually paid THIS invoice (not overpayment)
   const amountPaidOnInvoice = payment==='paid' ? gt : amountPaid;
-  // Total owed after this invoice = prev balance + this invoice's credit - change applied to balance
-  const totalWithBalance = Math.max(0, prevBalance + thisInvoiceCredit - changeAppliedToCredit);
+  // Total owed after this invoice = prev balance + this invoice credit - all change returned
+  const totalWithBalance = Math.max(0, prevBalance + thisInvoiceCredit - totalChangeReduction);
   const qrUrl=`https://api.qrserver.com/v1/create-qr-code/?size=90x90&data=https://greatchidelectro.com/invoice/${invNum}`;
 
   // Customer signature (saved after verification)
@@ -5027,11 +5045,11 @@ ${totalWithBalance>0&&showOutstanding?`
   </div>`:''}
   ${amountPaidOnInvoice>0?`<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid #f5c6c6">
     <span style="font-size:${fs('10px','11px')};color:#555">Amount paid (this invoice):</span>
-    <span style="font-size:${fs('11px','12px')};font-weight:700;color:#27ae60">₦${amountPaidOnInvoice.toLocaleString()}</span>
+    <span style="font-size:${fs('11px','12px')};font-weight:700;color:#27ae60">₦${gt.toLocaleString()}</span>
   </div>`:''}
-  ${changeAppliedToCredit>0?`<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid #f5c6c6">
-    <span style="font-size:${fs('10px','11px')};color:#555">Overpayment applied to balance:</span>
-    <span style="font-size:${fs('11px','12px')};font-weight:700;color:#27ae60">₦${changeAppliedToCredit.toLocaleString()}</span>
+  ${totalChangeReduction>0?`<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid #f5c6c6">
+    <span style="font-size:${fs('10px','11px')};color:#555">Change applied to balance:</span>
+    <span style="font-size:${fs('11px','12px')};font-weight:700;color:#27ae60">₦${totalChangeReduction.toLocaleString()}</span>
   </div>`:''}
   <div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;margin-top:2px">
     <span style="font-size:${fs('11px','12px')};font-weight:800;color:#c0392b">Total outstanding:</span>
