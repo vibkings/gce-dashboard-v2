@@ -4226,11 +4226,18 @@ async function v2SaveSale(mode) {
     const newTotal = currentBalance + wouldOwe;
     if (creditLimit > 0 && newTotal > creditLimit) {
       const available = Math.max(0, creditLimit - currentBalance);
-      showToast(
-        `⛔ Credit limit exceeded! Limit: ${fmt(creditLimit)} · Used: ${fmt(currentBalance)} · Available: ${fmt(available)} · This invoice needs: ${fmt(wouldOwe)}`,
-        'error'
+      showBlockingError(
+        'Credit Limit Exceeded',
+        `<b>${invoiceCustomer.name}</b> cannot take more credit.<br><br>
+        <div style="background:#fef2f2;border-radius:8px;padding:12px 14px;text-align:left;font-size:13px">
+          <div style="display:flex;justify-content:space-between;margin-bottom:6px"><span>Credit limit:</span><b>${fmt(creditLimit)}</b></div>
+          <div style="display:flex;justify-content:space-between;margin-bottom:6px"><span>Currently used:</span><b style="color:#dc2626">${fmt(currentBalance)}</b></div>
+          <div style="display:flex;justify-content:space-between;margin-bottom:6px"><span>Available credit:</span><b style="color:${available>0?'#15803d':'#dc2626'}">${fmt(available)}</b></div>
+          <div style="display:flex;justify-content:space-between;border-top:1px solid #fca5a5;padding-top:6px;margin-top:4px"><span>This invoice needs:</span><b style="color:#dc2626">${fmt(wouldOwe)}</b></div>
+        </div><br>
+        Ask the customer to make a payment first, or change the payment type.`
       );
-      return; // BLOCK the sale
+      return;
     }
     if (creditLimit === 0 && (pt==='credit'||pt==='part') && wouldOwe > 0) {
       // No credit limit set — warn but allow (staff can override)
@@ -6788,6 +6795,27 @@ function showToast(msg, type='info') {
     item.classList.remove('show');
     setTimeout(() => item.remove(), 300);
   }, 3500);
+}
+
+// Centre-screen blocking error — for critical failures staff MUST see
+function showBlockingError(title, message) {
+  const existing = document.getElementById('_blocking_error_overlay');
+  if (existing) existing.remove();
+  const overlay = document.createElement('div');
+  overlay.id = '_blocking_error_overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:999999;display:flex;align-items:center;justify-content:center;padding:20px;backdrop-filter:blur(4px)';
+  overlay.innerHTML = `
+    <div style="background:#fff;border-radius:16px;padding:28px 26px;width:100%;max-width:400px;box-shadow:0 24px 80px rgba(0,0,0,.5);text-align:center">
+      <div style="width:56px;height:56px;background:#fef2f2;border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 14px;font-size:26px">🚫</div>
+      <div style="font-size:17px;font-weight:800;color:#dc2626;margin-bottom:10px">${title}</div>
+      <div style="font-size:13.5px;color:#374151;line-height:1.6;margin-bottom:20px">${message}</div>
+      <button onclick="document.getElementById('_blocking_error_overlay').remove()"
+        style="width:100%;padding:12px;background:#dc2626;border:none;border-radius:10px;color:#fff;font-size:14px;font-weight:700;cursor:pointer">
+        OK — Got it
+      </button>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
 }
 
 function setSyncStatus(status) {
