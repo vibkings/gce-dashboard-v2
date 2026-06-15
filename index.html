@@ -1813,8 +1813,10 @@ async function loadCollection(col, stateKey) {
       STATE[stateKey] = {};
       const store = _lfStore(col);
       for (const doc of docs) {
-        STATE[stateKey][doc._id] = doc;
+        // Always save to IndexedDB (including tombstones — so we remember deletions)
         if (store) store.setItem(doc._id, doc).catch(()=>{});
+        // Only load non-deleted docs into STATE
+        if (!doc._deleted) STATE[stateKey][doc._id] = doc;
       }
     } else if (r.status === 404) {
       // Collection doesn't exist yet — that's fine, treat as empty
@@ -1911,9 +1913,11 @@ async function loadMonthlySales(year, month) {
       }
     } catch(e) { items = []; }
   }
-  // Merge into STATE.sales — never delete existing entries, only add/update
-  items.forEach(item => { STATE.sales[item._id||item.id] = item; });
-  return items;
+  // Merge into STATE.sales — filter tombstones (deleted records stay out of STATE)
+  items.forEach(item => {
+    if (!item._deleted) STATE.sales[item._id||item.id] = item;
+  });
+  return items.filter(i => !i._deleted);
 }
 
 // Save a sale — goes to monthly collection
