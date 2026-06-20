@@ -10315,7 +10315,7 @@ function renderProformas(){
     const validUntil=p.validDays?new Date(new Date(p.date).getTime()+86400000*p.validDays).toLocaleDateString():'—';
     const isExpired=validUntil!=='—'&&new Date()>new Date(validUntil);
     const statusBadge=p.status==='converted'?'<span style="background:#d1fae5;color:#065f46;padding:2px 8px;border-radius:20px;font-size:10px;font-weight:700">CONVERTED</span>':p.status==='cancelled'?'<span style="background:#f3f4f6;color:#6b7280;padding:2px 8px;border-radius:20px;font-size:10px;font-weight:700">CANCELLED</span>':isExpired?'<span style="background:#fee2e2;color:#dc2626;padding:2px 8px;border-radius:20px;font-size:10px;font-weight:700">EXPIRED</span>':'<span style="background:#fef3c7;color:#92400e;padding:2px 8px;border-radius:20px;font-size:10px;font-weight:700">PENDING</span>';
-    const btns=`<button onclick="printProformaInvoice('${p._id||p.id}')" style="padding:4px 10px;background:#eff6ff;color:#0369a1;border:1px solid #bae6fd;border-radius:6px;font-size:11px;cursor:pointer">Print</button> `+(p.status==='pending'?`<button onclick="convertProforma('${p._id||p.id}')" style="padding:4px 10px;background:#7c3aed;color:#fff;border:none;border-radius:6px;font-size:11px;cursor:pointer">Convert</button> `+(STATE.user?.role==='admin'?`<button onclick="cancelProforma('${p._id||p.id}')" style="padding:4px 10px;background:#fef2f2;color:#dc2626;border:1px solid #fca5a5;border-radius:6px;font-size:11px;cursor:pointer">Cancel</button>`:''):'');
+    const btns=`<button onclick="printProformaInvoice('${p._id||p.id}')" style="padding:4px 10px;background:#eff6ff;color:#0369a1;border:1px solid #bae6fd;border-radius:6px;font-size:11px;cursor:pointer">Print</button> <button onclick="showShareProformaModal('${p._id||p.id}')" style="padding:4px 10px;background:#f0fdf4;color:#15803d;border:1px solid #bbf7d0;border-radius:6px;font-size:11px;cursor:pointer">📤 Share</button> `+(p.status==='pending'?`<button onclick="convertProforma('${p._id||p.id}')" style="padding:4px 10px;background:#7c3aed;color:#fff;border:none;border-radius:6px;font-size:11px;cursor:pointer">Convert</button> `+(STATE.user?.role==='admin'?`<button onclick="cancelProforma('${p._id||p.id}')" style="padding:4px 10px;background:#fef2f2;color:#dc2626;border:1px solid #fca5a5;border-radius:6px;font-size:11px;cursor:pointer">Cancel</button>`:''):'');
     return `<tr><td><b>${esc(p.prfNum||p.id)}</b></td><td style="font-size:12px">${p.date||''}</td><td>${esc(p.custName||'Walk-in')}</td><td style="font-size:11px;color:var(--text3)">${items2}</td><td style="text-align:center">${(p.items||[]).length}</td><td class="td-right">${fmt(p.grandTotal||0)}</td><td style="font-size:11px;color:var(--text3)">${validUntil}</td><td>${statusBadge}</td><td style="font-size:11px;color:var(--text3)">${esc(p.by||'')}</td><td style="white-space:nowrap">${btns}</td></tr>`;
   }).join('');
   el.innerHTML=`<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:1.25rem"><div class="kpi-card"><div class="kpi-label">Pending</div><div class="kpi-value" style="color:var(--warning)">${pending.length}</div><div class="kpi-sub">${fmt(pending.reduce((a,p)=>a+(p.grandTotal||0),0))} value</div></div><div class="kpi-card"><div class="kpi-label">Converted</div><div class="kpi-value" style="color:var(--success)">${converted.length}</div><div class="kpi-sub">To invoices</div></div><div class="kpi-card"><div class="kpi-label">Cancelled</div><div class="kpi-value" style="color:var(--text3)">${cancelled.length}</div><div class="kpi-sub">All time</div></div><div class="kpi-card"><div class="kpi-label">Total</div><div class="kpi-value">${proformas.length}</div><div class="kpi-sub">All proformas</div></div></div><div style="display:flex;justify-content:flex-end;margin-bottom:.75rem"><button class="btn btn-primary" onclick="navigateTo('sales');setTimeout(()=>{},200)">+ Create from Sales</button></div>${rows?`<div class="tbl-wrap"><table><thead><tr><th>PRF #</th><th>Date</th><th>Customer</th><th>Items</th><th style="text-align:center">Count</th><th style="text-align:right">Total</th><th>Valid Until</th><th>Status</th><th>By</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`:'<div class="empty-state"><div class="empty-state-icon">📄</div><div>No proforma invoices yet. Create one from the Sales tab.</div></div>'}`;
@@ -10323,8 +10323,8 @@ function renderProformas(){
 
 async function cancelProforma(id){if(!confirm('Cancel this proforma?'))return;const p=STATE.proformas?.[id];if(!p)return;const upd={...p,status:'cancelled'};setSyncStatus('saving');try{await fsSave('v2_proformas',id,upd);STATE.proformas[id]={...upd,_id:id,_savedAt:Date.now()};setSyncStatus('synced');showToast('Proforma cancelled.','info');renderProformas();}catch(e){setSyncStatus('error');showToast('Failed.','error');}}
 async function convertProforma(id){showToast('Load this proforma in the Sales tab to convert it.','info');}
-function printProformaInvoice(id){
-  const p=STATE.proformas?.[id];if(!p){showToast('Not found.','error');return;}
+function _buildProformaHTML(id, includeButtons){
+  const p=STATE.proformas?.[id];if(!p){return null;}
   const banks=Object.values(STATE.banks||{}).filter(b=>!b._deleted);
   const transferBanks=banks.filter(b=>b.type==='transfer'||b.type==='both'||!b.type);
   const posBanks=banks.filter(b=>b.type==='pos'||b.type==='both');
@@ -10448,9 +10448,38 @@ function printProformaInvoice(id){
   <div style="margin-top:12px;font-size:10px;color:#555;border-top:1px solid #eee;padding-top:8px;text-align:center">
     Thank you for choosing Great Chid Electro (Nig.) | Come again!
   </div>
-  <script>setTimeout(()=>window.print(),400)<\/sc`+`ript>
+  ${includeButtons?`
+  <div class="no-print" style="text-align:center;margin-top:14px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
+    <button onclick="window.print()" style="padding:8px 16px;background:#1a237e;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600">🖨️ Print</button>
+    <button onclick="window.opener&&window.opener.shareProformaFile('${id}','image')" style="padding:8px 16px;background:#16a34a;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600">📷 Share Image</button>
+    <button onclick="window.opener&&window.opener.shareProformaFile('${id}','pdf')" style="padding:8px 16px;background:#7c3aed;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600">📄 Share PDF</button>
+  </div>`:''}
+  ${includeButtons?'':'<script>setTimeout(()=>window.print(),400)<\/sc`+`ript>'}
   </body></html>`;
+  return html;
+}
+
+function printProformaInvoice(id){
+  const html=_buildProformaHTML(id, true);
+  if(!html){showToast('Not found.','error');return;}
   const w=window.open('','_blank','width=800,height=1000');if(w){w.document.write(html);w.document.close();}
+}
+
+function showShareProformaModal(id){
+  showModal('📤 Share Proforma', `
+    <div style="font-size:13px;color:var(--text3);margin-bottom:14px">Share this proforma invoice exactly as it appears when printed.</div>
+    <div style="display:flex;gap:10px">
+      <button class="btn btn-primary" style="flex:1" onclick="closeModal();shareProformaFile('${id}','image')">📷 Share as Image</button>
+      <button class="btn btn-primary" style="flex:1" onclick="closeModal();shareProformaFile('${id}','pdf')">📄 Share as PDF</button>
+    </div>
+  `, [{label:'Cancel', action:'close', style:''}]);
+}
+
+async function shareProformaFile(id, format){
+  const html=_buildProformaHTML(id, false);
+  if(!html){showToast('Not found.','error');return;}
+  const p=STATE.proformas?.[id];
+  await shareDocumentAs(html, format, `Proforma_${(p?.prfNum||id).replace(/[^a-z0-9]+/gi,'_')}`);
 }
 
 // ── DEMO SALES ────────────────────────────────────────────
