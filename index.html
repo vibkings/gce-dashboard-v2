@@ -6371,52 +6371,70 @@ function renderPurchases() {
   });
   const pendingList = Object.values(pendingGroups).sort((a,b)=>(b.date||'').localeCompare(a.date||''));
 
-  // Purchase history rows
+  // Purchase history — grouped by PO/invoice number (not a flat per-item list)
   const searchVal = document.getElementById('purch-history-search')?.value?.toLowerCase()||'';
-  const histItems = purchases
-    .filter(p=>!searchVal || (p.itemName||'').toLowerCase().includes(searchVal) || (p.supplier||'').toLowerCase().includes(searchVal) || (p.purchaseInvoiceNum||'').toLowerCase().includes(searchVal))
-    .sort((a,b)=>(b.date||'').localeCompare(a.date||''))
-    .slice(0,150);
+  const histGroupsMap = {};
+  purchases.forEach(p=>{
+    const k = p.purchaseInvoiceNum || p._id || p.id;
+    if (!histGroupsMap[k]) histGroupsMap[k] = {invoiceNum:k, supplier:p.supplier||'', date:p.date||'', payMode:p.payMode||'cash', items:[], totalCost:0, totalQty:0};
+    histGroupsMap[k].items.push(p);
+    histGroupsMap[k].totalCost += p.totalCost||0;
+    histGroupsMap[k].totalQty += p.qty||0;
+  });
+  let histGroupList = Object.values(histGroupsMap).filter(g =>
+    !searchVal ||
+    (g.invoiceNum||'').toLowerCase().includes(searchVal) ||
+    (g.supplier||'').toLowerCase().includes(searchVal) ||
+    g.items.some(p=>(p.itemName||p.name||'').toLowerCase().includes(searchVal))
+  );
+  histGroupList.sort((a,b)=>(new Date(b.date||0).getTime()||0) - (new Date(a.date||0).getTime()||0));
+  histGroupList = histGroupList.slice(0,150);
 
-  const histRows = histItems.map(p=>{
-    const modeLabel = {cash:'Cash',transfer:'Transfer',pos:'POS',credit:'Credit',part:'Part Pay'}[p.payMode]||p.payMode||'Cash';
-    const modeBadge = p.payMode==='credit' ? 'badge-danger' : p.payMode==='part' ? 'badge-warning' : 'badge-neutral';
+  const histRows = histGroupList.map(g=>{
+    const modeLabel = {cash:'Cash',transfer:'Transfer',pos:'POS',credit:'Credit',part:'Part Pay'}[g.payMode]||g.payMode||'Cash';
+    const modeBadge = g.payMode==='credit' ? 'badge-danger' : g.payMode==='part' ? 'badge-warning' : 'badge-neutral';
+    const itemNames = g.items.map(p=>esc(p.itemName||p.name||'')).join(', ');
     return `<tr>
-      <td style="font-size:12px;color:var(--text3)">${p.date||''}</td>
-      <td><b>${esc(p.itemName||p.name||'')}</b>${p.purchaseInvoiceNum?`<br><span style="font-size:10px;color:var(--text3)">${esc(p.purchaseInvoiceNum)}</span>`:''}</td>
-      <td style="font-size:12px;color:var(--text3)">${esc(p.supplier||'—')}</td>
-      <td style="text-align:center;font-weight:700">${p.qty||0}</td>
-      <td style="text-align:right">${fmt(p.costPrice||0)}</td>
-      <td style="text-align:right;font-weight:700;color:var(--danger)">${fmt(p.totalCost||0)}</td>
+      <td style="font-size:12px;color:var(--text3)">${g.date||''}</td>
+      <td><b>PO #${esc(g.invoiceNum)}</b><br><span style="font-size:11px;color:var(--text3)">${itemNames.length>60?itemNames.slice(0,60)+'…':itemNames}</span></td>
+      <td style="font-size:12px;color:var(--text3)">${esc(g.supplier||'—')}</td>
+      <td style="text-align:center;font-weight:700">${g.totalQty}</td>
+      <td style="text-align:center;color:var(--text3)">${g.items.length}</td>
+      <td style="text-align:right;font-weight:700;color:var(--danger)">${fmt(g.totalCost)}</td>
       <td><span class="badge ${modeBadge}" style="font-size:10px">${modeLabel}</span></td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-sm" onclick="viewPurchaseOrder('${esc(g.invoiceNum)}')" style="color:var(--primary);border-color:#b6d4fe;font-size:11px">View</button>
+        <button class="btn btn-sm" onclick="printPurchaseOrder('${esc(g.invoiceNum)}')" style="color:#1a237e;border-color:#93c5fd;font-size:11px">Print</button>
+        <button class="btn btn-sm" onclick="showSharePurchaseOrderModal('${esc(g.invoiceNum)}')" style="color:#15803d;border-color:#bbf7d0;font-size:11px">📤 Share</button>
+      </td>
     </tr>`;
   }).join('');
 
-  // Pending deliveries HTML
+  // Pending deliveries HTML — mirrors the Sales "Pending Supply" table layout
   const pendingHTML = pendingList.length ? pendingList.map(grp => {
     const totalOrdered  = grp.items.reduce((a,i)=>a+(i.orderedQty||0),0);
     const totalReceived = grp.items.reduce((a,i)=>a+(i.receivedQty||0),0);
-    const pct = totalOrdered ? Math.round(totalReceived/totalOrdered*100) : 0;
-    const itemRows = grp.items.map(item=>`
-      <div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)">
-        <div style="flex:1;font-size:13px">${esc(item.itemName||'')}</div>
-        <div style="font-size:12px;color:var(--text3)">${item.receivedQty||0}/${item.orderedQty||0}</div>
-        <button class="btn btn-sm btn-primary" style="padding:2px 10px;font-size:11px" onclick="receivePendingItem('${item.id}')">Receive</button>
-        ${STATE.user?.role==='admin'?`<button class="btn btn-sm" style="padding:2px 8px;font-size:11px;color:var(--danger)" onclick="cancelPendingItem('${item.id}')">✕</button>`:''}
-      </div>`).join('');
-    return `
-      <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--radius-lg);margin-bottom:10px;padding:12px 14px">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-          <div><b style="font-size:14px">PO #${esc(grp.invoiceNum)}</b>
-            <span style="font-size:12px;color:var(--text3);margin-left:8px">${esc(grp.supplier)}</span></div>
-          <div style="font-size:12px;color:var(--text3)">${grp.date}</div>
-        </div>
-        <div style="background:var(--border);border-radius:4px;height:6px;margin-bottom:8px;overflow:hidden">
-          <div style="height:100%;width:${pct}%;background:${pct===100?'var(--success)':'var(--brand)'};border-radius:4px"></div>
-        </div>
-        <div style="font-size:11px;color:var(--text3);margin-bottom:8px">${pct}% received (${totalReceived}/${totalOrdered} items)</div>
-        ${itemRows}
-      </div>`;
+    const itemRows = grp.items.map(item=>{
+      const ordered = item.orderedQty||0;
+      const received = item.receivedQty||0;
+      const pendingQty = Math.max(0, ordered-received);
+      const pct2 = ordered>0 ? Math.round(received/ordered*100) : 0;
+      const barColor = pct2===0?'#dc2626':pct2<100?'#f59e0b':'#16a34a';
+      return `<tr style="background:var(--surface)">
+        <td style="padding-left:20px;font-size:12px">${esc(item.itemName||'')}</td>
+        <td style="text-align:center">${ordered}</td>
+        <td style="text-align:center;color:#16a34a;font-weight:700">${received}</td>
+        <td style="text-align:center;color:#dc2626;font-weight:700">${pendingQty}</td>
+        <td><div style="background:#e5e7eb;border-radius:4px;height:8px;width:80px;overflow:hidden;display:inline-block;vertical-align:middle">
+          <div style="width:${pct2}%;background:${barColor};height:100%;border-radius:4px"></div></div> ${pct2}%</td>
+        <td style="white-space:nowrap">${pendingQty>0?`<button class="btn btn-sm btn-primary" style="padding:2px 10px;font-size:11px" onclick="receivePendingItem('${item.id}')">Receive</button> ${STATE.user?.role==='admin'?`<button class="btn btn-sm" style="padding:2px 8px;font-size:11px;color:var(--danger)" onclick="cancelPendingItem('${item.id}')">✕</button>`:''}`:'<span style="color:#16a34a;font-size:11px">✓ Done</span>'}</td>
+      </tr>`;
+    }).join('');
+    return `<tr style="background:#fef9c3">
+      <td><b style="color:#92400e">PO #${esc(grp.invoiceNum)}</b></td>
+      <td colspan="4" style="color:#92400e;font-weight:700;font-size:12px">${esc(grp.supplier)} · ${grp.date}</td>
+      <td><button class="btn btn-sm" onclick="receiveAllNow('${grp.invoiceNum}')" style="color:#1a237e;border-color:#93c5fd;font-size:11px">📦 Receive all</button></td>
+    </tr>${itemRows}`;
   }).join('') : '';
 
   // Supplier search options
@@ -6603,22 +6621,27 @@ function renderPurchases() {
       </div>
 
       ${pendingList.length ? `
-      <div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--warning);margin-bottom:8px">⏳ Pending Deliveries (${pendingList.length})</div>
-      ${pendingHTML}
-      <div style="height:1px;background:var(--border);margin:12px 0"></div>` : ''}
+      <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:var(--radius-lg);padding:14px;margin-bottom:1.5rem">
+        <div style="font-size:14px;font-weight:700;color:#92400e;margin-bottom:10px">⏳ Pending Deliveries (${pendingList.length} order${pendingList.length>1?'s':''})</div>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>Item</th><th style="text-align:center">Ordered</th><th style="text-align:center">Received</th><th style="text-align:center">Pending</th><th>Progress</th><th></th></tr></thead>
+          <tbody>${pendingHTML}</tbody>
+        </table></div>
+      </div>` : ''}
 
       <div class="tbl-wrap" style="border-radius:var(--radius);border:1px solid var(--border)">
         <table>
           <thead>
             <tr>
-              <th>DATE</th><th>ITEM</th><th>SUPPLIER</th>
+              <th>DATE</th><th>PO / ITEMS</th><th>SUPPLIER</th>
               <th style="text-align:center">QTY</th>
-              <th style="text-align:right">COST/UNIT</th>
+              <th style="text-align:center">LINES</th>
               <th style="text-align:right">TOTAL COST</th>
               <th>MODE</th>
+              <th>ACTIONS</th>
             </tr>
           </thead>
-          <tbody>${histRows||'<tr><td colspan="7"><div class="empty-state"><div class="empty-state-icon">🛒</div><div>No purchases recorded yet.</div></div></td></tr>'}</tbody>
+          <tbody>${histRows||'<tr><td colspan="8"><div class="empty-state"><div class="empty-state-icon">🛒</div><div>No purchases recorded yet.</div></div></td></tr>'}</tbody>
         </table>
       </div>
     </div>`;
@@ -6953,6 +6976,54 @@ async function receivePendingItem(pendId) {
   } catch(e) { setSyncStatus('error'); showToast('Failed.','error'); }
 }
 
+async function receiveAllNow(invoiceNum) {
+  const items = Object.values(STATE.pendingDeliveries||{}).filter(p=>(p.purchaseInvoiceNum||p.id)===invoiceNum);
+  if (!items.length) { showToast('Nothing pending for this order.','info'); return; }
+  setSyncStatus('saving');
+  let received=0;
+  try {
+    for (const pend of items) {
+      const qty = Math.max(0,(pend.orderedQty||0)-(pend.receivedQty||0));
+      if (qty<1) continue;
+      const newReceived = (pend.receivedQty||0)+qty;
+      const fullyDone = newReceived >= (pend.orderedQty||0);
+
+      const purchId = uid();
+      const now = new Date();
+      const date = now.toLocaleDateString();
+      const month = now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
+      const purch = {id:purchId, purchaseInvoiceNum:pend.purchaseInvoiceNum, itemName:pend.itemName,
+        itemId:pend.itemId||null, supplier:pend.supplier, qty, costPrice:pend.costPrice,
+        totalCost:qty*pend.costPrice, payMode:pend.payMode, date, month, by:STATE.user?.name};
+      await fsSave('v2_purchases', purchId, purch);
+      if (!STATE.purchases) STATE.purchases={};
+      STATE.purchases[purchId] = {...purch, _id:purchId,_savedAt:Date.now()};
+
+      if (pend.itemId && STATE.inventory?.[pend.itemId]) {
+        const inv = STATE.inventory[pend.itemId];
+        const upd = {...inv, qty:(inv.qty||0)+qty};
+        await fsSave('v2_inventory', pend.itemId, upd);
+        STATE.inventory[pend.itemId] = {...upd, _id:pend.itemId,_savedAt:Date.now()};
+      }
+
+      const pendId = pend._id||pend.id;
+      if (fullyDone) {
+        await fsDelete('v2_pendingDeliveries', pendId);
+        delete STATE.pendingDeliveries[pendId];
+      } else {
+        const updPend = {...pend, receivedQty:newReceived};
+        await fsSave('v2_pendingDeliveries', pendId, updPend);
+        STATE.pendingDeliveries[pendId] = {...updPend, _id:pendId,_savedAt:Date.now()};
+      }
+      received++;
+    }
+    setSyncStatus('synced');
+    showToast(`✅ Received ${received} item line${received!==1?'s':''} for PO #${invoiceNum}.`,'success');
+    logActivity('Delivery received',`PO #${invoiceNum} — Receive all (${received} lines)`,'');
+    renderPurchases(); updateInventoryBadge?.();
+  } catch(e) { setSyncStatus('error'); showToast('Failed.','error'); }
+}
+
 async function cancelPendingItem(pendId) {
   const pend = STATE.pendingDeliveries?.[pendId];
   if (!pend) return;
@@ -6965,6 +7036,140 @@ async function cancelPendingItem(pendId) {
     showToast('Pending delivery cancelled.','info');
     renderPurchases();
   } catch(e) { setSyncStatus('error'); showToast('Failed.','error'); }
+}
+
+// ── Purchase Order: View / Print / Share (same engine as invoices) ──
+function _buildPurchaseOrderHTML(invoiceNum, includeButtons, autoPrint) {
+  const items = Object.values(STATE.purchases||{}).filter(p=>(p.purchaseInvoiceNum||p._id||p.id)===invoiceNum);
+  if (!items.length) return null;
+  const first = items[0];
+  const supplier = first.supplier||'—';
+  const date = first.date||'';
+  const payMode = first.payMode||'cash';
+  const grandTotal = items.reduce((a,p)=>a+(p.totalCost||0),0);
+  const modeLabel = {cash:'Cash',transfer:'Transfer',pos:'POS',credit:'Credit',part:'Part Pay'}[payMode]||payMode||'Cash';
+  const itemRows = items.map((p,i)=>`<tr style="border-bottom:1px solid #eee">
+    <td style="padding:7px 10px;text-align:center;color:#666;font-size:11px">${i+1}</td>
+    <td style="padding:7px 10px;font-weight:600;font-size:12px">${esc(p.itemName||p.name||'')}</td>
+    <td style="padding:7px 10px;text-align:center;font-size:12px">${p.qty||0}</td>
+    <td style="padding:7px 10px;text-align:right;font-size:12px">₦${(p.costPrice||0).toLocaleString()}</td>
+    <td style="padding:7px 10px;text-align:right;font-weight:700;font-size:12px">₦${(p.totalCost||0).toLocaleString()}</td>
+  </tr>`).join('');
+
+  const shieldSVG=`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 95" width="62" height="74">
+    <defs>
+      <linearGradient id="sg3" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" style="stop-color:#c0392b"/><stop offset="100%" style="stop-color:#7b241c"/></linearGradient>
+      <linearGradient id="gg3" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" style="stop-color:#f9d835"/><stop offset="100%" style="stop-color:#c9a227"/></linearGradient>
+    </defs>
+    <path d="M40 2 L76 17 L76 50 C76 70 40 90 40 90 C40 90 4 70 4 50 L4 17 Z" fill="url(#sg3)" stroke="url(#gg3)" stroke-width="3"/>
+    <text x="40" y="34" text-anchor="middle" font-family="Arial Black,sans-serif" font-size="13" font-weight="900" fill="#f9d835" letter-spacing="2">GCE</text>
+    <rect x="29" y="45" width="22" height="26" rx="2" fill="none" stroke="#f9d835" stroke-width="1.6"/>
+    <rect x="35" y="56" width="10" height="15" rx="1" fill="#f9d835"/>
+    <circle cx="40" cy="51" r="3.5" fill="#f9d835"/>
+    <text x="40" y="79" text-anchor="middle" font-family="Arial,sans-serif" font-size="7" font-weight="700" fill="#f9d835" letter-spacing="1.5">ELECTRO</text>
+  </svg>`;
+
+  const actionButtons = includeButtons ? `
+  <div class="no-print" style="text-align:center;margin-top:16px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
+    <button onclick="window.print()" style="padding:8px 16px;background:#1a237e;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600">🖨️ Print</button>
+    <button onclick="window.opener&&window.opener.sharePurchaseOrderFile('${invoiceNum}','image')" style="padding:8px 16px;background:#16a34a;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600">📷 Share Image</button>
+    <button onclick="window.opener&&window.opener.sharePurchaseOrderFile('${invoiceNum}','pdf')" style="padding:8px 16px;background:#7c3aed;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600">📄 Share PDF</button>
+  </div>` : '';
+
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Purchase Order ${esc(invoiceNum)}</title>
+  <style>
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{font-family:Arial,Helvetica,sans-serif;font-size:13px;color:#1a1a1a;padding:20px;max-width:700px;margin:0 auto}
+    table{width:100%;border-collapse:collapse}
+    .row{display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid #e8e8e8;font-size:13px}
+    @media print{body{padding:8mm}.no-print{display:none!important}}
+  </style></head><body>
+
+  <div style="display:flex;align-items:flex-start;justify-content:space-between;padding-bottom:10px;border-bottom:3px solid #c0392b;margin-bottom:12px">
+    <div style="flex:1;padding-right:10px">
+      <div style="font-size:16px;font-weight:900;color:#c0392b;line-height:1.1">GREAT CHID ELECTRO (NIG.) |</div>
+      <div style="font-size:14px;font-weight:900;color:#1a237e;line-height:1.15;margin-bottom:5px">GLOBAL DOORS LTD</div>
+      <div style="font-size:9px;color:#555;line-height:1.5">
+        <b>Ogbomoso:</b> Ile-Bara Cke-Ado, Sabo Ilorin Rd &nbsp;|&nbsp; 08035158594<br>
+        <b>Ilorin:</b> 189, Ibrahim Taiwo Rd, beside UBA Bank &nbsp;|&nbsp; 08033617798
+      </div>
+    </div>
+    <div style="flex-shrink:0">${shieldSVG}</div>
+  </div>
+
+  <div style="text-align:center;margin-bottom:12px">
+    <div style="display:inline-block;font-size:15px;font-weight:900;color:#000;letter-spacing:2px;border-top:2px solid #000;border-bottom:2px solid #000;padding:4px 26px">PURCHASE ORDER</div>
+  </div>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">
+    <div style="border:1px solid #ccc;border-radius:4px;padding:8px 10px">
+      <div style="font-size:11px;font-weight:700;color:#555;margin-bottom:4px">Supplier:</div>
+      <div style="font-size:13px;font-weight:700">${esc(supplier)}</div>
+    </div>
+    <div style="border:1px solid #ccc;border-radius:4px;padding:8px 10px">
+      <div style="font-size:11px;font-weight:700;color:#555;margin-bottom:4px">Order Details:</div>
+      <div style="font-size:10.5px;line-height:1.7">
+        <div><b>PO #:</b> ${esc(invoiceNum)}</div>
+        <div><b>Date:</b> ${date}</div>
+        <div><b>Payment mode:</b> ${esc(modeLabel)}</div>
+      </div>
+    </div>
+  </div>
+
+  <table style="border:1px solid #ccc;border-radius:4px;overflow:hidden;margin-bottom:8px">
+    <thead><tr style="background:#1a237e;color:#fff">
+      <th style="padding:7px 8px;width:28px;text-align:center;font-size:9.5px;font-weight:800">#</th>
+      <th style="padding:7px 8px;text-align:left;font-size:9.5px;font-weight:800">Item</th>
+      <th style="padding:7px 6px;width:50px;text-align:center;font-size:9.5px;font-weight:800">Qty</th>
+      <th style="padding:7px 6px;width:100px;text-align:right;font-size:9.5px;font-weight:800">Cost/Unit</th>
+      <th style="padding:7px 6px;width:110px;text-align:right;font-size:9.5px;font-weight:800">Total</th>
+    </tr></thead>
+    <tbody>${itemRows}</tbody>
+    <tfoot>
+      <tr style="border-top:2px solid #1a237e;background:#f0f4ff">
+        <td colspan="4" style="padding:8px;text-align:right;font-size:13px;font-weight:800">GRAND TOTAL</td>
+        <td style="padding:8px;text-align:right;font-size:15px;font-weight:900;color:#c0392b">₦${grandTotal.toLocaleString()}</td>
+      </tr>
+    </tfoot>
+  </table>
+
+  <div style="margin-top:12px;font-size:10px;color:#555;border-top:1px solid #eee;padding-top:8px;text-align:center">
+    Generated by GCE Business Dashboard v2 &nbsp;|&nbsp; ${date}
+  </div>
+  ${actionButtons}
+  ${autoPrint?'<script>setTimeout(()=>window.print(),400)<\\/sc`+`ript>':''}
+  </body></html>`;
+  return html;
+}
+
+function viewPurchaseOrder(invoiceNum) {
+  const html = _buildPurchaseOrderHTML(invoiceNum, true, false);
+  if (!html) { showToast('Purchase order not found.','error'); return; }
+  const w = window.open('','_blank','width=800,height=1000');
+  if (w) { w.document.write(html); w.document.close(); }
+}
+
+function printPurchaseOrder(invoiceNum) {
+  const html = _buildPurchaseOrderHTML(invoiceNum, true, true);
+  if (!html) { showToast('Purchase order not found.','error'); return; }
+  const w = window.open('','_blank','width=800,height=1000');
+  if (w) { w.document.write(html); w.document.close(); }
+}
+
+function showSharePurchaseOrderModal(invoiceNum) {
+  showModal('📤 Share Purchase Order', `
+    <div style="font-size:13px;color:var(--text3);margin-bottom:14px">Share PO #${esc(invoiceNum)} exactly as it appears when printed.</div>
+    <div style="display:flex;gap:10px">
+      <button class="btn btn-primary" style="flex:1" onclick="closeModal();sharePurchaseOrderFile('${invoiceNum}','image')">📷 Share as Image</button>
+      <button class="btn btn-primary" style="flex:1" onclick="closeModal();sharePurchaseOrderFile('${invoiceNum}','pdf')">📄 Share as PDF</button>
+    </div>
+  `, [{label:'Cancel', action:'close', style:''}]);
+}
+
+async function sharePurchaseOrderFile(invoiceNum, format) {
+  const html = _buildPurchaseOrderHTML(invoiceNum, false, false);
+  if (!html) { showToast('Purchase order not found.','error'); return; }
+  await shareDocumentAs(html, format, `PO_${String(invoiceNum).replace(/[^a-z0-9]+/gi,'_')}`);
 }
 
 // ════════════════════════════════════════════════════════════
