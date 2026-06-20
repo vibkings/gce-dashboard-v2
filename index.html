@@ -12531,7 +12531,8 @@ async function recordInlineCredit(id){
   const date=dateObj.toLocaleDateString();const month=dateObj.getFullYear()+'-'+String(dateObj.getMonth()+1).padStart(2,'0');
   setSyncStatus('saving');
   try{
-    const newBal=Math.max(0,(c.creditBalance||0)-amt);
+    const oldBal=c.creditBalance||0;
+    const newBal=Math.max(0,oldBal-amt);
     const upd={...c,creditBalance:newBal};
     await fsSave(COLS.CUSTOMERS,id,upd);STATE.customers[id]={...upd,_id:id,_savedAt:Date.now()};
     const cfId=uid();
@@ -12539,6 +12540,7 @@ async function recordInlineCredit(id){
     if(!STATE.cashflow)STATE.cashflow={};STATE.cashflow[cfId]={id:cfId,_id:cfId,type:'in',cat:'Credit Payment',amount:amt,custId:id,date,month,_savedAt:Date.now()};
     setSyncStatus('synced');showToast(`${fmt(amt)} payment recorded. New balance: ${fmt(newBal)}`,'success');
     logActivity('Credit payment',`Paid ${fmt(amt)} — balance: ${fmt(newBal)}`,mode||'');
+    printCreditPaymentReceipt(c.name, amt, oldBal, newBal, mode, bankName, date, '');
     renderCustomers();
   }catch(e){setSyncStatus('error');showToast('Failed.','error');}
 }
@@ -12617,6 +12619,7 @@ async function saveFullPayment(id){
       if(!STATE.cashflow)STATE.cashflow={}; STATE.cashflow[cfId]={...cf,_id:cfId,_savedAt:Date.now()};
       showToast(fmt(amt)+' payment recorded. Balance: '+fmt(newBal)+'.','success');
       logActivity('Credit payment',c.name+' paid '+fmt(amt)+' balance: '+fmt(newBal),mode);
+      printCreditPaymentReceipt(c.name, amt, creditBal, newBal, mode, bankName, date, note);
     } else {
       const cfId = uid();
       const cf = {id:cfId,type:'in',cat:'Customer Deposit',desc:'Advance deposit - '+c.name+(note?' - '+note:''),amount:amt,payMode:mode,bankName,custId:id,date,month,by:STATE.user?.name||''};
@@ -12628,6 +12631,65 @@ async function saveFullPayment(id){
     closeModal(); setSyncStatus('synced');
     showCustProfile(id);
   } catch(e){ setSyncStatus('error'); showToast('Failed: '+e.message,'error'); }
+}
+
+// ── Credit payment receipt — printed automatically after a credit payment is recorded ──
+function printCreditPaymentReceipt(custName, amountPaid, prevBalance, newBalance, payMode, bankOrPosName, dateStr, note) {
+  const today = dateStr || new Date().toLocaleDateString('en-NG',{day:'2-digit',month:'short',year:'numeric'});
+  const cleared = newBalance <= 0;
+  const receiptNo = 'PR-'+Date.now().toString().slice(-8);
+  let payModeLabel = 'Cash';
+  if (payMode==='transfer') payModeLabel = `Bank Transfer${bankOrPosName?' ('+bankOrPosName+')':''}`;
+  else if (payMode==='pos') payModeLabel = `POS${bankOrPosName?' ('+bankOrPosName+')':''}`;
+
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
+  <title>Payment Receipt — ${esc(custName)}</title>
+  <style>
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{font-family:'Segoe UI',Arial,sans-serif;font-size:13px;color:#1e293b;padding:24px;max-width:480px;margin:0 auto}
+    .header{text-align:center;border-bottom:2px solid #15803d;padding-bottom:12px;margin-bottom:16px}
+    .biz-name{font-size:17px;font-weight:800;color:#15803d}
+    .biz-sub{font-size:11px;color:#6b7280;margin-top:2px}
+    .title{display:inline-block;background:#15803d;color:#fff;padding:4px 20px;border-radius:4px;font-weight:800;letter-spacing:1px;margin-top:8px;font-size:12px}
+    .meta{display:flex;justify-content:space-between;font-size:11px;color:#6b7280;margin-bottom:14px}
+    .row{display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid #e2e8f0;font-size:13px}
+    .amt{font-size:18px;font-weight:900;color:#15803d}
+    .bal{font-size:18px;font-weight:900;color:${cleared?'#15803d':'#c0392b'}}
+    .stamp{text-align:center;margin:18px 0 6px}
+    .stamp-cleared{display:inline-block;border:3px solid #15803d;color:#15803d;font-weight:900;font-size:22px;letter-spacing:3px;padding:8px 28px;border-radius:8px;transform:rotate(-6deg);opacity:.9}
+    .reminder{background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;padding:12px 14px;margin-top:14px;font-size:12px;color:#7c2d12;line-height:1.55}
+    .footer{margin-top:20px;text-align:center;font-size:10px;color:#9ca3af;border-top:1px solid #e2e8f0;padding-top:10px}
+    @media print{body{padding:8px}}
+  </style></head><body>
+  <div class="header">
+    <div class="biz-name">Great Chid Electro / Global Doors Ltd</div>
+    <div class="biz-sub">Ogbomoso & Ilorin, Nigeria</div>
+    <div class="title">PAYMENT RECEIPT</div>
+  </div>
+  <div class="meta"><span>Receipt #${receiptNo}</span><span>${today}</span></div>
+  <div class="row"><span>Received from:</span><b>${esc(custName)}</b></div>
+  <div class="row"><span>Payment mode:</span><b>${esc(payModeLabel)}</b></div>
+  ${note?`<div class="row"><span>Note:</span><span>${esc(note)}</span></div>`:''}
+  <div class="row"><span>Previous balance:</span><b>₦${prevBalance.toLocaleString()}</b></div>
+  <div class="row"><span>Amount paid:</span><span class="amt">₦${amountPaid.toLocaleString()}</span></div>
+  <div class="row" style="border-bottom:none"><span style="font-weight:700">Remaining balance:</span><span class="bal">₦${newBalance.toLocaleString()}</span></div>
+
+  ${cleared ? `
+  <div class="stamp"><span class="stamp-cleared">✓ CLEARED</span></div>
+  <div style="text-align:center;font-size:12px;color:#15803d;font-weight:600;margin-top:-2px">Account fully settled — thank you!</div>
+  ` : `
+  <div class="reminder">
+    <b>Kindly note:</b> an outstanding balance of <b>₦${newBalance.toLocaleString()}</b> remains on this account. We would be grateful if this could be settled at your earliest convenience. Thank you for your continued patronage.
+  </div>
+  `}
+
+  <div class="footer">Generated by GCE Business Dashboard v2 &nbsp;|&nbsp; ${today}</div>
+  <script>window.onload=()=>window.print();<\/script>
+  </body></html>`;
+
+  const w = window.open('','_blank','width=480,height=760');
+  if (w) { w.document.write(html); w.document.close(); }
+  else showToast('Allow popups to print the receipt.','error');
 }
 
 // ── showApplyDepositModal ─────────────────────────────────
