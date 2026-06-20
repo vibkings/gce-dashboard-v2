@@ -6705,6 +6705,25 @@ function renderPurchases() {
           <tbody>${histRows||'<tr><td colspan="8"><div class="empty-state"><div class="empty-state-icon">🛒</div><div>No purchases recorded yet.</div></div></td></tr>'}</tbody>
         </table>
       </div>
+
+      <!-- Delivery Log — every receive event, so you can see how pending deliveries got fulfilled over time -->
+      <div style="font-size:13px;font-weight:700;color:var(--text1);margin:1.5rem 0 10px;display:flex;align-items:center;gap:6px">📦 Delivery Log</div>
+      <div class="tbl-wrap" style="border-radius:var(--radius);border:1px solid var(--border)">
+        <table>
+          <thead><tr><th>DATE</th><th>PO #</th><th>SUPPLIER</th><th>ITEM</th><th style="text-align:center">QTY SUPPLIED</th></tr></thead>
+          <tbody>${(()=>{
+            const log = purchases.slice().sort((a,b)=>(new Date(b.date||0).getTime()||0)-(new Date(a.date||0).getTime()||0)).slice(0,150);
+            if (!log.length) return '<tr><td colspan="5"><div class="empty-state"><div class="empty-state-icon">📦</div><div>No deliveries recorded yet.</div></div></td></tr>';
+            return log.map(p=>`<tr>
+              <td style="font-size:12px;color:var(--text3)">${p.date||''}</td>
+              <td><b>PO #${esc(p.purchaseInvoiceNum||'—')}</b></td>
+              <td style="font-size:12px;color:var(--text3)">${esc(p.supplier||'—')}</td>
+              <td style="font-size:12px">${esc(p.itemName||p.name||'')}</td>
+              <td style="text-align:center;font-weight:700;color:#16a34a">${p.qty||0}</td>
+            </tr>`).join('');
+          })()}</tbody>
+        </table>
+      </div>
     </div>`;
 
   // Wire up purchase type → mode sync
@@ -7147,20 +7166,32 @@ function _buildPurchaseOrderHTML(invoiceNum, includeButtons, autoPrint) {
   const payMode = first.payMode||'cash';
   const modeLabel = {cash:'Cash',transfer:'Transfer',pos:'POS',credit:'Credit',part:'Part Pay'}[payMode]||payMode||'Cash';
 
-  // Combine already-received items with still-outstanding ones so the
-  // document shows the full order, not just what's arrived so far.
-  const combinedRows = [];
-  purchItems.forEach(p=>combinedRows.push({name:p.itemName||p.name||'', qty:p.qty||0, cost:p.costPrice||0, total:p.totalCost||0, pending:0}));
+  // Combine already-received items with still-outstanding ones, GROUPED by
+  // item name into one line each — multiple receive events (or duplicate
+  // cart entries) for the same item must not show as repeated rows.
+  const groupedItems = {};
+  purchItems.forEach(p=>{
+    const key = p.itemName||p.name||'';
+    if (!groupedItems[key]) groupedItems[key] = {name:key, supplied:0, pending:0, cost:0, total:0};
+    groupedItems[key].supplied += p.qty||0;
+    groupedItems[key].total += p.totalCost||0;
+    groupedItems[key].cost = p.costPrice||groupedItems[key].cost;
+  });
   pendItems.forEach(pd=>{
     const stillPending = Math.max(0,(pd.orderedQty||0)-(pd.receivedQty||0));
     if (stillPending<=0) return;
-    combinedRows.push({name:pd.itemName||'', qty:stillPending, cost:pd.costPrice||0, total:stillPending*(pd.costPrice||0), pending:stillPending});
+    const key = pd.itemName||'';
+    if (!groupedItems[key]) groupedItems[key] = {name:key, supplied:0, pending:0, cost:0, total:0};
+    groupedItems[key].pending += stillPending;
+    groupedItems[key].total += stillPending*(pd.costPrice||0);
+    if (!groupedItems[key].cost) groupedItems[key].cost = pd.costPrice||0;
   });
+  const combinedRows = Object.values(groupedItems).map(g=>({name:g.name, qty:g.supplied+g.pending, supplied:g.supplied, pending:g.pending, cost:g.cost, total:g.total}));
   const grandTotal = combinedRows.reduce((a,r)=>a+r.total,0);
   const itemRows = combinedRows.map((r,i)=>`<tr style="border-bottom:1px solid #eee">
     <td style="padding:7px 10px;text-align:center;color:#666;font-size:11px">${i+1}</td>
-    <td style="padding:7px 10px;font-weight:600;font-size:12px">${esc(r.name)}${r.pending>0?`<div style="font-size:9px;color:#d97706;font-weight:700">⏳ ${r.pending} pending delivery</div>`:''}</td>
-    <td style="padding:7px 10px;text-align:center;font-size:12px">${r.qty}</td>
+    <td style="padding:7px 10px;font-weight:600;font-size:12px">${esc(r.name)}</td>
+    <td style="padding:7px 10px;text-align:center;font-size:12px">${r.qty}${r.pending>0?`<div style="font-size:9px;color:#16a34a;font-weight:700">✓ ${r.supplied} supplied</div><div style="font-size:9px;color:#c0392b;font-weight:700">⏳ ${r.pending} pending</div>`:''}</td>
     <td style="padding:7px 10px;text-align:right;font-size:12px">₦${r.cost.toLocaleString()}</td>
     <td style="padding:7px 10px;text-align:right;font-weight:700;font-size:12px">₦${r.total.toLocaleString()}</td>
   </tr>`).join('');
