@@ -6394,21 +6394,35 @@ function renderPurchases() {
   });
   const pendingList = Object.values(pendingGroups).sort((a,b)=>(b.date||'').localeCompare(a.date||''));
 
-  // Purchase history — grouped by PO/invoice number (not a flat per-item list)
+  // Purchase history — grouped by PO/invoice number (not a flat per-item list).
+  // Includes pending (not-yet-received) items too, so a PO shows up here in
+  // full the moment it's created — not just once everything has arrived.
+  // Pending Deliveries above remains the place to actually receive items.
   const searchVal = document.getElementById('purch-history-search')?.value?.toLowerCase()||'';
   const histGroupsMap = {};
   purchases.forEach(p=>{
     const k = p.purchaseInvoiceNum || p._id || p.id;
-    if (!histGroupsMap[k]) histGroupsMap[k] = {invoiceNum:k, supplier:p.supplier||'', date:p.date||'', payMode:p.payMode||'cash', items:[], totalCost:0, totalQty:0};
+    if (!histGroupsMap[k]) histGroupsMap[k] = {invoiceNum:k, supplier:p.supplier||'', date:p.date||'', payMode:p.payMode||'cash', items:[], itemNames:[], totalCost:0, totalQty:0, pendingQty:0, pendingCost:0};
     histGroupsMap[k].items.push(p);
+    histGroupsMap[k].itemNames.push(p.itemName||p.name||'');
     histGroupsMap[k].totalCost += p.totalCost||0;
     histGroupsMap[k].totalQty += p.qty||0;
+  });
+  pending.forEach(pd=>{
+    const k = pd.purchaseInvoiceNum || pd._id || pd.id;
+    if (!histGroupsMap[k]) histGroupsMap[k] = {invoiceNum:k, supplier:pd.supplier||'', date:pd.date||'', payMode:pd.payMode||'cash', items:[], itemNames:[], totalCost:0, totalQty:0, pendingQty:0, pendingCost:0};
+    const stillPending = Math.max(0,(pd.orderedQty||0)-(pd.receivedQty||0));
+    if (stillPending<=0) return;
+    histGroupsMap[k].itemNames.push(pd.itemName||'');
+    histGroupsMap[k].totalQty += stillPending;
+    histGroupsMap[k].pendingQty += stillPending;
+    histGroupsMap[k].pendingCost += stillPending*(pd.costPrice||0);
   });
   let histGroupList = Object.values(histGroupsMap).filter(g =>
     !searchVal ||
     (g.invoiceNum||'').toLowerCase().includes(searchVal) ||
     (g.supplier||'').toLowerCase().includes(searchVal) ||
-    g.items.some(p=>(p.itemName||p.name||'').toLowerCase().includes(searchVal))
+    g.itemNames.some(n=>(n||'').toLowerCase().includes(searchVal))
   );
   histGroupList.sort((a,b)=>(new Date(b.date||0).getTime()||0) - (new Date(a.date||0).getTime()||0));
   histGroupList = histGroupList.slice(0,150);
@@ -6416,14 +6430,15 @@ function renderPurchases() {
   const histRows = histGroupList.map(g=>{
     const modeLabel = {cash:'Cash',transfer:'Transfer',pos:'POS',credit:'Credit',part:'Part Pay'}[g.payMode]||g.payMode||'Cash';
     const modeBadge = g.payMode==='credit' ? 'badge-danger' : g.payMode==='part' ? 'badge-warning' : 'badge-neutral';
-    const itemNames = g.items.map(p=>esc(p.itemName||p.name||'')).join(', ');
-    return `<tr>
+    const itemNames = [...new Set(g.itemNames.map(n=>esc(n)))].join(', ');
+    const grandValue = g.totalCost + g.pendingCost;
+    return `<tr${g.pendingQty>0?' style="background:#fffbeb"':''}>
       <td style="font-size:12px;color:var(--text3)">${g.date||''}</td>
-      <td><b>PO #${esc(g.invoiceNum)}</b><br><span style="font-size:11px;color:var(--text3)">${itemNames.length>60?itemNames.slice(0,60)+'…':itemNames}</span></td>
+      <td><b>PO #${esc(g.invoiceNum)}</b>${g.pendingQty>0?` <span class="badge badge-warning" style="font-size:9px">⏳ pending</span>`:''}<br><span style="font-size:11px;color:var(--text3)">${itemNames.length>60?itemNames.slice(0,60)+'…':itemNames}</span></td>
       <td style="font-size:12px;color:var(--text3)">${esc(g.supplier||'—')}</td>
-      <td style="text-align:center;font-weight:700">${g.totalQty}</td>
+      <td style="text-align:center;font-weight:700">${g.totalQty}${g.pendingQty>0?`<div style="font-size:9px;color:#d97706;font-weight:600">${g.pendingQty} pending</div>`:''}</td>
       <td style="text-align:center;color:var(--text3)">${g.items.length}</td>
-      <td style="text-align:right;font-weight:700;color:var(--danger)">${fmt(g.totalCost)}</td>
+      <td style="text-align:right;font-weight:700;color:var(--danger)">${fmt(grandValue)}${g.pendingQty>0?`<div style="font-size:9px;color:#d97706;font-weight:600">${fmt(g.pendingCost)} not yet recorded</div>`:''}</td>
       <td><span class="badge ${modeBadge}" style="font-size:10px">${modeLabel}</span></td>
       <td style="white-space:nowrap">
         <button class="btn btn-sm" onclick="viewPurchaseOrder('${esc(g.invoiceNum)}')" style="color:var(--primary);border-color:#b6d4fe;font-size:11px">View</button>
@@ -6672,15 +6687,9 @@ function renderPurchases() {
 
   // Wire up purchase type → mode sync
   const payType = document.getElementById('pnp-pay-type');
-  const payMode = document.getElementById('pnp-pay-mode');
   if (payType && !payType._wired) {
     payType._wired = true;
-    payType.onchange = () => {
-      const v = payType.value;
-      if (v==='cash') payMode.value='cash';
-      else if (v==='transfer') payMode.value='transfer';
-      else if (v==='pos') payMode.value='pos';
-    };
+    payType.onchange = () => togglePurchBankField();
   }
 
   // Restore cart display
@@ -7064,20 +7073,31 @@ async function cancelPendingItem(pendId) {
 
 // ── Purchase Order: View / Print / Share (same engine as invoices) ──
 function _buildPurchaseOrderHTML(invoiceNum, includeButtons, autoPrint) {
-  const items = Object.values(STATE.purchases||{}).filter(p=>(p.purchaseInvoiceNum||p._id||p.id)===invoiceNum);
-  if (!items.length) return null;
-  const first = items[0];
+  const purchItems = Object.values(STATE.purchases||{}).filter(p=>(p.purchaseInvoiceNum||p._id||p.id)===invoiceNum);
+  const pendItems = Object.values(STATE.pendingDeliveries||{}).filter(pd=>(pd.purchaseInvoiceNum||pd._id||pd.id)===invoiceNum);
+  if (!purchItems.length && !pendItems.length) return null;
+  const first = purchItems[0] || pendItems[0];
   const supplier = first.supplier||'—';
   const date = first.date||'';
   const payMode = first.payMode||'cash';
-  const grandTotal = items.reduce((a,p)=>a+(p.totalCost||0),0);
   const modeLabel = {cash:'Cash',transfer:'Transfer',pos:'POS',credit:'Credit',part:'Part Pay'}[payMode]||payMode||'Cash';
-  const itemRows = items.map((p,i)=>`<tr style="border-bottom:1px solid #eee">
+
+  // Combine already-received items with still-outstanding ones so the
+  // document shows the full order, not just what's arrived so far.
+  const combinedRows = [];
+  purchItems.forEach(p=>combinedRows.push({name:p.itemName||p.name||'', qty:p.qty||0, cost:p.costPrice||0, total:p.totalCost||0, pending:0}));
+  pendItems.forEach(pd=>{
+    const stillPending = Math.max(0,(pd.orderedQty||0)-(pd.receivedQty||0));
+    if (stillPending<=0) return;
+    combinedRows.push({name:pd.itemName||'', qty:stillPending, cost:pd.costPrice||0, total:stillPending*(pd.costPrice||0), pending:stillPending});
+  });
+  const grandTotal = combinedRows.reduce((a,r)=>a+r.total,0);
+  const itemRows = combinedRows.map((r,i)=>`<tr style="border-bottom:1px solid #eee">
     <td style="padding:7px 10px;text-align:center;color:#666;font-size:11px">${i+1}</td>
-    <td style="padding:7px 10px;font-weight:600;font-size:12px">${esc(p.itemName||p.name||'')}</td>
-    <td style="padding:7px 10px;text-align:center;font-size:12px">${p.qty||0}</td>
-    <td style="padding:7px 10px;text-align:right;font-size:12px">₦${(p.costPrice||0).toLocaleString()}</td>
-    <td style="padding:7px 10px;text-align:right;font-weight:700;font-size:12px">₦${(p.totalCost||0).toLocaleString()}</td>
+    <td style="padding:7px 10px;font-weight:600;font-size:12px">${esc(r.name)}${r.pending>0?`<div style="font-size:9px;color:#d97706;font-weight:700">⏳ ${r.pending} pending delivery</div>`:''}</td>
+    <td style="padding:7px 10px;text-align:center;font-size:12px">${r.qty}</td>
+    <td style="padding:7px 10px;text-align:right;font-size:12px">₦${r.cost.toLocaleString()}</td>
+    <td style="padding:7px 10px;text-align:right;font-weight:700;font-size:12px">₦${r.total.toLocaleString()}</td>
   </tr>`).join('');
 
   const shieldSVG=`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 95" width="62" height="74">
