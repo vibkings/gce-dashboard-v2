@@ -2976,7 +2976,7 @@ function renderOverview() {
         <div class="kpi-label">💳 PAYMENT BREAKDOWN</div>
         <div class="kpi-value" style="color:#7c3aed;font-size:14px">${(()=>{
           const modes={};
-          todaySales.forEach(s=>{const m=s.payMode||'cash';modes[m]=(modes[m]||0)+(s.total||0);});
+          todaySales.forEach(s=>{const m=s.payMode||'cash';const amt=s.payment==='part'?(s.partPayment||0):(s.total||0);modes[m]=(modes[m]||0)+amt;});
           const top=Object.entries(modes).sort((a,b)=>b[1]-a[1]);
           return top.length?top.map(([m,v])=>m.charAt(0).toUpperCase()+m.slice(1)+': '+fmt(v)).join(' · '):'No sales yet today';
         })()}</div>
@@ -4904,6 +4904,13 @@ async function v2SaveSale(mode) {
   const grandTotalForChange = invoiceItems.reduce((a,l)=>a+Math.round(l.price*l.qty*(1-(l.discPct||0)/100)),0);
   const changeAmt = Math.max(0, tenderedAmt - grandTotalForChange);
   const wholeInvoicePending = document.getElementById('s-pending-supply')?.checked||false;
+  // Part payment: use whichever mode was actually selected for the amount paid now
+  // (cash/transfer/pos/split), instead of always recording it as 'cash'.
+  const partModeVal = pt==='part' ? (document.getElementById('s-part-mode')?.value||'cash') : null;
+  const partBankVal = (partModeVal==='transfer'||partModeVal==='pos') ? (document.getElementById('s-part-bank')?.value||'') : '';
+  const partSplitCashVal = partModeVal==='split' ? (parseFloat(document.getElementById('s-part-split-cash')?.value)||0) : 0;
+  const partSplitTransferVal = partModeVal==='split' ? Math.max(0, partAmt - partSplitCashVal) : 0;
+  const partSplitPayment = partModeVal==='split' ? {mode1:'cash', amt1:partSplitCashVal, mode2:'transfer', amt2:partSplitTransferVal, bank1:'', bank2:partBankVal} : null;
   setSyncStatus('saving');
   try {
     for (const l of invoiceItems) {
@@ -4933,8 +4940,11 @@ async function v2SaveSale(mode) {
         profit:(l.price-l.cost)*l.qty - (l.discAmt||0),
         discount:l.discAmt||0,
         payment:(pt==='credit'?'credit':pt==='part'?'part':pt==='deposit'?'deposit':'paid'),
-        payMode:(pt==='credit'?'credit':pt==='part'?'cash':pt==='deposit'?'deposit':payMode), splitPayment,
-        partPayment: pt==='part' ? partAmt : pt==='deposit' ? (window._saleDepositPortion||0) : 0, bankName, posName,
+        payMode:(pt==='credit'?'credit':pt==='part'?partModeVal:pt==='deposit'?'deposit':payMode),
+        splitPayment: pt==='part' ? partSplitPayment : splitPayment,
+        partPayment: pt==='part' ? partAmt : pt==='deposit' ? (window._saleDepositPortion||0) : 0,
+        bankName: pt==='part' ? (partModeVal==='transfer'?partBankVal:bankName) : bankName,
+        posName: pt==='part' ? (partModeVal==='pos'?partBankVal:posName) : posName,
         tenderedAmt: tenderedAmt||0, changeAmt: changeAmt||0, changeDisp: changeAmt>0?changeDisp:'cash',
         custId:invoiceCustomer&&(invoiceCustomer._id||invoiceCustomer.id)||null, custName:invoiceCustomer?.name||'Walk-in',
         printName, date, month, seller:STATE.user.name, deliveryAddr,
@@ -8550,6 +8560,9 @@ function renderReports() {
   // Payment mode breakdown — split amounts distributed into their actual modes
   let cashSales = 0, posSales = 0, transferSales = 0;
   salesF.forEach(s => {
+    // For part payments, only the partPayment amount was actually received now —
+    // the rest is still owed (credit) and must not be counted as cash in till.
+    const amtReceived = s.payment==='part' ? (s.partPayment||0) : (s.total||0);
     if (s.payMode === 'split' && s.splitPayment) {
       const sp = s.splitPayment;
       const add = (mode, amt) => {
@@ -8560,11 +8573,11 @@ function renderReports() {
       add(sp.mode1, sp.amt1||0);
       add(sp.mode2, sp.amt2||0);
     } else if (s.payMode==='cash' || s.payment==='cash') {
-      cashSales += s.total||0;
+      cashSales += amtReceived;
     } else if (s.payMode==='pos') {
-      posSales += s.total||0;
+      posSales += amtReceived;
     } else if (s.payMode==='transfer') {
-      transferSales += s.total||0;
+      transferSales += amtReceived;
     }
   });
 
