@@ -4100,18 +4100,34 @@ function renderSales() {
     </div>
 
     <div id="inv-items-table">${invoiceItems.length?`
+      ${invoiceItems.map(l=>{
+        const invItem=STATE.inventory[l.itemId]; const avail=invItem?.qty||0;
+        const sf=Math.max(0,l.qty-avail);
+        return sf>0?`<div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;padding:9px 14px;margin-bottom:8px;font-size:12.5px;color:#92400e">⚠️ <b>${esc(l.name)}</b>: Only <b>${avail}</b> in stock, selling <b>${l.qty}</b>. Shortfall of <b>${sf}</b> unit${sf!==1?'s':''} — choose Supply or Hold for this line below.</div>`:'';
+      }).join('')}
       <div class="tbl-wrap" style="margin-bottom:.75rem"><table>
-        <thead><tr><th>#</th><th>Item</th><th class="td-center">Qty</th><th class="td-right">Price</th><th class="td-right">Subtotal</th><th></th></tr></thead>
-        <tbody>${invoiceItems.map((l,i)=>`<tr>
+        <thead><tr><th>#</th><th>Item</th><th class="td-center">Qty</th><th class="td-center">Supply</th><th class="td-right">Price</th><th class="td-right">Subtotal</th><th></th></tr></thead>
+        <tbody>${invoiceItems.map((l,i)=>{
+          const invItem=STATE.inventory[l.itemId]; const avail=invItem?.qty||0;
+          const sf=Math.max(0,l.qty-avail);
+          const mode=l.supplyMode||'supply';
+          const supplyCell = sf>0 ? `
+            <div style="font-size:10px;color:var(--text3);margin-bottom:3px">Stock: ${avail} / ${l.qty}</div>
+            <div style="display:flex;gap:4px;justify-content:center">
+              <button onclick="v2SetLineSupplyMode(${i},'supply')" style="font-size:10px;padding:3px 8px;border-radius:5px;border:1px solid ${mode==='supply'?'#16a34a':'var(--border)'};background:${mode==='supply'?'#16a34a':'#fff'};color:${mode==='supply'?'#fff':'var(--text2)'};cursor:pointer;font-weight:700">✓ Supply ${avail}</button>
+              <button onclick="v2SetLineSupplyMode(${i},'hold')" style="font-size:10px;padding:3px 8px;border-radius:5px;border:1px solid ${mode==='hold'?'#1a237e':'var(--border)'};background:${mode==='hold'?'#1a237e':'#fff'};color:${mode==='hold'?'#fff':'var(--text2)'};cursor:pointer;font-weight:700">⏳ Hold all</button>
+            </div>` : `<span style="color:var(--success);font-size:11px">✓ In stock</span>`;
+          return `<tr${sf>0?' style="background:#fffbf5"':''}>
           <td style="color:var(--text3)">${i+1}</td>
           <td><b>${esc(l.name)}</b></td>
           <td class="td-center">${l.qty}</td>
+          <td class="td-center">${supplyCell}</td>
           <td class="td-right">₦${l.price.toLocaleString()}</td>
           <td class="td-right"><b>₦${(l.price*l.qty).toLocaleString()}</b></td>
           <td><button onclick="v2RemoveInvItem(${i})" style="background:none;border:none;color:var(--danger);font-size:15px;cursor:pointer">✕</button></td>
-        </tr>`).join('')}</tbody>
+        </tr>`;}).join('')}</tbody>
         <tfoot><tr style="background:var(--surface);font-weight:700">
-          <td colspan="4" style="text-align:right;padding:8px">Grand Total</td>
+          <td colspan="5" style="text-align:right;padding:8px">Grand Total</td>
           <td class="td-right" style="color:var(--primary);font-size:15px">₦${grandTotal.toLocaleString()}</td><td></td>
         </tr></tfoot>
       </table></div>
@@ -4262,15 +4278,106 @@ function v2AddInvItem() {
   const item = id ? STATE.inventory[id] :
     Object.values(STATE.inventory).find(i=>i.name?.toLowerCase()===name?.toLowerCase());
   if (!item) { showToast('Item not found.','error'); return; }
-  if (qty > (item.qty||0)) { showToast(`Only ${item.qty||0} in stock.`,'error'); return; }
+  const avail = item.qty||0;
   const existing = invoiceItems.find(l=>l.itemId===item._id&&l.price===price);
-  if (existing) { if(existing.qty+qty>(item.qty||0)){showToast('Exceeds stock.','error');return;} existing.qty+=qty; }
-  else invoiceItems.push({itemId:item._id, name:item.name, cost:item.cost||0, qty, price});
+  if (existing) { existing.qty+=qty; if(!existing.supplyMode) existing.supplyMode='supply'; }
+  else invoiceItems.push({itemId:item._id, name:item.name, cost:item.cost||0, qty, price, supplyMode:'supply'});
+  if (qty > avail) {
+    showToast(`⚠️ Only ${avail} of "${item.name}" in stock — added with a shortfall. Choose Supply or Hold for that line.`,'info');
+  }
   document.getElementById('s-item-search').value='';
   document.getElementById('s-item-id').value='';
   document.getElementById('s-qty').value='1';
   document.getElementById('s-price').value='0';
   renderSales();
+}
+
+function v2SetLineSupplyMode(idx, mode) {
+  if (!invoiceItems[idx]) return;
+  invoiceItems[idx].supplyMode = mode;
+  renderSales();
+}
+
+// ── Pending Supply: fulfil goods that were held back at sale time ──
+function showSupplyQtyModal(invoiceNum, saleId) {
+  const s = STATE.sales?.[saleId];
+  if (!s) { showToast('Sale record not found.','error'); return; }
+  const pendingQty = s.pendingQty!=null ? s.pendingQty : Math.max(0,(s.qty||0)-(s.suppliedQty||0));
+  if (pendingQty<=0) { showToast('Nothing pending for this item.','info'); return; }
+  const invItem = STATE.inventory?.[s.itemId];
+  const avail = invItem?.qty||0;
+  const defaultQty = Math.max(1, Math.min(pendingQty, avail||pendingQty));
+  showModal(`📦 Supply — ${esc(s.name)}`, `
+    <div style="font-size:13px;margin-bottom:10px">Invoice #${esc(invoiceNum)} &nbsp;·&nbsp; Pending: <b>${pendingQty}</b> &nbsp;·&nbsp; Currently in stock: <b style="color:${avail>0?'var(--success)':'var(--danger)'}">${avail}</b></div>
+    <div class="form-group">
+      <label>Qty to supply now <span class="req">*</span></label>
+      <input class="form-input" id="sq-qty" type="number" min="1" max="${pendingQty}" value="${defaultQty}">
+    </div>
+    ${avail<pendingQty?`<div class="alert alert-info" style="font-size:12px;margin-top:6px">⚠️ Only ${avail} currently in stock — you can supply up to that amount now; the rest stays pending.</div>`:''}
+  `, [
+    {label:'Cancel', action:'close', style:''},
+    {label:'✓ Confirm Supply', action:`confirmSupplyQty('${saleId}')`, style:'btn-primary'}
+  ]);
+}
+
+async function confirmSupplyQty(saleId) {
+  const s = STATE.sales?.[saleId];
+  if (!s) { showToast('Sale record not found.','error'); return; }
+  const pendingQty = s.pendingQty!=null ? s.pendingQty : Math.max(0,(s.qty||0)-(s.suppliedQty||0));
+  const qty = parseInt(document.getElementById('sq-qty')?.value)||0;
+  if (qty<1) { showToast('Enter a valid quantity.','error'); return; }
+  if (qty>pendingQty) { showToast(`Cannot supply more than the pending amount (${pendingQty}).`,'error'); return; }
+  const invItem = STATE.inventory?.[s.itemId];
+  const avail = invItem?.qty||0;
+  if (qty>avail) { showToast(`Only ${avail} currently in stock.`,'error'); return; }
+  setSyncStatus('saving');
+  try {
+    const updInv = {...invItem, qty:Math.max(0, avail-qty)};
+    await fsSave(COLS.INVENTORY, s.itemId, updInv);
+    STATE.inventory[s.itemId] = {...updInv, _id:s.itemId, _savedAt:Date.now()};
+    const newSupplied = (s.suppliedQty||0)+qty;
+    const newPending = Math.max(0, pendingQty-qty);
+    const updSale = {...s, suppliedQty:newSupplied, pendingQty:newPending, pendingSupply:newPending>0, supplyStatus:newPending>0?'pending':'supplied'};
+    await saveSaleDoc(s.month, saleId, updSale);
+    STATE.sales[saleId] = {...updSale, _id:saleId, _savedAt:Date.now()};
+    closeModal();
+    setSyncStatus('synced');
+    showToast(`✅ Supplied ${qty} × ${s.name}.${newPending>0?` ${newPending} still pending.`:' Fully supplied.'}`,'success');
+    logActivity('Stock supplied', `${s.name} — ${qty} supplied (Inv #${s.invoiceNum})${newPending>0?`, ${newPending} still pending`:''}`, '');
+    renderSales(); updateInventoryBadge();
+  } catch(e) { setSyncStatus('error'); showToast('Failed to supply.','error'); }
+}
+
+async function supplyAllNow(invoiceNum) {
+  const items = Object.values(STATE.sales||{}).filter(s=>s.invoiceNum===invoiceNum && s.pendingSupply && !s.voided);
+  if (!items.length) { showToast('Nothing pending for this invoice.','info'); return; }
+  setSyncStatus('saving');
+  let suppliedCount=0, stillShort=0;
+  try {
+    for (const s of items) {
+      const pendingQty = s.pendingQty!=null ? s.pendingQty : Math.max(0,(s.qty||0)-(s.suppliedQty||0));
+      if (pendingQty<=0) continue;
+      const invItem = STATE.inventory?.[s.itemId];
+      const avail = invItem?.qty||0;
+      const qty = Math.min(pendingQty, avail);
+      if (qty<1) { stillShort++; continue; }
+      const updInv = {...invItem, qty:Math.max(0, avail-qty)};
+      await fsSave(COLS.INVENTORY, s.itemId, updInv);
+      STATE.inventory[s.itemId] = {...updInv, _id:s.itemId, _savedAt:Date.now()};
+      const newSupplied = (s.suppliedQty||0)+qty;
+      const newPending = Math.max(0, pendingQty-qty);
+      const updSale = {...s, suppliedQty:newSupplied, pendingQty:newPending, pendingSupply:newPending>0, supplyStatus:newPending>0?'pending':'supplied'};
+      const sid = s._id||s.id;
+      await saveSaleDoc(s.month, sid, updSale);
+      STATE.sales[sid] = {...updSale, _id:sid, _savedAt:Date.now()};
+      suppliedCount++;
+      if (newPending>0) stillShort++;
+    }
+    setSyncStatus('synced');
+    showToast(`✅ Supplied ${suppliedCount} item line${suppliedCount!==1?'s':''} for Inv #${invoiceNum}.${stillShort>0?` ${stillShort} line${stillShort!==1?'s':''} still short on stock.`:''}`, stillShort>0?'warning':'success');
+    logActivity('Stock supplied', `Inv #${invoiceNum} — Supply all (${suppliedCount} lines)${stillShort>0?`, ${stillShort} still short`:''}`, '');
+    renderSales(); updateInventoryBadge();
+  } catch(e) { setSyncStatus('error'); showToast('Failed.','error'); }
 }
 
 function v2RemoveInvItem(idx) { invoiceItems.splice(idx,1); renderSales(); }
@@ -4565,10 +4672,20 @@ async function v2SaveSale(mode) {
   const changeDisp = document.getElementById('s-change-disp')?.value||'cash'; // cash/credit/deposit
   const grandTotalForChange = invoiceItems.reduce((a,l)=>a+Math.round(l.price*l.qty*(1-(l.discPct||0)/100)),0);
   const changeAmt = Math.max(0, tenderedAmt - grandTotalForChange);
+  const wholeInvoicePending = document.getElementById('s-pending-supply')?.checked||false;
   setSyncStatus('saving');
   try {
     for (const l of invoiceItems) {
       const saleId = uid();
+      const inv = STATE.inventory[l.itemId];
+      const avail = inv?.qty||0;
+      let suppliedQty, pendingQty;
+      if (wholeInvoicePending) { suppliedQty=0; pendingQty=l.qty; }
+      else if (l.qty > avail) {
+        const mode = l.supplyMode||'supply';
+        suppliedQty = mode==='supply' ? Math.min(avail, l.qty) : 0;
+        pendingQty = l.qty - suppliedQty;
+      } else { suppliedQty = l.qty; pendingQty = 0; }
       const sale = {
         id:saleId, invoiceId, invoiceNum:invNum, name:l.name, itemId:l.itemId,
         qty:l.qty, salePrice:l.price, cost:l.cost,
@@ -4584,15 +4701,15 @@ async function v2SaveSale(mode) {
         custId:invoiceCustomer?._id||null, custName:invoiceCustomer?.name||'Walk-in',
         printName, date, month, seller:STATE.user.name, deliveryAddr,
         dueDate:(pt==='credit'||pt==='part')?(document.getElementById('s-credit-due-date')?.value||''):'',
-        supplyStatus:document.getElementById('s-pending-supply')?.checked?'pending':'supplied',
-        pendingSupply:document.getElementById('s-pending-supply')?.checked||false
+        suppliedQty, pendingQty,
+        supplyStatus: pendingQty>0?'pending':'supplied',
+        pendingSupply: pendingQty>0
       };
       await saveSaleDoc(month, saleId, sale);
       STATE.sales[saleId] = {...sale, _id:saleId,_savedAt:Date.now()};
-      // Deduct inventory
-      const inv = STATE.inventory[l.itemId];
-      if (inv) {
-        const u = {...inv, qty:Math.max(0,(inv.qty||0)-l.qty)};
+      // Deduct inventory — only the quantity actually being supplied now
+      if (inv && suppliedQty>0) {
+        const u = {...inv, qty:Math.max(0,(inv.qty||0)-suppliedQty)};
         await fsSave(COLS.INVENTORY, l.itemId, u);
         STATE.inventory[l.itemId] = {...u, _id:l.itemId,_savedAt:Date.now()};
       }
