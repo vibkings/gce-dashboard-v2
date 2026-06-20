@@ -2122,7 +2122,26 @@ async function initDataLayer() {
     ]);
   }
 
-  await withTimeout(Promise.all([
+  // IMPORTANT: withTimeout lets the app proceed even if a collection hasn't
+  // finished loading yet (slow network, large dataset, etc.) — but the real
+  // promise keeps running in the background regardless. If nothing watches
+  // for it, whatever page happens to be open right then renders with that
+  // collection still empty — which looks exactly like records vanishing,
+  // until the user manually reloads again. This watches the real load and
+  // re-renders the active page automatically once it actually finishes,
+  // even if that's after the timeout already let the app proceed.
+  function _watchSlowLoad(promise) {
+    promise.then(() => {
+      try {
+        const activeEl = document.querySelector('.page.active');
+        const activePage = activeEl?.id?.replace('page-','');
+        if (activePage) switchPage(activePage);
+        if (typeof updateInventoryBadge === 'function') updateInventoryBadge();
+      } catch(e) {}
+    }).catch(()=>{});
+  }
+
+  const mainLoadPromise = Promise.all([
     loadCollection(COLS.USERS,        'users'),
     loadCollection(COLS.INVENTORY,    'inventory'),
     loadCollection(COLS.CUSTOMERS,    'customers'),
@@ -2137,17 +2156,21 @@ async function initDataLayer() {
     loadCollection('v2_pendingDeliveries', 'pendingDeliveries'),
     loadCollection(COLS.SALESRETURNS, 'salesReturns'),
     loadCollection(COLS.HELDCHANGE,   'heldChange'),
-  ]), TIMEOUT);
+  ]);
+  await withTimeout(mainLoadPromise, TIMEOUT);
+  _watchSlowLoad(mainLoadPromise);
 
   // Load current month's sales (with timeout)
   const now = new Date();
-  await withTimeout(Promise.all([
+  const salesLoadPromise = Promise.all([
     loadMonthlySales(now.getFullYear(), now.getMonth()+1),
     loadMonthlySales(
       now.getMonth()===0 ? now.getFullYear()-1 : now.getFullYear(),
       now.getMonth()===0 ? 12 : now.getMonth()
     ),
-  ]), TIMEOUT);
+  ]);
+  await withTimeout(salesLoadPromise, TIMEOUT);
+  _watchSlowLoad(salesLoadPromise);
 
   // Load settings object
   const settingsDoc = STATE.settings?.['config'];
@@ -2794,6 +2817,11 @@ function buildNav() {
   });
   container.innerHTML = html;
 }
+
+// Alias — some buttons (Global Search "go to" links, Settings) call
+// navigateTo() instead of switchPage(); they were calling an undefined
+// function before this.
+function navigateTo(pageId) { switchPage(pageId); }
 
 function switchPage(pageId) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
