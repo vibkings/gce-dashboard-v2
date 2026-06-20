@@ -6423,6 +6423,17 @@ function renderPurchases() {
     histGroupsMap[k].pendingQty += stillPending;
     histGroupsMap[k].pendingCost += stillPending*(pd.costPrice||0);
   });
+  // Returns (exchange or complete) reduce what's actually "supplied" — an
+  // exchange already adds its own replacement entry into Pending Deliveries
+  // above, so without this the same unit would be double-counted as both
+  // still-kept stock AND a fresh pending delivery.
+  Object.values(STATE.purchaseReturns||{}).forEach(r=>{
+    const k = r.purchaseInvoiceNum || r._id || r.id;
+    if (!histGroupsMap[k]) return;
+    const value = (r.qty||0)*(r.costPrice||0);
+    histGroupsMap[k].totalQty -= (r.qty||0);
+    histGroupsMap[k].totalCost -= value;
+  });
   let histGroupList = Object.values(histGroupsMap).filter(g =>
     !searchVal ||
     (g.invoiceNum||'').toLowerCase().includes(searchVal) ||
@@ -7374,7 +7385,18 @@ function _buildPurchaseOrderHTML(invoiceNum, includeButtons, autoPrint) {
     groupedItems[key].total += stillPending*(pd.costPrice||0);
     if (!groupedItems[key].cost) groupedItems[key].cost = pd.costPrice||0;
   });
-  const combinedRows = Object.values(groupedItems).map(g=>({name:g.name, qty:g.supplied+g.pending, supplied:g.supplied, pending:g.pending, cost:g.cost, total:g.total}));
+  // Returns (exchange or complete) reduce what's actually "supplied" — an
+  // exchange already adds its own replacement entry into Pending Deliveries
+  // above, so without this the same unit gets double-counted.
+  Object.values(STATE.purchaseReturns||{})
+    .filter(r=>(r.purchaseInvoiceNum||r._id||r.id)===invoiceNum)
+    .forEach(r=>{
+      const key = r.itemName||'';
+      if (!groupedItems[key]) return;
+      groupedItems[key].supplied -= (r.qty||0);
+      groupedItems[key].total -= (r.qty||0)*(r.costPrice||0);
+    });
+  const combinedRows = Object.values(groupedItems).map(g=>({name:g.name, qty:Math.max(0,g.supplied)+g.pending, supplied:Math.max(0,g.supplied), pending:g.pending, cost:g.cost, total:g.total}));
   const grandTotal = combinedRows.reduce((a,r)=>a+r.total,0);
   const itemRows = combinedRows.map((r,i)=>`<tr style="border-bottom:1px solid #eee">
     <td style="padding:7px 10px;text-align:center;color:#666;font-size:11px">${i+1}</td>
