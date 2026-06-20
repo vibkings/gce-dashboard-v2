@@ -6589,6 +6589,27 @@ function renderPurchases() {
         </div>
       </div>
 
+      <!-- New item details — shown when the typed item name doesn't match anything in Inventory -->
+      <div id="pnp-new-item-panel" style="display:none;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:10px 12px;margin-bottom:8px">
+        <div style="font-size:11px;font-weight:700;color:#15803d;margin-bottom:8px;display:flex;align-items:center;gap:6px">✚ NEW ITEM DETAILS — not yet in Inventory</div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap">
+          <div style="flex:1;min-width:150px">
+            <div style="font-size:10px;color:var(--text3);margin-bottom:3px">SELLING PRICE (₦) <span style="color:var(--danger)">*</span></div>
+            <input class="form-input" id="pnp-new-sell" type="number" min="0" placeholder="0" style="width:100%">
+          </div>
+          <div style="flex:1;min-width:150px">
+            <div style="font-size:10px;color:var(--text3);margin-bottom:3px">CATEGORY</div>
+            <div style="display:flex;gap:4px">
+              <select class="form-input" id="pnp-new-cat" style="width:100%">
+                <option value="">-- Category --</option>
+                ${getAllCategories().map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join('')}
+              </select>
+              <button class="btn btn-sm" onclick="showAddCategoryModal('pnp-new-cat')" title="Add new category" style="padding:0 9px;flex-shrink:0">+</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- Cart items table -->
       <div id="pnp-cart-wrap" style="margin-bottom:12px;display:none">
         <table style="width:100%;border-collapse:collapse;font-size:12px">
@@ -6747,17 +6768,30 @@ function addPurchaseCartItem() {
   if (!name) { showToast('Enter item name.','error'); return; }
   if (ordered < 1 && received < 1) { showToast('Enter ordered or received quantity.','error'); return; }
   if (cost <= 0) { showToast('Enter cost price.','error'); return; }
+
+  const existingItem = itemId ? STATE.inventory?.[itemId] : Object.values(STATE.inventory||{}).find(i=>(i.name||'').toLowerCase()===name.toLowerCase());
+  const isNewItem = !existingItem;
+  let newSellPrice = 0, newCat = '';
+  if (isNewItem) {
+    newSellPrice = parseFloat(document.getElementById('pnp-new-sell')?.value)||0;
+    if (newSellPrice <= 0) { showToast('Enter a selling price for this new item.','error'); return; }
+    newCat = document.getElementById('pnp-new-cat')?.value||'';
+  }
+
   const qty = received || ordered;
   let discAmt = 0;
   if (discType==='pct') discAmt = qty * cost * discVal/100;
   else if (discType==='fixed') discAmt = discVal;
-  window._purchCart.push({name, itemId, ordered, received, cost, discType, discVal, discAmt});
+  window._purchCart.push({name, itemId, ordered, received, cost, discType, discVal, discAmt, newSellPrice, newCat});
   // Clear item fields
-  ['pnp-item','pnp-ordered','pnp-received','pnp-cost','pnp-disc-val'].forEach(id=>{
+  ['pnp-item','pnp-ordered','pnp-received','pnp-cost','pnp-disc-val','pnp-new-sell'].forEach(id=>{
     const el=document.getElementById(id); if(el) el.value='';
   });
   const dd=document.getElementById('pnp-disc-type'); if(dd) dd.value='none';
   const hidId=document.getElementById('pnp-item-id'); if(hidId) hidId.value='';
+  const newCatSel=document.getElementById('pnp-new-cat'); if(newCatSel) newCatSel.value='';
+  const panel=document.getElementById('pnp-new-item-panel'); if(panel) panel.style.display='none';
+  const itemDd=document.getElementById('pnp-item-dd'); if(itemDd) itemDd.style.display='none';
   renderPurchaseCart();
 }
 
@@ -6792,10 +6826,15 @@ function pickSupplierForPurchase(name) {
 
 function searchInvForPurch(term) {
   const dd = document.getElementById('pnp-item-dd');
+  const panel = document.getElementById('pnp-new-item-panel');
+  const hid = document.getElementById('pnp-item-id');
   if (!dd) return;
-  if (!term || term.length < 1) { dd.style.display='none'; return; }
+  if (hid) hid.value = ''; // typing manually invalidates a previous selection
+  if (!term || term.length < 1) { dd.style.display='none'; if(panel) panel.style.display='none'; return; }
   const matches = Object.values(STATE.inventory||{})
     .filter(i=>(i.name||'').toLowerCase().includes(term.toLowerCase())).slice(0,10);
+  const exactMatch = matches.find(i=>(i.name||'').toLowerCase()===term.toLowerCase());
+  if (panel) panel.style.display = exactMatch ? 'none' : 'block';
   if (!matches.length) { dd.style.display='none'; return; }
   dd.style.display='block';
   dd.innerHTML = matches.map(i=>`<div style="padding:8px 10px;cursor:pointer;border-bottom:1px solid var(--border);font-size:13px"
@@ -6810,20 +6849,24 @@ function pickInvForPurch(id, name, cost) {
   const hid  = document.getElementById('pnp-item-id');
   const costF= document.getElementById('pnp-cost');
   const dd   = document.getElementById('pnp-item-dd');
+  const panel= document.getElementById('pnp-new-item-panel');
   if (inp) inp.value = name;
   if (hid) hid.value = id;
   if (dd)  dd.style.display='none';
+  if (panel) panel.style.display='none';
   if (costF && !costF.value) costF.value = cost;
 }
 
 function clearPurchaseForm() {
   ['pnp-sup-input','pnp-sup-val','pnp-inv-num','pnp-date','pnp-item','pnp-item-id',
-   'pnp-ordered','pnp-received','pnp-cost','pnp-disc-val'].forEach(id=>{
+   'pnp-ordered','pnp-received','pnp-cost','pnp-disc-val','pnp-new-sell'].forEach(id=>{
     const el=document.getElementById(id); if(el) el.value='';
   });
   const pt=document.getElementById('pnp-pay-type'); if(pt) pt.value='cash';
   const pm=document.getElementById('pnp-pay-mode'); if(pm) pm.value='cash';
   const dt=document.getElementById('pnp-disc-type'); if(dt) dt.value='none';
+  const newCatSel=document.getElementById('pnp-new-cat'); if(newCatSel) newCatSel.value='';
+  const panel=document.getElementById('pnp-new-item-panel'); if(panel) panel.style.display='none';
   window._purchCart=[];
   renderPurchaseCart();
   showToast('Form cleared.','info');
@@ -6865,14 +6908,14 @@ async function savePurchaseRecord() {
           item.itemId = existingByName._id||existingByName.id;
         } else {
           const newItemId = uid();
-          const newItem = {id:newItemId, name:item.name, cat:'', supplierName:supplier, supId:'',
-            qty:0, minQty:5, costPrice:item.cost, sellPrice:0, cost:item.cost, sell:0,
+          const newItem = {id:newItemId, name:item.name, cat:item.newCat||'', supplierName:supplier, supId:'',
+            qty:0, minQty:5, costPrice:item.cost, sellPrice:item.newSellPrice||0, cost:item.cost, sell:item.newSellPrice||0,
             createdAt:new Date().toISOString(), createdBy:STATE.user?.name||''};
           await fsSave(COLS.INVENTORY, newItemId, newItem);
           if (!STATE.inventory) STATE.inventory={};
           STATE.inventory[newItemId] = {...newItem, _id:newItemId, _savedAt:Date.now()};
           item.itemId = newItemId;
-          logActivity('Item added', `${item.name} — created from Purchase #${purchaseInvoiceNum} (set sell price in Inventory)`, '');
+          logActivity('Item added', `${item.name} — created from Purchase #${purchaseInvoiceNum}`, item.newCat||'');
         }
       }
 
