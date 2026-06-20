@@ -5206,53 +5206,33 @@ function _buildInvoiceHTML(invNum, mode='a4', invTypeOverride='sales', showOutst
   const custId=s0.custId;
   const cust=custId?STATE.customers?.[custId]:null;
 
-  // Compute outstanding LIVE from all sales + payments (avoids drift)
-  let prevBalance = 0;
-  if (showOutstanding && cust) {
-    const custSales = Object.values(STATE.sales||{}).filter(s=>s.custId===custId&&!s._deleted);
-    const invGroups = {};
-    custSales.forEach(s=>{
-      const k=s.invoiceNum;
-      if(!invGroups[k]) invGroups[k]={total:0,payment:s.payment,partPayment:s.partPayment||0,isThisInv:k===invNum};
-      invGroups[k].total+=s.total||0;
-      if(s.partPayment) invGroups[k].partPayment=s.partPayment;
-    });
-    const totalCreditFromSales = Object.values(invGroups).reduce((a,g)=>{
-      if(g.payment==='credit') return a+(g.total||0);
-      if(g.payment==='part'||g.payment==='deposit') return a+Math.max(0,(g.total||0)-(g.partPayment||0));
-      return a;
-    },0);
-    const totalCreditPaid = Object.values(STATE.cashflow||{})
-      .filter(cf=>cf.type==='in'&&cf.custId===custId&&cf.cat==='Credit Payment')
-      .reduce((a,p)=>a+(p.amount||0),0);
-    const totalWriteOff = Object.values(STATE.cashflow||{})
-      .filter(cf=>cf.custId===custId&&cf.cat==='Credit Write-Off')
-      .reduce((a,p)=>a+(p.amount||0),0);
-    const totalOutstanding = Math.max(0, totalCreditFromSales - totalCreditPaid - totalWriteOff);
-    // What this invoice added to credit (unpaid portion)
-    const thisInvoiceOwed = payment==='credit' ? gt
-      : payment==='part' ? Math.max(0, gt-(s0.partPayment||0))
-      : payment==='deposit' ? Math.max(0, gt-(s0.partPayment||0)) // shortfall after deposit
-      : 0;
-    prevBalance = Math.max(0, totalOutstanding - thisInvoiceOwed);
-  }
-
-  // What this invoice added to credit
+  // What this invoice added to credit (used only to split the statement display
+  // into "previous outstanding" + "this invoice" — does not affect the total)
   const thisInvoiceCredit = payment==='credit' ? gt
     : payment==='part' ? Math.max(0, gt-(s0.partPayment||0))
     : payment==='deposit' ? Math.max(0, gt-(s0.partPayment||0))
     : 0;
-  // If change was applied to credit (not given as cash), it reduced the outstanding
+
+  // Outstanding balance is read directly from the customer profile's running
+  // creditBalance, NOT recomputed from local sales docs. Sales are partitioned
+  // by month in Firestore (v2_sales_YYYY_MM) and only the current + previous
+  // month are guaranteed to be loaded locally, so scanning STATE.sales here would
+  // silently miss older unpaid invoices and undercount the balance. The customer
+  // profile's creditBalance is kept up to date on every sale/payment/write-off,
+  // so it's the authoritative source for "what this customer currently owes".
+  const totalOutstanding = (showOutstanding && cust) ? Math.max(0, cust.creditBalance||0) : 0;
+  const prevBalance = (showOutstanding && cust) ? Math.max(0, totalOutstanding - thisInvoiceCredit) : 0;
+
+  // Change disposition — informational line on the receipt only; any change
+  // applied to credit/balance was already reflected in the customer's profile
+  // creditBalance at the time of sale, so it's not subtracted again here.
   const changeAppliedToCredit = (s0.changeDisp==='credit' && (s0.changeAmt||0)>0) ? (s0.changeAmt||0) : 0;
   const changeAppliedToDeposit = (s0.changeDisp==='deposit' && (s0.changeAmt||0)>0) ? (s0.changeAmt||0) : 0;
-  // Any change given back (cash or credit) reduces what the customer owes on the statement
-  // Cash change: customer received it but it came from their overpayment → reduces outstanding
-  // Credit change: explicitly applied to balance → also reduces outstanding
   const totalChangeReduction = s0.changeAmt||0;
   // amountPaid shown in statement = what actually paid THIS invoice (not overpayment)
   const amountPaidOnInvoice = payment==='paid' ? gt : amountPaid;
-  // Total owed after this invoice = prev balance + this invoice credit - all change returned
-  const totalWithBalance = Math.max(0, prevBalance + thisInvoiceCredit - totalChangeReduction);
+  // Total owed = customer profile's current outstanding balance (already includes this invoice)
+  const totalWithBalance = (showOutstanding && cust) ? totalOutstanding : 0;
   const qrUrl=`https://api.qrserver.com/v1/create-qr-code/?size=90x90&data=https://greatchidelectro.com/invoice/${invNum}`;
 
   // Customer signature (saved after verification)
@@ -5571,30 +5551,11 @@ function _showPrintModeModal(invNum) {
   const custName = first?.printName||first?.custName||'';
   const invoiceTotal = items.reduce((a,s)=>a+(s.total||0),0);
 
-  // Compute outstanding balance LIVE (same formula as profile KPI - avoids drift)
-  let outstandingBal = 0;
-  if (cust) {
-    const custSales = Object.values(STATE.sales||{}).filter(s=>s.custId===custId&&!s._deleted);
-    const invGroups = {};
-    custSales.forEach(s=>{
-      const k=s.invoiceNum;
-      if(!invGroups[k]) invGroups[k]={total:0,payment:s.payment,partPayment:s.partPayment||0};
-      invGroups[k].total+=s.total||0;
-      if(s.partPayment) invGroups[k].partPayment=s.partPayment;
-    });
-    const totalCreditFromSales = Object.values(invGroups).reduce((a,g)=>{
-      if(g.payment==='credit') return a+(g.total||0);
-      if(g.payment==='part'||g.payment==='deposit') return a+Math.max(0,(g.total||0)-(g.partPayment||0));
-      return a;
-    },0);
-    const totalCreditPaid = Object.values(STATE.cashflow||{})
-      .filter(cf=>cf.type==='in'&&cf.custId===custId&&cf.cat==='Credit Payment')
-      .reduce((a,p)=>a+(p.amount||0),0);
-    const totalWriteOff = Object.values(STATE.cashflow||{})
-      .filter(cf=>cf.custId===custId&&cf.cat==='Credit Write-Off')
-      .reduce((a,p)=>a+(p.amount||0),0);
-    outstandingBal = Math.max(0, totalCreditFromSales - totalCreditPaid - totalWriteOff);
-  }
+  // Outstanding balance — read directly from the customer profile's running
+  // creditBalance. Sales are partitioned by month in Firestore, so only the
+  // current + previous month are guaranteed to be loaded locally; scanning
+  // STATE.sales here would silently miss older unpaid invoices.
+  const outstandingBal = cust ? Math.max(0, cust.creditBalance||0) : 0;
 
   let suggested, suggestedLabel;
   if (itemCount <= 3)      { suggested='80mm'; suggestedLabel='80mm Thermal'; }
