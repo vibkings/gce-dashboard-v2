@@ -4756,6 +4756,8 @@ function togglePurchBankField() {
     if (modeEl) modeEl.value = 'transfer';
   } else if (type==='pos' && modeEl) {
     modeEl.value = 'pos';
+  } else if (type==='credit' && modeEl) {
+    modeEl.value = 'credit';
   }
 }
 
@@ -4931,7 +4933,7 @@ async function v2SaveSale(mode) {
         profit:(l.price-l.cost)*l.qty - (l.discAmt||0),
         discount:l.discAmt||0,
         payment:(pt==='credit'?'credit':pt==='part'?'part':pt==='deposit'?'deposit':'paid'),
-        payMode:(pt==='credit'||pt==='part'?'cash':pt==='deposit'?'deposit':payMode), splitPayment,
+        payMode:(pt==='credit'?'credit':pt==='part'?'cash':pt==='deposit'?'deposit':payMode), splitPayment,
         partPayment: pt==='part' ? partAmt : pt==='deposit' ? (window._saleDepositPortion||0) : 0, bankName, posName,
         tenderedAmt: tenderedAmt||0, changeAmt: changeAmt||0, changeDisp: changeAmt>0?changeDisp:'cash',
         custId:invoiceCustomer&&(invoiceCustomer._id||invoiceCustomer.id)||null, custName:invoiceCustomer?.name||'Walk-in',
@@ -6591,6 +6593,7 @@ function renderPurchases() {
             <option value="transfer">Bank Transfer</option>
             <option value="pos">POS</option>
             <option value="split">Split</option>
+            <option value="credit">Credit</option>
           </select>
         </div>
         <div id="pnp-bank-wrap" style="display:none">
