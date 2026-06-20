@@ -6406,6 +6406,7 @@ function renderPurchases() {
   const searchVal = document.getElementById('purch-history-search')?.value?.toLowerCase()||'';
   const histGroupsMap = {};
   purchases.forEach(p=>{
+    if (p.fromReturn) return; // a received return-replacement — keeps the original PO frozen, doesn't merge back in
     const k = p.purchaseInvoiceNum || p._id || p.id;
     if (!histGroupsMap[k]) histGroupsMap[k] = {invoiceNum:k, supplier:p.supplier||'', date:p.date||'', payMode:p.payMode||'cash', items:[], itemNames:[], totalCost:0, totalQty:0, pendingQty:0, pendingCost:0};
     histGroupsMap[k].items.push(p);
@@ -7096,7 +7097,8 @@ async function receivePendingItem(pendId) {
     const month = now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
     const purch = {id:purchId, purchaseInvoiceNum:pend.purchaseInvoiceNum, itemName:pend.itemName,
       itemId:pend.itemId||null, supplier:pend.supplier, qty, costPrice:pend.costPrice,
-      totalCost:qty*pend.costPrice, payMode:pend.payMode, date, month, by:STATE.user?.name};
+      totalCost:qty*pend.costPrice, payMode:pend.payMode, date, month, by:STATE.user?.name,
+      fromReturn:pend.fromReturn||false, returnId:pend.returnId||null};
     await fsSave('v2_purchases', purchId, purch);
     if (!STATE.purchases) STATE.purchases={};
     STATE.purchases[purchId] = {...purch, _id:purchId,_savedAt:Date.now()};
@@ -7144,7 +7146,8 @@ async function receiveAllNow(invoiceNum) {
       const month = now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
       const purch = {id:purchId, purchaseInvoiceNum:pend.purchaseInvoiceNum, itemName:pend.itemName,
         itemId:pend.itemId||null, supplier:pend.supplier, qty, costPrice:pend.costPrice,
-        totalCost:qty*pend.costPrice, payMode:pend.payMode, date, month, by:STATE.user?.name};
+        totalCost:qty*pend.costPrice, payMode:pend.payMode, date, month, by:STATE.user?.name,
+        fromReturn:pend.fromReturn||false, returnId:pend.returnId||null};
       await fsSave('v2_purchases', purchId, purch);
       if (!STATE.purchases) STATE.purchases={};
       STATE.purchases[purchId] = {...purch, _id:purchId,_savedAt:Date.now()};
@@ -7361,6 +7364,7 @@ function _buildPurchaseOrderHTML(invoiceNum, includeButtons, autoPrint) {
   // cart entries) for the same item must not show as repeated rows.
   const groupedItems = {};
   purchItems.forEach(p=>{
+    if (p.fromReturn) return; // a received return-replacement — keeps the original PO frozen
     const key = p.itemName||p.name||'';
     if (!groupedItems[key]) groupedItems[key] = {name:key, supplied:0, pending:0, cost:0, total:0};
     groupedItems[key].supplied += p.qty||0;
