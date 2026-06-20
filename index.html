@@ -8580,6 +8580,16 @@ function renderReports() {
       transferSales += amtReceived;
     }
   });
+  // Credit payments collected during this period — bucket by the mode the
+  // customer actually paid with, same as Daily Closing.
+  Object.values(STATE.cashflow||{})
+    .filter(c=>c.type==='in'&&c.cat==='Credit Payment'&&inRange(c.date,c.month))
+    .forEach(c=>{
+      const m = c.payMode||'cash';
+      if (m==='pos') posSales += c.amount||0;
+      else if (m==='transfer') transferSales += c.amount||0;
+      else cashSales += c.amount||0;
+    });
 
   // Top selling items
   const itemTotals = {};
