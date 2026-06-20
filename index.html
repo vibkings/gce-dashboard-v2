@@ -3740,7 +3740,7 @@ function renderSales() {
           <td style="text-align:center;color:#dc2626;font-weight:700">${pending}</td>
           <td><div style="background:#e5e7eb;border-radius:4px;height:8px;width:80px;overflow:hidden;display:inline-block;vertical-align:middle">
             <div style="width:${pct2}%;background:${barColor};height:100%;border-radius:4px"></div></div> ${pct2}%</td>
-          <td>${pending>0?`<button class="btn btn-sm" onclick="showSupplyQtyModal('${g.invoiceNum}','${s._id||s.id}')" style="color:#16a34a;border-color:#86efac;font-size:11px">✓ Supply</button>`:'<span style="color:#16a34a;font-size:11px">✓ Done</span>'}</td>
+          <td style="white-space:nowrap">${pending>0?`<button class="btn btn-sm" onclick="showSupplyQtyModal('${g.invoiceNum}','${s._id||s.id}')" style="color:#16a34a;border-color:#86efac;font-size:11px">✓ Supply</button> <button class="btn btn-sm" onclick="showChangeItemModal('${g.invoiceNum}','${s._id||s.id}')" style="color:#1d4ed8;border-color:#93c5fd;font-size:11px">🔄 Change Item</button>`:'<span style="color:#16a34a;font-size:11px">✓ Done</span>'}</td>
         </tr>`;
       }).join('');
       return `<tr style="background:#fef9c3">
@@ -4378,6 +4378,196 @@ async function supplyAllNow(invoiceNum) {
     logActivity('Stock supplied', `Inv #${invoiceNum} — Supply all (${suppliedCount} lines)${stillShort>0?`, ${stillShort} still short`:''}`, '');
     renderSales(); updateInventoryBadge();
   } catch(e) { setSyncStatus('error'); showToast('Failed.','error'); }
+}
+
+// ── Pending Supply: change a pending item to a different item ──
+function _ciCalcDiff(s, qty, newPrice) {
+  const pendingQty = s.pendingQty!=null ? s.pendingQty : Math.max(0,(s.qty||0)-(s.suppliedQty||0));
+  const newQtyForOriginal = (s.suppliedQty||0) + (pendingQty - qty);
+  const newPendingForOriginal = pendingQty - qty;
+  const oldTotal = s.total||0;
+  const newTotalForOriginal = Math.round((s.salePrice||s.unitPrice||0)*newQtyForOriginal*(1-(s.discPct||0)/100));
+  const removedAmount = oldTotal - newTotalForOriginal;
+  const newAmount = Math.round((newPrice||0)*qty);
+  const diff = newAmount - removedAmount;
+  return {pendingQty, newQtyForOriginal, newPendingForOriginal, oldTotal, newTotalForOriginal, removedAmount, newAmount, diff};
+}
+
+function showChangeItemModal(invoiceNum, saleId) {
+  const s = STATE.sales?.[saleId];
+  if (!s) { showToast('Sale record not found.','error'); return; }
+  const pendingQty = s.pendingQty!=null ? s.pendingQty : Math.max(0,(s.qty||0)-(s.suppliedQty||0));
+  if (pendingQty<=0) { showToast('Nothing pending for this item.','info'); return; }
+  window._ciState = {invoiceNum, saleId, qty:pendingQty, newItemId:'', newPrice:0, settleMode:'cash', payMode:'cash', bankName:'', posName:''};
+  renderChangeItemModal();
+}
+
+function renderChangeItemModal() {
+  const st = window._ciState; if (!st) return;
+  const s = STATE.sales?.[st.saleId];
+  if (!s) { closeModal(); return; }
+  const calc0 = _ciCalcDiff(s, 1, 0); // just to get pendingQty cheaply
+  const pendingQty = calc0.pendingQty;
+  if (st.qty > pendingQty) st.qty = pendingQty;
+  if (st.qty < 1) st.qty = 1;
+
+  const items = Object.values(STATE.inventory||{}).filter(i=>(i._id||i.id)!==s.itemId).sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+  const newItem = st.newItemId ? STATE.inventory?.[st.newItemId] : null;
+  if (newItem && !st.newPrice) st.newPrice = newItem.sell||newItem.sellPrice||0;
+  const itemOpts = `<option value="">-- Select replacement item --</option>` +
+    items.map(i=>`<option value="${i._id||i.id}" ${st.newItemId===(i._id||i.id)?'selected':''}>${esc(i.name)} (stock: ${i.qty||0}, ₦${(i.sell||i.sellPrice||0).toLocaleString()})</option>`).join('');
+
+  const custId = s.custId;
+  const customer = custId ? STATE.customers?.[custId] : null;
+  const calc = newItem ? _ciCalcDiff(s, st.qty, st.newPrice) : null;
+  const avail = newItem?.qty||0;
+  const supplyNowQty = newItem ? Math.min(avail, st.qty) : 0;
+  const stillPending = newItem ? st.qty - supplyNowQty : 0;
+
+  const body = `
+    <div style="font-size:13px;margin-bottom:10px">Invoice #${esc(st.invoiceNum)} &nbsp;·&nbsp; Original item: <b>${esc(s.name)}</b> &nbsp;·&nbsp; Pending: <b>${pendingQty}</b></div>
+    <div class="form-grid c2" style="margin-bottom:10px">
+      <div class="form-group"><label>Qty to change <span class="req">*</span></label>
+        <input class="form-input" id="ci-qty" type="number" min="1" max="${pendingQty}" value="${st.qty}" onchange="window._ciState.qty=parseInt(this.value)||1;renderChangeItemModal()">
+      </div>
+      <div class="form-group" style="grid-column:1/-1"><label>Replacement item <span class="req">*</span></label>
+        <select class="form-input" id="ci-item" onchange="window._ciState.newItemId=this.value;window._ciState.newPrice=0;renderChangeItemModal()">${itemOpts}</select>
+      </div>
+      ${newItem?`<div class="form-group"><label>Unit price (₦)</label><input class="form-input" id="ci-price" type="number" min="0" value="${st.newPrice}" onchange="window._ciState.newPrice=parseFloat(this.value)||0;renderChangeItemModal()"></div>`:''}
+    </div>
+    ${newItem?`
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:12.5px">
+        <div>Removing ${st.qty} × ${esc(s.name)} = <b>₦${calc.removedAmount.toLocaleString()}</b></div>
+        <div>Adding ${st.qty} × ${esc(newItem.name)} = <b>₦${calc.newAmount.toLocaleString()}</b></div>
+        <div style="border-top:1px dashed var(--border);margin-top:6px;padding-top:6px;font-weight:700;color:${calc.diff>0?'#dc2626':calc.diff<0?'#15803d':'var(--text2)'}">
+          ${calc.diff===0?'No price difference':calc.diff>0?`Customer owes ₦${calc.diff.toLocaleString()} more`:`Refund / credit due: ₦${Math.abs(calc.diff).toLocaleString()}`}
+        </div>
+        ${avail<st.qty?`<div style="margin-top:6px;color:#d97706">⚠️ Only ${avail} of "${esc(newItem.name)}" in stock — ${supplyNowQty} will be supplied now, ${stillPending} will remain pending.</div>`:`<div style="margin-top:6px;color:#15803d">✓ ${avail} in stock — all ${st.qty} will be supplied now.</div>`}
+      </div>
+      ${calc.diff!==0?`
+      <div class="form-group" style="margin-bottom:10px">
+        <label>How should the difference be settled?</label>
+        <select class="form-input" id="ci-settle" onchange="window._ciState.settleMode=this.value;renderChangeItemModal()">
+          <option value="cash" ${st.settleMode==='cash'?'selected':''}>${calc.diff>0?'Collect cash today':'Refund cash today'}</option>
+          <option value="balance" ${st.settleMode==='balance'?'selected':''} ${!customer?'disabled':''}>Adjust customer balance${!customer?' (no registered customer on this invoice)':''}</option>
+        </select>
+      </div>
+      ${st.settleMode==='cash'?`
+      <div class="form-group"><label>Payment mode</label>
+        <select class="form-input" id="ci-paymode" onchange="window._ciState.payMode=this.value;renderChangeItemModal()">
+          <option value="cash" ${st.payMode==='cash'?'selected':''}>Cash</option>
+          <option value="transfer" ${st.payMode==='transfer'?'selected':''}>Transfer</option>
+          <option value="pos" ${st.payMode==='pos'?'selected':''}>POS</option>
+        </select>
+      </div>
+      ${st.payMode==='transfer'?`<div class="form-group"><label>Bank</label><select class="form-input" id="ci-bank" onchange="window._ciState.bankName=this.value">${bankSelectOpts('transfer',st.bankName)}</select></div>`:''}
+      ${st.payMode==='pos'?`<div class="form-group"><label>POS terminal</label><select class="form-input" id="ci-pos" onchange="window._ciState.posName=this.value">${bankSelectOpts('pos',st.posName)}</select></div>`:''}
+      `:''}
+      `:''}
+    `:`<div style="color:var(--text3);font-size:13px;padding:6px 0">Select a replacement item above.</div>`}
+  `;
+  showModal('🔄 Change Pending Item', body, [
+    {label:'Cancel', action:'close', style:''},
+    {label:'✓ Confirm Exchange', action:'confirmChangeItem()', style:'btn-primary'}
+  ]);
+}
+
+async function confirmChangeItem() {
+  const st = window._ciState; if (!st) return;
+  const s = STATE.sales?.[st.saleId];
+  if (!s) { showToast('Sale record not found.','error'); return; }
+  const newItem = STATE.inventory?.[st.newItemId];
+  if (!newItem) { showToast('Select a replacement item.','error'); return; }
+  const calc = _ciCalcDiff(s, st.qty, st.newPrice||0);
+  if (!st.qty || st.qty<1 || st.qty>calc.pendingQty) { showToast('Enter a valid quantity (up to the pending amount).','error'); return; }
+
+  const custId = s.custId;
+  const customer = custId ? STATE.customers?.[custId] : null;
+  if (calc.diff!==0 && st.settleMode==='balance' && !customer) { showToast('No registered customer on this invoice — choose cash settlement instead.','error'); return; }
+
+  setSyncStatus('saving');
+  try {
+    // 1) Shrink/close the original pending line
+    const fullyExchanged = calc.newQtyForOriginal===0;
+    const updOrig = {...s,
+      qty: calc.newQtyForOriginal,
+      pendingQty: calc.newPendingForOriginal,
+      pendingSupply: calc.newPendingForOriginal>0,
+      supplyStatus: calc.newPendingForOriginal>0?'pending':'supplied',
+      voided: fullyExchanged ? true : (s.voided||false),
+      total: calc.newTotalForOriginal,
+      discAmt: Math.round((s.salePrice||s.unitPrice||0)*calc.newQtyForOriginal*((s.discPct||0)/100)),
+      profit: ((s.salePrice||s.unitPrice||0)-(s.cost||0))*calc.newQtyForOriginal - Math.round((s.salePrice||s.unitPrice||0)*calc.newQtyForOriginal*((s.discPct||0)/100))
+    };
+    await saveSaleDoc(s.month, st.saleId, updOrig);
+    STATE.sales[st.saleId] = {...updOrig, _id:st.saleId, _savedAt:Date.now()};
+
+    // 2) Supply the replacement now, as much as stock allows
+    const avail = newItem.qty||0;
+    const supplyNowQty = Math.min(avail, st.qty);
+    const stillPendingQty = st.qty - supplyNowQty;
+    if (supplyNowQty>0) {
+      const updInv = {...newItem, qty:Math.max(0, avail-supplyNowQty)};
+      await fsSave(COLS.INVENTORY, st.newItemId, updInv);
+      STATE.inventory[st.newItemId] = {...updInv, _id:st.newItemId, _savedAt:Date.now()};
+    }
+
+    // 3) Create the new line for the replacement item, on the same invoice
+    const newSaleId = uid();
+    const newSale = {
+      id:newSaleId, invoiceId:s.invoiceId, invoiceNum:s.invoiceNum, name:newItem.name, itemId:st.newItemId,
+      qty:st.qty, salePrice:st.newPrice||0, unitPrice:st.newPrice||0, cost:newItem.cost||0,
+      discPct:0, discAmt:0, total:calc.newAmount,
+      profit:((st.newPrice||0)-(newItem.cost||0))*st.qty,
+      payment:s.payment, payMode:s.payMode, splitPayment:s.splitPayment,
+      partPayment:0, bankName:s.bankName, posName:s.posName,
+      custId:s.custId, custName:s.custName, printName:s.printName,
+      date:s.date, month:s.month, seller:STATE.user?.name, deliveryAddr:s.deliveryAddr,
+      dueDate:s.dueDate||'',
+      suppliedQty:supplyNowQty, pendingQty:stillPendingQty,
+      supplyStatus: stillPendingQty>0?'pending':'supplied',
+      pendingSupply: stillPendingQty>0,
+      exchangedFrom: s.name
+    };
+    await saveSaleDoc(s.month, newSaleId, newSale);
+    STATE.sales[newSaleId] = {...newSale, _id:newSaleId, _savedAt:Date.now()};
+
+    // 4) Settle the price difference, dated today
+    if (calc.diff!==0) {
+      if (st.settleMode==='balance' && customer) {
+        const newBal = (customer.creditBalance||0)+calc.diff;
+        const updCust = {...customer, creditBalance:newBal};
+        await fsSave(COLS.CUSTOMERS, custId, updCust);
+        STATE.customers[custId] = {...updCust, _id:custId, _savedAt:Date.now()};
+      } else {
+        const now=new Date(); const date=now.toLocaleDateString(); const month=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
+        const cfId=uid();
+        const cf = {
+          id:cfId,
+          type: calc.diff>0?'in':'out',
+          cat: calc.diff>0?'Sales (Item Exchange)':'Sales Refund (Item Exchange)',
+          desc:`Item exchange — Inv #${s.invoiceNum} — ${s.name} → ${newItem.name} (${st.qty} units)`,
+          amount: Math.abs(calc.diff),
+          payMode: st.payMode, bankName: st.bankName||'', posName: st.posName||'',
+          custId: custId||null, custName: s.custName||'Walk-in',
+          date, month, invoiceNum:s.invoiceNum, by:STATE.user?.name
+        };
+        await fsSave(COLS.CASHFLOW, cfId, cf);
+        if (!STATE.cashflow) STATE.cashflow={};
+        STATE.cashflow[cfId] = {...cf, _id:cfId, _savedAt:Date.now()};
+      }
+    }
+
+    closeModal();
+    setSyncStatus('synced');
+    showToast(`✅ Exchanged ${st.qty} × ${s.name} for ${newItem.name}.${calc.diff!==0?` Difference of ₦${Math.abs(calc.diff).toLocaleString()} ${calc.diff>0?'collected':'refunded'}${st.settleMode==='balance'?' to balance':' today'}.`:''}`, 'success');
+    logActivity('Item exchange', `Inv #${s.invoiceNum}: ${st.qty}× ${s.name} → ${newItem.name}${calc.diff!==0?`, diff ₦${calc.diff}`:''}`, '');
+    window._ciState = null;
+    renderSales(); updateInventoryBadge();
+  } catch(e) {
+    setSyncStatus('error');
+    showToast('Failed to exchange item: '+e.message,'error');
+  }
 }
 
 function v2RemoveInvItem(idx) { invoiceItems.splice(idx,1); renderSales(); }
