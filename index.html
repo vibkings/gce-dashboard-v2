@@ -2642,6 +2642,17 @@ function _clearSearchInput(inputId, clearId) {
   if (clr) clr.classList.remove('show');
 }
 
+// Today's date as YYYY-MM-DD in LOCAL time (not UTC). Using
+// new Date().toISOString() for this is a common bug: in timezones ahead of
+// UTC (e.g. WAT, UTC+1), the local date rolls over up to an hour before the
+// UTC date does, so right after local midnight, toISOString() would still
+// give yesterday's date — silently filing today's payment/record under the
+// wrong day.
+function _todayLocalISO() {
+  const d = new Date();
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+}
+
 function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2,8);
 }
@@ -3589,7 +3600,7 @@ function exportInventory() {
   const blob = new Blob([csv], {type:'text/csv'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = `gce_inventory_${new Date().toISOString().slice(0,10)}.csv`;
+  a.download = `gce_inventory_${_todayLocalISO()}.csv`;
   a.click();
   showToast(`📋 Exported ${items.length} items.`,'success');
 }
@@ -8484,7 +8495,7 @@ function exportExpensesCSV() {
   const blob = new Blob([csv],{type:'text/csv'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = `GCE_Expenses_${new Date().toISOString().slice(0,10)}.csv`;
+  a.download = `GCE_Expenses_${_todayLocalISO()}.csv`;
   a.click();
   showToast('📥 Expenses exported to CSV','success');
 }
@@ -9768,6 +9779,33 @@ function renderClosing() {
       </table></div>`
       :'<div class="empty-state" style="padding:1.5rem"><div class="empty-state-icon">🧾</div><div>No sales recorded for this date</div></div>'}
     </div>
+
+    <!-- Credit payments received — explains the extra cash behind the Payment Breakdown totals -->
+    ${creditPayments.length?`
+    <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px 16px;margin-bottom:1.25rem">
+      <div style="font-size:13px;font-weight:700;color:var(--text1);margin-bottom:4px;display:flex;align-items:center;gap:6px">💳 Credit Payments Received (${creditPayments.length})</div>
+      <div style="font-size:11.5px;color:var(--text3);margin-bottom:12px">Money collected today from customers paying off existing balances — included in the Cash/POS/Transfer totals above.</div>
+      <div class="tbl-wrap" style="border-radius:var(--radius);border:1px solid var(--border)"><table>
+        <thead><tr>
+          <th style="width:36px">#</th><th>CUSTOMER</th><th>MODE</th><th class="td-right">AMOUNT</th>
+        </tr></thead>
+        <tbody>${creditPayments.map((c,i)=>{
+          const cust = c.custId ? STATE.customers?.[c.custId] : null;
+          const custName = cust?.name || (c.desc||'').replace(/^Credit payment\s*[-—]\s*/i,'').split(/\s*[-—]\s*/)[0] || 'Customer';
+          const modeLabel = {cash:'Cash',transfer:`Transfer${c.bankName?' ('+esc(c.bankName)+')':''}`,pos:`POS${c.bankName?' ('+esc(c.bankName)+')':''}`}[c.payMode] || (c.payMode?c.payMode.charAt(0).toUpperCase()+c.payMode.slice(1):'Cash');
+          return `<tr style="border-bottom:1px solid var(--border)">
+            <td style="color:var(--text3);font-size:12px">${i+1}</td>
+            <td style="font-size:12px">${esc(custName)}</td>
+            <td style="font-size:11px;color:var(--text3)">${modeLabel}</td>
+            <td class="td-right" style="font-weight:600;color:var(--success)">${fmt(c.amount||0)}</td>
+          </tr>`;
+        }).join('')}</tbody>
+        <tfoot><tr style="background:var(--surface);font-weight:700">
+          <td colspan="3" style="padding:8px 12px">TOTAL</td>
+          <td class="td-right" style="padding:8px 12px;color:var(--success)">${fmt(creditPayIn)}</td>
+        </tr></tfoot>
+      </table></div>
+    </div>`:''}
   `;
 }
 
@@ -12335,7 +12373,7 @@ function exportActivityLogCSV(){
   const log=Object.values(STATE.activityLog||{}).sort((a,b)=>(b.time||b.date||'').localeCompare(a.time||a.date||''));
   const csv=['DATE,TIME,ACTION,DETAIL,EXTRA,BY',...log.map(l=>[l.date||'',l.time||'',`"${(l.action||'').replace(/"/g,'""')}"`,`"${(l.detail||'').replace(/"/g,'""')}"`,`"${(l.extra||'').replace(/"/g,'""')}"`,l.by||l.user||''].join(','))].join('\n');
   const blob=new Blob([csv],{type:'text/csv'});
-  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`gce-activity-log-${new Date().toISOString().slice(0,10)}.csv`;a.click();
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`gce-activity-log-${_todayLocalISO()}.csv`;a.click();
   showToast(`Exported ${log.length} entries.`,'success');
 }
 
@@ -12797,7 +12835,7 @@ async function renderCustomerProfile(id){
         <div id="cpr-bank-wrap" style="display:none"><div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);margin-bottom:3px" id="cpr-bank-label">BANK</div>
           <select class="form-input" id="cpr-bank" style="width:150px">${bankSelectOpts('transfer')}</select></div>
         <div><div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);margin-bottom:3px">PAYMENT DATE</div>
-          <input class="form-input" id="cpr-date" type="date" style="width:150px" value="${new Date().toISOString().slice(0,10)}"></div>
+          <input class="form-input" id="cpr-date" type="date" style="width:150px" value="${_todayLocalISO()}"></div>
         <button class="btn btn-primary" onclick="recordInlineCredit('${id}')" style="background:#22c55e;border-color:#22c55e">✓ Record payment</button>
       </div>
       <div id="cpr-calc" style="font-size:12px;color:var(--text3);margin-top:6px"></div>`:``}
@@ -13003,7 +13041,7 @@ function showFullPaymentModal(id) {
       </div>
       <div class="form-group">
         <label>Date</label>
-        <input class="form-input" id="fp-date" type="date" value="${new Date().toISOString().slice(0,10)}">
+        <input class="form-input" id="fp-date" type="date" value="${_todayLocalISO()}">
       </div>
       <div class="form-group">
         <label>Note (optional)</label>
@@ -13021,7 +13059,7 @@ async function saveFullPayment(id){
   const mode = document.getElementById('fp-mode')?.value||'cash';
   const bankName = document.getElementById('fp-bank')?.value||'';
   const note = document.getElementById('fp-note')?.value.trim()||'';
-  const dateStr = document.getElementById('fp-date')?.value||new Date().toISOString().slice(0,10);
+  const dateStr = document.getElementById('fp-date')?.value||_todayLocalISO();
   const dp = dateStr.split('-');
   const dateObj = new Date(+dp[0],+dp[1]-1,+dp[2]);
   const date = dateObj.toLocaleDateString();
@@ -13227,7 +13265,7 @@ function showApplyDepositModal(id) {
           </div>
         </div>
         <div class="form-group"><label>Date</label>
-          <input class="form-input" id="ad-date" type="date" value="${new Date().toISOString().slice(0,10)}">
+          <input class="form-input" id="ad-date" type="date" value="${_todayLocalISO()}">
         </div>
         <div class="form-group"><label>Note (optional)</label>
           <input class="form-input" id="ad-note" placeholder="Optional">
@@ -13276,7 +13314,7 @@ async function saveApplyDeposit(id) {
   const depositPortion = Math.min(availDeposit, invoiceAmt);
   const shortfall = Math.max(0, invoiceAmt - depositPortion);
   const invoiceNum = document.getElementById('ad-invoice-num')?.value.trim()||'';
-  const dateStr = document.getElementById('ad-date')?.value||new Date().toISOString().slice(0,10);
+  const dateStr = document.getElementById('ad-date')?.value||_todayLocalISO();
   const note = document.getElementById('ad-note')?.value.trim()||'';
   const dp = dateStr.split('-');
   const dateObj = new Date(+dp[0],+dp[1]-1,+dp[2]);
@@ -14351,7 +14389,7 @@ async function addBank(){
 function exportBackup(){
   const data={inventory:STATE.inventory,sales:STATE.sales,purchases:STATE.purchases,customers:STATE.customers,suppliers:STATE.suppliers,cashflow:STATE.cashflow,banks:STATE.banks,settings:STATE.settings,salesReturns:STATE.salesReturns,pendingDeliveries:STATE.pendingDeliveries,activityLog:STATE.activityLog,invCounter:STATE.invCounter,exportedAt:new Date().toISOString(),version:'v2'};
   const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
-  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`gce-v2-backup-${new Date().toISOString().slice(0,10)}.json`;a.click();
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`gce-v2-backup-${_todayLocalISO()}.json`;a.click();
   const info=`Last backup saved: ${new Date().toLocaleString()} · Items: ${Object.keys(STATE.inventory||{}).length} inventory · Sales: ${Object.keys(STATE.sales||{}).length} records`;
   STATE.lastBackupInfo=info;localStorage.setItem('gce_lastBackup',info);
   document.getElementById('backup-info').textContent=info;
@@ -14577,7 +14615,7 @@ function showSupplierDepositModal(supId) {
       </div>
       <div class="form-group">
         <label>Date</label>
-        <input class="form-input" id="sdep-date" type="date" value="${new Date().toISOString().slice(0,10)}">
+        <input class="form-input" id="sdep-date" type="date" value="${_todayLocalISO()}">
       </div>
       <div class="form-group">
         <label>Payment mode</label>
@@ -14608,7 +14646,7 @@ async function saveSupplierDeposit(supId) {
   if (!s) return;
   const amount = parseFloat(document.getElementById('sdep-amount')?.value) || 0;
   if (!amount || amount <= 0) { showToast('Enter a valid amount.', 'error'); return; }
-  const date = document.getElementById('sdep-date')?.value || new Date().toISOString().slice(0,10);
+  const date = document.getElementById('sdep-date')?.value || _todayLocalISO();
   const mode = document.getElementById('sdep-mode')?.value || 'cash';
   const bankName = document.getElementById('sdep-bank')?.value || '';
   const note = document.getElementById('sdep-note')?.value?.trim() || '';
@@ -14693,7 +14731,7 @@ function renderHeldChange() {
       </div>
       <div class="kpi-card" style="border-left:3px solid var(--success)">
         <div class="kpi-label" style="color:var(--success)">SETTLED TODAY</div>
-        <div class="kpi-value" style="font-size:26px;font-weight:800">${settled.filter(e=>e.settledDate===new Date().toISOString().slice(0,10)).length}</div>
+        <div class="kpi-value" style="font-size:26px;font-weight:800">${settled.filter(e=>e.settledDate===_todayLocalISO()).length}</div>
         <div class="kpi-sub">${settled.length} total settled</div>
       </div>
       <div class="kpi-card" style="border-left:3px solid var(--warning)">
@@ -14752,7 +14790,7 @@ async function addHeldChange() {
   const invoiceNum = document.getElementById('hc-invoice')?.value?.trim() || '';
   const note = document.getElementById('hc-note')?.value?.trim() || '';
   if (!amount || amount <= 0) { showToast('Enter a valid amount.', 'error'); return; }
-  const date = new Date().toISOString().slice(0,10);
+  const date = _todayLocalISO();
   const month = date.slice(0,7);
   setSyncStatus('saving');
   try {
@@ -14775,7 +14813,7 @@ async function settleHeldChange(id) {
   if (!confirm(`Mark ${fmt(entry.amount)} for ${entry.custName||'Walk-in'} as settled (change returned)?`)) return;
   setSyncStatus('saving');
   try {
-    const updated = {...entry, status:'settled', settledDate:new Date().toISOString().slice(0,10), settledBy:STATE.user?.name||''};
+    const updated = {...entry, status:'settled', settledDate:_todayLocalISO(), settledBy:STATE.user?.name||''};
     await fsSave(COLS.HELDCHANGE, id, updated);
     STATE.heldChange[id] = {...updated, _id: id,_savedAt:Date.now()};
     setSyncStatus('synced');
