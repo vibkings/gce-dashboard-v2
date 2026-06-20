@@ -1380,6 +1380,7 @@ const STATE = {
   borrows:            {},
   adjLog:             {},
   salesReturns:       {},
+  purchaseReturns:    {},
   demoSales:          {},
   stockCounts:        {},
   recycleBin:         {},
@@ -1441,6 +1442,7 @@ const COLS = {
   WAREHOUSE:  'v2_warehouse',
   SETTINGS:   'v2_settings',
   SALESRETURNS:'v2_salesReturns',
+  PURCHASERETURNS:'v2_purchaseReturns',
   PROFORMAS:  'v2_proformas',
   ADJLOG:     'v2_adjLog',
   BORROWS:    'v2_borrows',
@@ -1530,7 +1532,7 @@ function _saveSyncQueue() {
 
 // Collections where each entry is unique (append-only, never deduplicate)
 const APPEND_ONLY_COLS = new Set([
-  'v2_sales', 'v2_cashflow', 'v2_activityLog', 'v2_adjLog', 'v2_salesReturns',
+  'v2_sales', 'v2_cashflow', 'v2_activityLog', 'v2_adjLog', 'v2_salesReturns', 'v2_purchaseReturns',
   'v2_purchases', 'v2_proformas', 'v2_borrows'
 ]);
 // Monthly sales collections also append-only
@@ -2078,6 +2080,7 @@ async function runFullBiSync() {
     [COLS.BORROWS,      'borrows'],
     [COLS.PROFORMAS,    'proformas'],
     [COLS.SALESRETURNS, 'salesReturns'],
+    [COLS.PURCHASERETURNS, 'purchaseReturns'],
     [COLS.HELDCHANGE,   'heldChange'],
     [COLS.USERS,        'users'],
   ];
@@ -2155,6 +2158,7 @@ async function initDataLayer() {
     loadCollection(COLS.ADJLOG,       'adjLog'),
     loadCollection('v2_pendingDeliveries', 'pendingDeliveries'),
     loadCollection(COLS.SALESRETURNS, 'salesReturns'),
+    loadCollection(COLS.PURCHASERETURNS, 'purchaseReturns'),
     loadCollection(COLS.HELDCHANGE,   'heldChange'),
   ]);
   await withTimeout(mainLoadPromise, TIMEOUT);
@@ -2334,6 +2338,7 @@ function startExtraListeners() {
     [COLS.BORROWS,       'borrows'],
     [COLS.PROFORMAS,     'proformas'],
     [COLS.SALESRETURNS,  'salesReturns'],
+    [COLS.PURCHASERETURNS,'purchaseReturns'],
   ];
   SLOW_COLS.forEach(([col, key]) => {
     _refreshIntervals[col] = setInterval(() => _refreshFromFirestore(col, key), intervals.slow);
@@ -6444,6 +6449,7 @@ function renderPurchases() {
         <button class="btn btn-sm" onclick="viewPurchaseOrder('${esc(g.invoiceNum)}')" style="color:var(--primary);border-color:#b6d4fe;font-size:11px">View</button>
         <button class="btn btn-sm" onclick="printPurchaseOrder('${esc(g.invoiceNum)}')" style="color:#1a237e;border-color:#93c5fd;font-size:11px">Print</button>
         <button class="btn btn-sm" onclick="showSharePurchaseOrderModal('${esc(g.invoiceNum)}')" style="color:#15803d;border-color:#bbf7d0;font-size:11px">📤 Share</button>
+        <button class="btn btn-sm" onclick="showReturnPurchaseModal('${esc(g.invoiceNum)}')" style="color:#c0392b;border-color:#f5c2c7;font-size:11px">↩ Return</button>
       </td>
     </tr>`;
   }).join('');
@@ -6721,6 +6727,32 @@ function renderPurchases() {
               <td style="font-size:12px">${esc(p.itemName||p.name||'')}</td>
               <td style="text-align:center;font-weight:700;color:#16a34a">${p.qty||0}</td>
             </tr>`).join('');
+          })()}</tbody>
+        </table>
+      </div>
+
+      <!-- Purchase Returns — every return, whether for exchange or refunded completely -->
+      <div style="font-size:13px;font-weight:700;color:var(--text1);margin:1.5rem 0 10px;display:flex;align-items:center;gap:6px">↩ Purchase Returns</div>
+      <div class="tbl-wrap" style="border-radius:var(--radius);border:1px solid var(--border)">
+        <table>
+          <thead><tr><th>DATE</th><th>PO #</th><th>ITEM</th><th style="text-align:center">QTY</th><th>TYPE</th><th>SETTLEMENT</th></tr></thead>
+          <tbody>${(()=>{
+            const retLog = Object.values(STATE.purchaseReturns||{}).sort((a,b)=>(new Date(b.date||0).getTime()||0)-(new Date(a.date||0).getTime()||0)).slice(0,150);
+            if (!retLog.length) return '<tr><td colspan="6"><div class="empty-state"><div class="empty-state-icon">↩</div><div>No returns recorded yet.</div></div></td></tr>';
+            return retLog.map(r=>{
+              const typeLabel = r.returnType==='exchange' ? `<span class="badge badge-warning" style="font-size:10px">🔄 Exchange</span>` : `<span class="badge badge-danger" style="font-size:10px">✕ Complete</span>`;
+              const settleLabel = r.returnType==='exchange' ? `Back to Pending Deliveries`
+                : r.settleMode==='balance' ? `Reduced supplier balance (${fmt(r.qty*r.costPrice)})`
+                : `Cash refund (${fmt(r.qty*r.costPrice)}, ${(r.payMode||'cash').toUpperCase()})`;
+              return `<tr>
+                <td style="font-size:12px;color:var(--text3)">${r.date||''}</td>
+                <td><b>PO #${esc(r.purchaseInvoiceNum||'—')}</b></td>
+                <td style="font-size:12px">${esc(r.itemName||'')}</td>
+                <td style="text-align:center;font-weight:700;color:var(--danger)">${r.qty||0}</td>
+                <td>${typeLabel}</td>
+                <td style="font-size:11px;color:var(--text3)">${settleLabel}</td>
+              </tr>`;
+            }).join('');
           })()}</tbody>
         </table>
       </div>
@@ -7153,6 +7185,162 @@ async function cancelPendingItem(pendId) {
     showToast('Pending delivery cancelled.','info');
     renderPurchases();
   } catch(e) { setSyncStatus('error'); showToast('Failed.','error'); }
+}
+
+// ── Purchase Return: Exchange (goes back to Pending Deliveries) or
+// Complete Return (reduce supplier balance, or cash refund) ──
+function _receivedItemsForPO(invoiceNum) {
+  // Items actually received for this PO, grouped by name, with total qty
+  // and a weighted-average cost — only these can be returned.
+  const grouped = {};
+  Object.values(STATE.purchases||{})
+    .filter(p=>(p.purchaseInvoiceNum||p._id||p.id)===invoiceNum)
+    .forEach(p=>{
+      const key = p.itemName||p.name||'';
+      if (!grouped[key]) grouped[key] = {name:key, itemId:p.itemId||null, qty:0, costSum:0};
+      grouped[key].qty += p.qty||0;
+      grouped[key].costSum += (p.costPrice||0)*(p.qty||0);
+    });
+  return Object.values(grouped).map(g=>({name:g.name, itemId:g.itemId, qty:g.qty, avgCost:g.qty?Math.round(g.costSum/g.qty):0}));
+}
+
+function showReturnPurchaseModal(invoiceNum) {
+  const items = _receivedItemsForPO(invoiceNum);
+  if (!items.length) { showToast('No received items on this PO to return — only items actually delivered can be returned.','info'); return; }
+  window._rpState = {invoiceNum, itemName:'', qty:1, returnType:'exchange', settleMode:'balance', payMode:'cash', bankOrPos:''};
+  renderReturnPurchaseModal();
+}
+
+function renderReturnPurchaseModal() {
+  const st = window._rpState; if (!st) return;
+  const items = _receivedItemsForPO(st.invoiceNum);
+  const sel = items.find(i=>i.name===st.itemName) || items[0];
+  if (sel && !st.itemName) st.itemName = sel.name;
+  if (st.qty > (sel?.qty||1)) st.qty = sel?.qty||1;
+  if (st.qty < 1) st.qty = 1;
+
+  const itemOpts = items.map(i=>`<option value="${esc(i.name)}" ${st.itemName===i.name?'selected':''}>${esc(i.name)} (received: ${i.qty})</option>`).join('');
+  const supplier = (Object.values(STATE.purchases||{}).find(p=>(p.purchaseInvoiceNum||p._id||p.id)===st.invoiceNum)||{}).supplier||'';
+  const cust = Object.values(STATE.suppliers||{}).find(s=>s.name===supplier);
+  const refundAmt = sel ? sel.avgCost*st.qty : 0;
+
+  const body = `
+    <div style="font-size:13px;margin-bottom:10px">PO #${esc(st.invoiceNum)} &nbsp;·&nbsp; Supplier: <b>${esc(supplier||'—')}</b></div>
+    <div class="form-grid c2" style="margin-bottom:10px">
+      <div class="form-group" style="grid-column:1/-1"><label>Item <span class="req">*</span></label>
+        <select class="form-input" id="rp-item" onchange="window._rpState.itemName=this.value;window._rpState.qty=1;renderReturnPurchaseModal()">${itemOpts}</select>
+      </div>
+      <div class="form-group"><label>Qty to return <span class="req">*</span></label>
+        <input class="form-input" id="rp-qty" type="number" min="1" max="${sel?.qty||1}" value="${st.qty}" onchange="window._rpState.qty=parseInt(this.value)||1;renderReturnPurchaseModal()">
+      </div>
+      <div class="form-group"><label>Value</label><div class="form-input" style="background:var(--surface);display:flex;align-items:center;font-weight:700">₦${refundAmt.toLocaleString()}</div></div>
+    </div>
+
+    <div class="form-group" style="margin-bottom:10px">
+      <label>Return type</label>
+      <select class="form-input" id="rp-type" onchange="window._rpState.returnType=this.value;renderReturnPurchaseModal()">
+        <option value="exchange" ${st.returnType==='exchange'?'selected':''}>🔄 Return for Exchange — goods back to supplier, awaiting replacement</option>
+        <option value="complete" ${st.returnType==='complete'?'selected':''}>✕ Return Completely — no replacement coming</option>
+      </select>
+    </div>
+
+    ${st.returnType==='exchange' ? `
+    <div class="alert alert-info" style="font-size:12px">This item goes back into <b>Pending Deliveries</b> until the supplier sends a replacement. No money changes hands now.</div>
+    ` : `
+    <div class="form-group" style="margin-bottom:10px">
+      <label>How should this be settled?</label>
+      <select class="form-input" id="rp-settle" onchange="window._rpState.settleMode=this.value;renderReturnPurchaseModal()">
+        <option value="balance" ${st.settleMode==='balance'?'selected':''} ${!cust?'disabled':''}>Reduce amount owed to supplier${!cust?' (supplier not found in Suppliers list)':''}</option>
+        <option value="cash" ${st.settleMode==='cash'?'selected':''}>Supplier refunded the money</option>
+      </select>
+    </div>
+    ${st.settleMode==='cash'?`
+    <div class="form-group"><label>Refund mode</label>
+      <select class="form-input" id="rp-paymode" onchange="window._rpState.payMode=this.value;renderReturnPurchaseModal()">
+        <option value="cash" ${st.payMode==='cash'?'selected':''}>Cash</option>
+        <option value="transfer" ${st.payMode==='transfer'?'selected':''}>Transfer</option>
+        <option value="pos" ${st.payMode==='pos'?'selected':''}>POS</option>
+      </select>
+    </div>
+    ${st.payMode==='transfer'?`<div class="form-group"><label>Bank</label><select class="form-input" id="rp-bank" onchange="window._rpState.bankOrPos=this.value">${bankSelectOpts('transfer',st.bankOrPos)}</select></div>`:''}
+    ${st.payMode==='pos'?`<div class="form-group"><label>POS terminal</label><select class="form-input" id="rp-bank" onchange="window._rpState.bankOrPos=this.value">${bankSelectOpts('pos',st.bankOrPos)}</select></div>`:''}
+    `:''}
+    `}
+  `;
+  showModal('↩ Return Purchase', body, [
+    {label:'Cancel', action:'close', style:''},
+    {label:'✓ Confirm Return', action:'confirmReturnPurchase()', style:'btn-primary'}
+  ]);
+}
+
+async function confirmReturnPurchase() {
+  const st = window._rpState; if (!st) return;
+  const items = _receivedItemsForPO(st.invoiceNum);
+  const sel = items.find(i=>i.name===st.itemName);
+  if (!sel) { showToast('Select an item.','error'); return; }
+  if (!st.qty || st.qty<1 || st.qty>sel.qty) { showToast('Enter a valid quantity (up to what was received).','error'); return; }
+
+  const supplier = (Object.values(STATE.purchases||{}).find(p=>(p.purchaseInvoiceNum||p._id||p.id)===st.invoiceNum)||{}).supplier||'';
+  const supRec = Object.values(STATE.suppliers||{}).find(s=>s.name===supplier);
+  if (st.returnType==='complete' && st.settleMode==='balance' && !supRec) { showToast('Supplier not found — choose cash refund instead.','error'); return; }
+
+  setSyncStatus('saving');
+  try {
+    const now = new Date();
+    const date = now.toLocaleDateString();
+    const month = now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
+
+    // 1) Returned goods leave your stock
+    if (sel.itemId && STATE.inventory?.[sel.itemId]) {
+      const inv = STATE.inventory[sel.itemId];
+      const upd = {...inv, qty:Math.max(0,(inv.qty||0)-st.qty)};
+      await fsSave(COLS.INVENTORY, sel.itemId, upd);
+      STATE.inventory[sel.itemId] = {...upd, _id:sel.itemId, _savedAt:Date.now()};
+    }
+
+    // 2) Log the return for audit history
+    const retId = uid();
+    const ret = {id:retId, purchaseInvoiceNum:st.invoiceNum, itemName:sel.name, itemId:sel.itemId,
+      supplier, qty:st.qty, costPrice:sel.avgCost, returnType:st.returnType,
+      settleMode:st.returnType==='complete'?st.settleMode:null,
+      payMode:st.returnType==='complete'&&st.settleMode==='cash'?st.payMode:null,
+      bankOrPos:st.bankOrPos||'', date, month, by:STATE.user?.name};
+    await fsSave(COLS.PURCHASERETURNS, retId, ret);
+    if (!STATE.purchaseReturns) STATE.purchaseReturns={};
+    STATE.purchaseReturns[retId] = {...ret, _id:retId, _savedAt:Date.now()};
+
+    if (st.returnType==='exchange') {
+      // 3a) Back to Pending Deliveries, awaiting a replacement
+      const pendId = uid();
+      const pend = {id:pendId, purchaseInvoiceNum:st.invoiceNum, itemName:sel.name, itemId:sel.itemId,
+        supplier, orderedQty:st.qty, receivedQty:0, costPrice:sel.avgCost, payMode:'cash', date};
+      await fsSave('v2_pendingDeliveries', pendId, pend);
+      if (!STATE.pendingDeliveries) STATE.pendingDeliveries={};
+      STATE.pendingDeliveries[pendId] = {...pend, _id:pendId, _savedAt:Date.now()};
+    } else {
+      // 3b) Complete return — settle the value
+      const value = st.qty*sel.avgCost;
+      if (st.settleMode==='balance' && supRec) {
+        const updSup = {...supRec, owedToSupplier:Math.max(0,(supRec.owedToSupplier||0)-value)};
+        await fsSave(COLS.SUPPLIERS, supRec._id||supRec.id, updSup);
+        STATE.suppliers[supRec._id||supRec.id] = {...updSup, _id:supRec._id||supRec.id, _savedAt:Date.now()};
+      } else {
+        const cfId = uid();
+        const cf = {id:cfId, type:'in', cat:'Purchase Refund', desc:`Refund — ${sel.name} returned (PO #${st.invoiceNum})`,
+          amount:value, payMode:st.payMode, bankName:st.bankOrPos||'', supplier, date, month, by:STATE.user?.name};
+        await fsSave(COLS.CASHFLOW, cfId, cf);
+        if (!STATE.cashflow) STATE.cashflow={};
+        STATE.cashflow[cfId] = {...cf, _id:cfId, _savedAt:Date.now()};
+      }
+    }
+
+    closeModal();
+    setSyncStatus('synced');
+    showToast(`✅ ${st.qty} × ${sel.name} returned${st.returnType==='exchange'?' — awaiting replacement.':'.'}`, 'success');
+    logActivity('Purchase return', `${st.qty}× ${sel.name} — PO #${st.invoiceNum} (${st.returnType})`, '');
+    window._rpState = null;
+    renderPurchases();
+  } catch(e) { setSyncStatus('error'); showToast('Failed: '+e.message,'error'); }
 }
 
 // ── Purchase Order: View / Print / Share (same engine as invoices) ──
@@ -14539,7 +14727,7 @@ async function addBank(){
 }
 
 function exportBackup(){
-  const data={inventory:STATE.inventory,sales:STATE.sales,purchases:STATE.purchases,customers:STATE.customers,suppliers:STATE.suppliers,cashflow:STATE.cashflow,banks:STATE.banks,settings:STATE.settings,salesReturns:STATE.salesReturns,pendingDeliveries:STATE.pendingDeliveries,activityLog:STATE.activityLog,invCounter:STATE.invCounter,exportedAt:new Date().toISOString(),version:'v2'};
+  const data={inventory:STATE.inventory,sales:STATE.sales,purchases:STATE.purchases,customers:STATE.customers,suppliers:STATE.suppliers,cashflow:STATE.cashflow,banks:STATE.banks,settings:STATE.settings,salesReturns:STATE.salesReturns,purchaseReturns:STATE.purchaseReturns,pendingDeliveries:STATE.pendingDeliveries,activityLog:STATE.activityLog,invCounter:STATE.invCounter,exportedAt:new Date().toISOString(),version:'v2'};
   const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
   const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`gce-v2-backup-${_todayLocalISO()}.json`;a.click();
   const info=`Last backup saved: ${new Date().toLocaleString()} · Items: ${Object.keys(STATE.inventory||{}).length} inventory · Sales: ${Object.keys(STATE.sales||{}).length} records`;
@@ -15306,7 +15494,7 @@ async function downloadFirestoreData() {
       [COLS.PURCHASES,'purchases'],[COLS.CASHFLOW,'cashflow'],
       [COLS.WAREHOUSE,'warehouse'],[COLS.SETTINGS,'settings'],
       [COLS.BORROWS,'borrows'],[COLS.PROFORMAS,'proformas'],
-      [COLS.ADJLOG,'adjLog'],[COLS.SALESRETURNS,'salesReturns'],
+      [COLS.ADJLOG,'adjLog'],[COLS.SALESRETURNS,'salesReturns'],[COLS.PURCHASERETURNS,'purchaseReturns'],
       ['v2_pendingDeliveries','pendingDeliveries'],['v2_banks','banks'],
     ];
     let total = 0;
@@ -15364,7 +15552,7 @@ function _buildBackupPayload() {
     purchases:STATE.purchases, customers:STATE.customers,
     suppliers:STATE.suppliers, cashflow:STATE.cashflow,
     banks:STATE.banks, settings:STATE.settings,
-    salesReturns:STATE.salesReturns, pendingDeliveries:STATE.pendingDeliveries,
+    salesReturns:STATE.salesReturns, purchaseReturns:STATE.purchaseReturns, pendingDeliveries:STATE.pendingDeliveries,
     activityLog:STATE.activityLog, invCounter:STATE.invCounter,
     exportedAt: new Date().toISOString(), version:'v2'
   };
