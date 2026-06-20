@@ -1800,7 +1800,16 @@ async function loadCollection(col, stateKey) {
     // Seed STATE immediately from local data — filter out tombstones
     STATE[stateKey] = {};
     items.forEach(item => {
-      if (!item._deleted) STATE[stateKey][item._id||item.id] = item;
+      if (item._deleted) return;
+      // HEAL: some older cached records have an `id` field but no `_id`
+      // property stamped on them (pre-dates fsSave always stamping `_id`).
+      // Code throughout the app reads `record._id` directly (e.g. when
+      // saving credit balance updates or deducting stock) — if that
+      // property is missing, those writes silently target the wrong
+      // key ("undefined") and the real record never gets updated.
+      // Stamping it here, once, at load time fixes it everywhere.
+      if (!item._id) item._id = item.id;
+      STATE[stateKey][item._id] = item;
     });
     // Delay background-refresh to avoid race: let the UI render first
     // and give any in-flight fsSave calls time to stamp their _savedAt
@@ -1923,7 +1932,9 @@ async function loadMonthlySales(year, month) {
   }
   // Merge into STATE.sales — filter tombstones (deleted records stay out of STATE)
   items.forEach(item => {
-    if (!item._deleted) STATE.sales[item._id||item.id] = item;
+    if (item._deleted) return;
+    if (!item._id) item._id = item.id; // heal legacy records missing _id
+    STATE.sales[item._id] = item;
   });
   return items.filter(i => !i._deleted);
 }
@@ -4248,14 +4259,14 @@ function v2FilterItemDd(val) {
   const term = (val||'').toLowerCase().trim();
   if (!term) { dd.style.display='none'; return; }
   const matches = Object.values(STATE.inventory||{})
-    .filter(i => (i.qty||0)>0 && (i.name?.toLowerCase().includes(term)||(i.cat||'').toLowerCase().includes(term))).slice(0,20);
+    .filter(i => (i.name?.toLowerCase().includes(term)||(i.cat||'').toLowerCase().includes(term))).slice(0,20);
   if (!matches.length) { dd.style.display='none'; return; }
-  dd.innerHTML = matches.map(i => `<div data-id="${i._id}" data-name="${esc(i.name)}" data-price="${i.sell||0}" data-cost="${i.cost||0}"
+  dd.innerHTML = matches.map(i => `<div data-id="${i._id||i.id}" data-name="${esc(i.name)}" data-price="${i.sell||0}" data-cost="${i.cost||0}"
     style="padding:9px 12px;cursor:pointer;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;font-size:13px"
     onmouseover="this.style.background='var(--surface)'" onmouseout="this.style.background=''"
     onmousedown="v2SelectItem(this)">
     <span><b>${esc(i.name)}</b> <span style="color:var(--text3);font-size:11px">${esc(i.cat||'')}</span></span>
-    <span style="color:var(--success);font-size:12px">${fmt(i.sell||0)} · ${i.qty} in stock</span>
+    <span style="color:${(i.qty||0)>0?'var(--success)':'#c0392b'};font-size:12px">${fmt(i.sell||0)} · ${(i.qty||0)>0?`${i.qty} in stock`:'Out of stock'}</span>
   </div>`).join('');
   dd.style.display = 'block';
 }
@@ -4279,9 +4290,9 @@ function v2AddInvItem() {
     Object.values(STATE.inventory).find(i=>i.name?.toLowerCase()===name?.toLowerCase());
   if (!item) { showToast('Item not found.','error'); return; }
   const avail = item.qty||0;
-  const existing = invoiceItems.find(l=>l.itemId===item._id&&l.price===price);
+  const existing = invoiceItems.find(l=>l.itemId===(item._id||item.id)&&l.price===price);
   if (existing) { existing.qty+=qty; if(!existing.supplyMode) existing.supplyMode='supply'; }
-  else invoiceItems.push({itemId:item._id, name:item.name, cost:item.cost||0, qty, price, supplyMode:'supply'});
+  else invoiceItems.push({itemId:item._id||item.id, name:item.name, cost:item.cost||0, qty, price, supplyMode:'supply'});
   if (qty > avail) {
     showToast(`⚠️ Only ${avail} of "${item.name}" in stock — added with a shortfall. Choose Supply or Hold for that line.`,'info');
   }
@@ -4867,7 +4878,14 @@ async function v2SaveSale(mode) {
   try {
     for (const l of invoiceItems) {
       const saleId = uid();
-      const inv = STATE.inventory[l.itemId];
+      let inv = STATE.inventory[l.itemId];
+      if (!inv) {
+        // Defensive fallback — should not normally be needed after the
+        // _id-healing fix in loadCollection(), but guards against any
+        // record that still slips through without a matching key.
+        inv = Object.values(STATE.inventory||{}).find(i=>i.name===l.name);
+        if (inv) { l.itemId = inv._id||inv.id; logActivity('Inventory ID mismatch (auto-corrected)', `${l.name} — matched by name instead of ID`, ''); }
+      }
       const avail = inv?.qty||0;
       let suppliedQty, pendingQty;
       if (wholeInvoicePending) { suppliedQty=0; pendingQty=l.qty; }
@@ -4888,7 +4906,7 @@ async function v2SaveSale(mode) {
         payMode:(pt==='credit'||pt==='part'?'cash':pt==='deposit'?'deposit':payMode), splitPayment,
         partPayment: pt==='part' ? partAmt : pt==='deposit' ? (window._saleDepositPortion||0) : 0, bankName, posName,
         tenderedAmt: tenderedAmt||0, changeAmt: changeAmt||0, changeDisp: changeAmt>0?changeDisp:'cash',
-        custId:invoiceCustomer?._id||null, custName:invoiceCustomer?.name||'Walk-in',
+        custId:invoiceCustomer&&(invoiceCustomer._id||invoiceCustomer.id)||null, custName:invoiceCustomer?.name||'Walk-in',
         printName, date, month, seller:STATE.user.name, deliveryAddr,
         dueDate:(pt==='credit'||pt==='part')?(document.getElementById('s-credit-due-date')?.value||''):'',
         suppliedQty, pendingQty,
@@ -4919,20 +4937,20 @@ async function v2SaveSale(mode) {
         if (existingBal > 0) {
           const newBal = Math.max(0, existingBal - changeAmt);
           const upd = {...invoiceCustomer, creditBalance: newBal};
-          await fsSave(COLS.CUSTOMERS, invoiceCustomer._id, upd);
-          STATE.customers[invoiceCustomer._id] = {...upd, _id:invoiceCustomer._id, _savedAt:Date.now()};
+          await fsSave(COLS.CUSTOMERS, (invoiceCustomer._id||invoiceCustomer.id), upd);
+          STATE.customers[invoiceCustomer._id||invoiceCustomer.id] = {...upd, _id:(invoiceCustomer._id||invoiceCustomer.id), _savedAt:Date.now()};
         }
         // If no outstanding, cash change just leaves till — nothing to record
       } else if (changeDisp === 'credit') {
         // Applied to balance — reduce credit + record in cashflow
         const newBal = Math.max(0, (invoiceCustomer.creditBalance||0) - changeAmt);
         const upd = {...invoiceCustomer, creditBalance: newBal};
-        await fsSave(COLS.CUSTOMERS, invoiceCustomer._id, upd);
-        STATE.customers[invoiceCustomer._id] = {...upd, _id:invoiceCustomer._id, _savedAt:Date.now()};
+        await fsSave(COLS.CUSTOMERS, (invoiceCustomer._id||invoiceCustomer.id), upd);
+        STATE.customers[invoiceCustomer._id||invoiceCustomer.id] = {...upd, _id:(invoiceCustomer._id||invoiceCustomer.id), _savedAt:Date.now()};
         const cfId = uid();
         const cf = {id:cfId,type:'in',cat:'Credit Payment',
           desc:`Overpayment applied to balance — Inv #${invNum} — ${printName}`,
-          amount:changeAmt,payMode,bankName,custId:invoiceCustomer._id,
+          amount:changeAmt,payMode,bankName,custId:(invoiceCustomer._id||invoiceCustomer.id),
           date,month,invoiceNum:invNum,by:STATE.user.name};
         await fsSave(COLS.CASHFLOW,cfId,cf);
         if(!STATE.cashflow)STATE.cashflow={};
@@ -4942,7 +4960,7 @@ async function v2SaveSale(mode) {
         const cfId = uid();
         const cf = {id:cfId,type:'in',cat:'Customer Deposit',
           desc:`Overpayment deposit — Inv #${invNum} — ${printName}`,
-          amount:changeAmt,payMode,bankName,custId:invoiceCustomer._id,
+          amount:changeAmt,payMode,bankName,custId:(invoiceCustomer._id||invoiceCustomer.id),
           date,month,invoiceNum:invNum,by:STATE.user.name};
         await fsSave(COLS.CASHFLOW,cfId,cf);
         if(!STATE.cashflow)STATE.cashflow={};
@@ -4958,8 +4976,8 @@ async function v2SaveSale(mode) {
       const existingCredit = invoiceCustomer.creditBalance||0;
       if (pt==='credit') {
         const uc = {...invoiceCustomer, creditBalance: existingCredit + gt};
-        await fsSave(COLS.CUSTOMERS, invoiceCustomer._id, uc);
-        STATE.customers[invoiceCustomer._id] = {...uc, _id:invoiceCustomer._id,_savedAt:Date.now()};
+        await fsSave(COLS.CUSTOMERS, (invoiceCustomer._id||invoiceCustomer.id), uc);
+        STATE.customers[invoiceCustomer._id||invoiceCustomer.id] = {...uc, _id:(invoiceCustomer._id||invoiceCustomer.id),_savedAt:Date.now()};
       } else {
         // Part payment: owed = unpaid of this invoice, overpaid = excess above invoice total
         const owed = Math.max(0, gt - partAmt);
@@ -4969,10 +4987,10 @@ async function v2SaveSale(mode) {
           const creditAfterOverpay = Math.max(0, existingCredit - overpaid);
           const stillExcess = overpaid - (existingCredit - creditAfterOverpay);
           const uc = {...invoiceCustomer, creditBalance: creditAfterOverpay};
-          await fsSave(COLS.CUSTOMERS, invoiceCustomer._id, uc);
-          STATE.customers[invoiceCustomer._id] = {...uc, _id:invoiceCustomer._id,_savedAt:Date.now()};
+          await fsSave(COLS.CUSTOMERS, (invoiceCustomer._id||invoiceCustomer.id), uc);
+          STATE.customers[invoiceCustomer._id||invoiceCustomer.id] = {...uc, _id:(invoiceCustomer._id||invoiceCustomer.id),_savedAt:Date.now()};
           if (stillExcess > 0) {
-            const depId=uid(), depCf={id:depId,type:'in',cat:'Customer Deposit',desc:`Overpayment deposit — Inv #${invNum} — ${printName}`,amount:stillExcess,payMode,bankName,custId:invoiceCustomer._id,date,month,invoiceNum:invNum,by:STATE.user.name};
+            const depId=uid(), depCf={id:depId,type:'in',cat:'Customer Deposit',desc:`Overpayment deposit — Inv #${invNum} — ${printName}`,amount:stillExcess,payMode,bankName,custId:(invoiceCustomer._id||invoiceCustomer.id),date,month,invoiceNum:invNum,by:STATE.user.name};
             await fsSave(COLS.CASHFLOW,depId,depCf);
             if(!STATE.cashflow)STATE.cashflow={};STATE.cashflow[depId]={...depCf,_id:depId,_savedAt:Date.now()};
             showToast(`Overpaid by ${fmt(overpaid)}. ${fmt(existingCredit-creditAfterOverpay)} cleared from balance. ${fmt(stillExcess)} added as deposit.`,'info');
@@ -4981,15 +4999,15 @@ async function v2SaveSale(mode) {
           }
         } else if (overpaid > 0) {
           // No existing credit — excess goes to deposit
-          const depId=uid(), depCf={id:depId,type:'in',cat:'Customer Deposit',desc:`Overpayment deposit — Inv #${invNum} — ${printName}`,amount:overpaid,payMode,bankName,custId:invoiceCustomer._id,date,month,invoiceNum:invNum,by:STATE.user.name};
+          const depId=uid(), depCf={id:depId,type:'in',cat:'Customer Deposit',desc:`Overpayment deposit — Inv #${invNum} — ${printName}`,amount:overpaid,payMode,bankName,custId:(invoiceCustomer._id||invoiceCustomer.id),date,month,invoiceNum:invNum,by:STATE.user.name};
           await fsSave(COLS.CASHFLOW,depId,depCf);
           if(!STATE.cashflow)STATE.cashflow={};STATE.cashflow[depId]={...depCf,_id:depId,_savedAt:Date.now()};
           showToast(`Overpaid by ${fmt(overpaid)} — added to deposit balance.`,'info');
         } else {
           // Normal part payment — add unpaid portion to credit balance
           const uc = {...invoiceCustomer, creditBalance: existingCredit + owed};
-          await fsSave(COLS.CUSTOMERS, invoiceCustomer._id, uc);
-          STATE.customers[invoiceCustomer._id] = {...uc, _id:invoiceCustomer._id,_savedAt:Date.now()};
+          await fsSave(COLS.CUSTOMERS, (invoiceCustomer._id||invoiceCustomer.id), uc);
+          STATE.customers[invoiceCustomer._id||invoiceCustomer.id] = {...uc, _id:(invoiceCustomer._id||invoiceCustomer.id),_savedAt:Date.now()};
         }
       }
     }
@@ -5002,8 +5020,8 @@ async function v2SaveSale(mode) {
         if (sfMode==='credit' || sfMode==='none' || !sfMode) {
           // Shortfall not paid in cash — add to customer's credit balance
           const uc = {...invoiceCustomer, creditBalance:(invoiceCustomer.creditBalance||0)+shortfall};
-          await fsSave(COLS.CUSTOMERS, invoiceCustomer._id, uc);
-          STATE.customers[invoiceCustomer._id] = {...uc, _id:invoiceCustomer._id,_savedAt:Date.now()};
+          await fsSave(COLS.CUSTOMERS, (invoiceCustomer._id||invoiceCustomer.id), uc);
+          STATE.customers[invoiceCustomer._id||invoiceCustomer.id] = {...uc, _id:(invoiceCustomer._id||invoiceCustomer.id),_savedAt:Date.now()};
         }
         // If sfMode = cash/transfer/pos/split — shortfall was paid, cashflow recorded below
       }
@@ -5023,7 +5041,7 @@ async function v2SaveSale(mode) {
       const shortfall  = window._saleDepositShortfall||0;
       const sfMode = document.getElementById('s-deposit-sf-mode')?.value||'cash';
       const sfBank = document.getElementById('s-deposit-sf-bank')?.value||'';
-      const custId = invoiceCustomer?._id||null;
+      const custId = invoiceCustomer&&(invoiceCustomer._id||invoiceCustomer.id)||null;
       // Record deposit used — internal tracking, NOT a new cash inflow
       if (depPortion > 0) {
         const depId = uid();
@@ -5067,7 +5085,7 @@ async function v2SaveSale(mode) {
             const cf={id:cfId,type:'in',cat:'Sales',
               desc:`Split(${leg.mode}${leg.bank?' - '+leg.bank:''}) — Invoice #${invNum} — ${printName}`,
               amount:leg.amt,payMode:leg.mode,bankName:leg.bank,invoiceNum:invNum,
-              custId:invoiceCustomer?._id||null,custName:invoiceCustomer?.name||'Walk-in',
+              custId:invoiceCustomer&&(invoiceCustomer._id||invoiceCustomer.id)||null,custName:invoiceCustomer?.name||'Walk-in',
               date,month,by:STATE.user.name};
             await fsSave(COLS.CASHFLOW,cfId,cf);
             if(!STATE.cashflow)STATE.cashflow={};STATE.cashflow[cfId]={...cf,_id:cfId,_savedAt:Date.now()};
@@ -5077,13 +5095,13 @@ async function v2SaveSale(mode) {
           const partTransfer = Math.max(0, cashReceived - partSplitCash);
           if (partSplitCash > 0) {
             const cId=uid();
-            const cCf={id:cId,type:'in',cat:'Sales (Part)',desc:`Part split cash — Invoice #${invNum} — ${printName}`,amount:partSplitCash,payMode:'cash',custId:invoiceCustomer?._id||null,custName:invoiceCustomer?.name||'Walk-in',date,month,by:STATE.user.name};
+            const cCf={id:cId,type:'in',cat:'Sales (Part)',desc:`Part split cash — Invoice #${invNum} — ${printName}`,amount:partSplitCash,payMode:'cash',custId:invoiceCustomer&&(invoiceCustomer._id||invoiceCustomer.id)||null,custName:invoiceCustomer?.name||'Walk-in',date,month,by:STATE.user.name};
             await fsSave(COLS.CASHFLOW,cId,cCf);
             if(!STATE.cashflow)STATE.cashflow={};STATE.cashflow[cId]={...cCf,_id:cId,_savedAt:Date.now()};
           }
           if (partTransfer > 0) {
             const tId=uid();
-            const tCf={id:tId,type:'in',cat:'Sales (Part)',desc:`Part split transfer — Invoice #${invNum} — ${printName}`,amount:partTransfer,payMode:'transfer',bankName:partBank,custId:invoiceCustomer?._id||null,custName:invoiceCustomer?.name||'Walk-in',date,month,by:STATE.user.name};
+            const tCf={id:tId,type:'in',cat:'Sales (Part)',desc:`Part split transfer — Invoice #${invNum} — ${printName}`,amount:partTransfer,payMode:'transfer',bankName:partBank,custId:invoiceCustomer&&(invoiceCustomer._id||invoiceCustomer.id)||null,custName:invoiceCustomer?.name||'Walk-in',date,month,by:STATE.user.name};
             await fsSave(COLS.CASHFLOW,tId,tCf);
             if(!STATE.cashflow)STATE.cashflow={};STATE.cashflow[tId]={...tCf,_id:tId,_savedAt:Date.now()};
           }
@@ -5097,7 +5115,7 @@ async function v2SaveSale(mode) {
           const effectiveBank = payment_type==='part' ? partBank : bankName;
           const cf={id:cfId,type:'in',cat:cfCat,desc:cfDesc,
             amount:cashReceived,payMode:effectiveMode,bankName:effectiveBank,posName,invoiceNum:invNum,
-            custId:invoiceCustomer?._id||null,custName:invoiceCustomer?.name||'Walk-in',
+            custId:invoiceCustomer&&(invoiceCustomer._id||invoiceCustomer.id)||null,custName:invoiceCustomer?.name||'Walk-in',
             date,month,by:STATE.user.name};
           await fsSave(COLS.CASHFLOW,cfId,cf);
           if(!STATE.cashflow)STATE.cashflow={};STATE.cashflow[cfId]={...cf,_id:cfId,_savedAt:Date.now()};
