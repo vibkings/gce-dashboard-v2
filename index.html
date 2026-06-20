@@ -6531,9 +6531,10 @@ function renderPurchases() {
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:10px">
         <div>
           <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);margin-bottom:4px">SUPPLIER <span style="color:var(--danger)">*</span></div>
-          <div style="position:relative">
+          <div style="position:relative;display:flex;gap:4px">
             <input class="form-input" id="pnp-sup-input" placeholder="Type to search supplier..." autocomplete="off"
               oninput="searchSupplierForPurchase(this.value)" style="width:100%">
+            <button class="btn btn-sm" onclick="showQuickAddSupplierModal()" title="Add new supplier" style="padding:0 9px;white-space:nowrap;flex-shrink:0">+</button>
             <div id="pnp-sup-dd" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:50;background:var(--white);border:1px solid var(--border);border-radius:var(--radius);max-height:150px;overflow-y:auto;box-shadow:var(--shadow)"></div>
             <input type="hidden" id="pnp-sup-val">
           </div>
@@ -6853,6 +6854,27 @@ async function savePurchaseRecord() {
       const isPending = item.received < item.ordered;
       const receivedQty = item.received || 0;
       const orderedQty  = item.ordered  || 0;
+
+      // New product (typed a name that didn't match an existing inventory
+      // item) — create it now so it exists in Inventory right away. Stock
+      // starts at the received qty (0 if fully pending); receiving it later
+      // from Pending Deliveries will top it up the normal way.
+      if (!item.itemId) {
+        const existingByName = Object.values(STATE.inventory||{}).find(i=>(i.name||'').toLowerCase()===item.name.toLowerCase());
+        if (existingByName) {
+          item.itemId = existingByName._id||existingByName.id;
+        } else {
+          const newItemId = uid();
+          const newItem = {id:newItemId, name:item.name, cat:'', supplierName:supplier, supId:'',
+            qty:0, minQty:5, costPrice:item.cost, sellPrice:0, cost:item.cost, sell:0,
+            createdAt:new Date().toISOString(), createdBy:STATE.user?.name||''};
+          await fsSave(COLS.INVENTORY, newItemId, newItem);
+          if (!STATE.inventory) STATE.inventory={};
+          STATE.inventory[newItemId] = {...newItem, _id:newItemId, _savedAt:Date.now()};
+          item.itemId = newItemId;
+          logActivity('Item added', `${item.name} — created from Purchase #${purchaseInvoiceNum} (set sell price in Inventory)`, '');
+        }
+      }
 
       // Save received portion as purchase
       if (receivedQty > 0) {
@@ -7586,6 +7608,42 @@ function renderSuppliers(){
       </tr>`).join('')||'<tr><td colspan="6"><div class="empty-state"><div class="empty-state-icon">🚛</div><div>No suppliers yet</div></div></td></tr>'}
       </tbody>
     </table></div>`;
+}
+
+function showQuickAddSupplierModal() {
+  showModal('🚛 New Supplier', `<div class="form-grid c2">
+    <div class="form-group" style="grid-column:1/-1"><label>Name <span class="req">*</span></label><input class="form-input" id="qas-name" placeholder="e.g. EAGLE RACE MULTI LINKS"></div>
+    <div class="form-group"><label>Phone</label><input class="form-input" id="qas-phone" placeholder="08012345678"></div>
+    <div class="form-group"><label>Contact Person</label><input class="form-input" id="qas-contact" placeholder="Contact name"></div>
+    <div class="form-group" style="grid-column:1/-1"><label>Address</label><input class="form-input" id="qas-addr" placeholder="Optional"></div>
+  </div>`, [{label:'Cancel',action:'close',style:''},{label:'+ Add & Select',action:'saveQuickAddSupplier()',style:'btn-primary'}]);
+  setTimeout(()=>document.getElementById('qas-name')?.focus(), 50);
+}
+
+async function saveQuickAddSupplier() {
+  const name = document.getElementById('qas-name')?.value.trim();
+  if (!name) { showToast('Name required.','error'); return; }
+  if (Object.values(STATE.suppliers||{}).find(s=>(s.name||'').toLowerCase()===name.toLowerCase())) { showToast('Supplier already exists.','error'); return; }
+  const id = uid();
+  const sup = {id, name,
+    phone: document.getElementById('qas-phone')?.value.trim()||'',
+    contact: document.getElementById('qas-contact')?.value.trim()||'',
+    address: document.getElementById('qas-addr')?.value.trim()||'',
+    openingBalance:0, owedToSupplier:0, totalPurchased:0, createdAt:new Date().toISOString()};
+  setSyncStatus('saving');
+  try {
+    await fsSave(COLS.SUPPLIERS, id, sup);
+    if (!STATE.suppliers) STATE.suppliers={};
+    STATE.suppliers[id] = {...sup, _id:id, _savedAt:Date.now()};
+    closeModal();
+    setSyncStatus('synced');
+    showToast(`✅ "${name}" added and selected.`,'success');
+    logActivity('Supplier added', `${name} (quick-added from Purchases)`, '');
+    const inp = document.getElementById('pnp-sup-input');
+    const hid = document.getElementById('pnp-sup-val');
+    if (inp) inp.value = name;
+    if (hid) hid.value = id;
+  } catch(e) { setSyncStatus('error'); showToast('Failed to add supplier.','error'); }
 }
 
 function showAddSupplierModal(){
