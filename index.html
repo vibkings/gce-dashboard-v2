@@ -3794,7 +3794,9 @@ function renderSales() {
         </div>`:`
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:4px">
           <div class="form-group" style="margin:0">
-            <label>Select customer <span style="color:var(--danger)">*</span></label>
+            <label>Select customer <span style="color:var(--danger)">*</span>
+              <button type="button" onclick="showQuickAddCustomerModal()" style="margin-left:8px;font-size:11px;font-weight:600;color:var(--brand);background:none;border:none;cursor:pointer;text-decoration:underline">+ New customer</button>
+            </label>
             <div style="position:relative">
               <input class="form-input" id="s-reg-cust-search" autocomplete="off" placeholder="Type to search customer..."
                 oninput="v2CustSearch(this.value)" onfocus="v2CustSearch(this.value,true)"
@@ -4182,6 +4184,47 @@ function v2SelectCust(id) {
   const dd = document.getElementById('s-cust-dd');
   if (dd) dd.style.display='none';
   renderSales();
+}
+
+// ── Quick customer creation, without leaving the Sales tab ──
+function showQuickAddCustomerModal(){
+  showModal('👥 New Customer', `<div class="form-grid c2">
+    <div class="form-group" style="grid-column:1/-1"><label>Full Name <span class="req">*</span></label><input class="form-input" id="qac-name" placeholder="e.g. Mr David Adeyemi"></div>
+    <div class="form-group"><label>Phone</label><input class="form-input" id="qac-phone" placeholder="08012345678"></div>
+    <div class="form-group"><label>Type</label><select class="form-input" id="qac-type"><option value="Retail">Retail</option><option value="Wholesale">Wholesale</option><option value="Contractor">Contractor</option></select></div>
+    <div class="form-group" style="grid-column:1/-1"><label>Address</label><input class="form-input" id="qac-addr" placeholder="Optional"></div>
+    <div class="form-group"><label>Credit Limit (₦)</label><input class="form-input" id="qac-limit" type="number" min="0" value="0"></div>
+  </div>`,[{label:'Cancel',action:'close',style:''},{label:'+ Add & Select',action:'saveQuickAddCustomer()',style:'btn-primary'}]);
+  setTimeout(()=>document.getElementById('qac-name')?.focus(), 50);
+}
+
+async function saveQuickAddCustomer(){
+  const name = document.getElementById('qac-name')?.value.trim();
+  if (!name) { showToast('Name required.','error'); return; }
+  const id = uid();
+  const cust = {id, name,
+    phone: document.getElementById('qac-phone')?.value.trim()||'',
+    type: document.getElementById('qac-type')?.value||'Retail',
+    address: document.getElementById('qac-addr')?.value.trim()||'',
+    creditLimit: parseFloat(document.getElementById('qac-limit')?.value)||0,
+    creditBalance: 0,
+    createdAt: new Date().toISOString()};
+  setSyncStatus('saving');
+  try {
+    await fsSave(COLS.CUSTOMERS, id, cust);
+    if (!STATE.customers) STATE.customers = {};
+    STATE.customers[id] = {...cust, _id:id, _savedAt:Date.now()};
+    closeModal();
+    setSyncStatus('synced');
+    showToast(`✅ "${name}" added and selected for this invoice.`,'success');
+    logActivity('Customer added',`${name} (quick-added from Sales)`,'');
+    invoiceType = 'registered';
+    invoiceCustomer = STATE.customers[id];
+    renderSales();
+  } catch(e) {
+    setSyncStatus('error');
+    showToast('Failed to add customer.','error');
+  }
 }
 
 function v2FilterItemDd(val) {
