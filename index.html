@@ -5146,6 +5146,18 @@ function v2UpdateCartDisc(idx, val){
 
 // ── Invoice print modes ─────────────────────────────────
 // mode: 'a4' | 'a5' | '80mm'
+// Renders the Qty cell content for an invoice line — shows a supplied/pending
+// breakdown whenever part (or all) of the line is still on hold, instead of
+// just the flat ordered quantity.
+function _qtySupplyLabel(s, size='normal') {
+  const qty = s.qty||0;
+  const pending = s.pendingQty!=null ? s.pendingQty : 0;
+  if (pending<=0) return `${qty}`;
+  const supplied = s.suppliedQty!=null ? s.suppliedQty : Math.max(0, qty-pending);
+  const fontSize = size==='small' ? '8px' : '9px';
+  return `${qty}<div style="font-size:${fontSize};color:#16a34a;font-weight:700;white-space:nowrap;line-height:1.3">✓ ${supplied} supplied</div><div style="font-size:${fontSize};color:#c0392b;font-weight:700;white-space:nowrap;line-height:1.3">⏳ ${pending} pending</div>`;
+}
+
 function _buildInvoiceHTML(invNum, mode='a4', invTypeOverride='sales', showOutstanding=false) {
   const items = Object.values(STATE.sales||{}).filter(s=>s.invoiceNum===invNum && !s.voided);
   if (!items.length) return null;
@@ -5264,7 +5276,7 @@ function _buildInvoiceHTML(invNum, mode='a4', invTypeOverride='sales', showOutst
   if(mode==='80mm'){
     const rows80=items.map(s=>`<tr>
       <td style="padding:2px 0;font-size:12px">${esc(s.name)}</td>
-      <td style="text-align:center;font-size:12px">${s.qty}</td>
+      <td style="text-align:center;font-size:12px">${_qtySupplyLabel(s,'small')}</td>
       <td style="text-align:right;font-size:12px">₦${(s.salePrice||0).toLocaleString()}</td>
       <td style="text-align:right;font-size:12px;font-weight:700">₦${(s.total||0).toLocaleString()}</td>
     </tr>`).join('');
@@ -5303,7 +5315,7 @@ function _buildInvoiceHTML(invNum, mode='a4', invTypeOverride='sales', showOutst
 
   const itemRowsFull=items.map((s,i)=>`<tr style="border-bottom:1px solid #e8e8e8">
     <td style="padding:${fs('5px','6px')} 8px;font-size:${fs('11px','12px')};font-weight:600">${esc(s.name)}</td>
-    <td style="padding:${fs('5px','6px')} 8px;text-align:center;font-size:${fs('11px','12px')}">${s.qty}</td>
+    <td style="padding:${fs('5px','6px')} 8px;text-align:center;font-size:${fs('11px','12px')}">${_qtySupplyLabel(s)}</td>
     <td style="padding:${fs('5px','6px')} 8px;text-align:right;font-size:${fs('11px','12px')}">₦${(s.salePrice||s.unitPrice||0).toLocaleString()}</td>
     <td style="padding:${fs('5px','6px')} 8px;text-align:center;font-size:${fs('10px','11px')};color:#c0392b">${(s.discPct||0)>0?s.discPct+'%':'—'}</td>
     <td style="padding:${fs('5px','6px')} 8px;text-align:right;font-size:${fs('12px','13px')};font-weight:700">₦${(s.total||0).toLocaleString()}</td>
@@ -5722,7 +5734,7 @@ function showInvoiceViewModal(invNum) {
     return `<tr style="border-bottom:1px solid #f0f0f0">
       <td style="padding:8px 10px;color:#666;font-size:13px">${i+1}</td>
       <td style="padding:8px 10px;font-weight:600;font-size:13px">${esc(s.name||'')}</td>
-      <td style="padding:8px 10px;text-align:center;font-size:13px">${s.qty||1}</td>
+      <td style="padding:8px 10px;text-align:center;font-size:13px">${_qtySupplyLabel(s)}</td>
       <td style="padding:8px 10px;text-align:right;font-size:13px">${fmt(s.salePrice||s.unitPrice||0)}</td>
       <td style="padding:8px 10px;text-align:right;font-size:13px;color:${disc>0?'#d97706':'#999'}">${disc>0?'-'+fmt(disc):'—'}</td>
       <td style="padding:8px 10px;text-align:right;font-weight:700;font-size:13px">${fmt(s.total||0)}</td>
