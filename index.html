@@ -9456,7 +9456,7 @@ function renderStockMgmt() {
     const catOpts=`<option value="">-- Select a category --</option>`+cats.map(c=>`<option value="${c}" ${window._smCat===c?'selected':''}>${c}</option>`).join('');
     const catItems=window._smCat?items.filter(i=>(i.cat||'Uncategorized')===window._smCat):[];
     const catRows=catItems.map(i=>_countRowHtml(i,'cc',false)).join('');
-    body=`<div class="sec-title">Stock count by category</div><div class="card" style="margin-bottom:1rem"><div class="form-group" style="max-width:360px;margin-bottom:1rem"><label>Select category to count</label><select class="form-input" onchange="window._smCat=this.value;renderStockMgmt()">${catOpts}</select></div>${window._smCat&&catItems.length?`${hiddenNote}<div class="tbl-wrap"><table><thead><tr><th>Item</th><th style="text-align:center">System Qty</th><th>Counted Qty</th><th>Status</th></tr></thead><tbody>${catRows}</tbody></table></div><div style="display:flex;gap:8px;margin-top:12px"><button class="btn btn-primary" onclick="saveCatCount('${window._smCat}')">Save count for: ${window._smCat}</button><button class="btn" onclick="window._smCat='';renderStockMgmt()" style="color:var(--danger)">Change category</button></div>`:window._smCat?`<div style="color:var(--text3);padding:.5rem">No items in "${window._smCat}".</div>`:`<div style="color:var(--text3);font-size:13px">Select a category above to start counting.</div>`}</div>`;
+    body=`<div class="sec-title">Stock count by category</div><div class="card" style="margin-bottom:1rem"><div class="form-group" style="max-width:360px;margin-bottom:1rem"><label>Select category to count</label><select class="form-input" onchange="window._smCat=this.value;renderStockMgmt()">${catOpts}</select></div>${window._smCat&&catItems.length?`${hiddenNote}<div class="tbl-wrap"><table><thead><tr><th>Item</th><th style="text-align:center">System Qty</th><th>Counted Qty</th><th>Status</th></tr></thead><tbody>${catRows}</tbody></table></div><div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap"><button class="btn btn-primary" onclick="saveCatCount('${window._smCat}')">Save count for: ${window._smCat}</button><button class="btn" onclick="printStockSheet('${window._smCat}')" style="color:#7c3aed;border-color:#c4b5fd">🖨 Print Sheet for this Category</button><button class="btn" onclick="window._smCat='';renderStockMgmt()" style="color:var(--danger)">Change category</button></div>`:window._smCat?`<div style="color:var(--text3);padding:.5rem">No items in "${window._smCat}".</div>`:`<div style="color:var(--text3);font-size:13px">Select a category above to start counting.</div>`}</div>`;
   } else if(tab==='count'){
     if (window._smCountAllActive) {
       const search=(window._smAllSearch||'').toLowerCase();
@@ -9470,7 +9470,7 @@ function renderStockMgmt() {
         ${window._smAllSearch?`<span class="search-clear show" onclick="window._smAllSearch='';renderStockMgmt()" title="Clear search">✕</span>`:''}
       </div>
       <div class="tbl-wrap"><table><thead><tr><th>Item</th><th>Category</th><th style="text-align:center">System Qty</th><th>Counted Qty</th><th>Status</th></tr></thead><tbody>${allRows||'<tr><td colspan="5" style="text-align:center;color:var(--text3);padding:16px">No items match.</td></tr>'}</tbody></table></div>
-      <div style="display:flex;gap:8px;margin-top:12px"><button class="btn btn-primary" onclick="saveAllCount()">Save count for: All items (${allItems.length})</button></div>`;
+      <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap"><button class="btn btn-primary" onclick="saveAllCount()">Save count for: All items (${allItems.length})</button><button class="btn" onclick="printStockSheet('',window._smAllSearch||'')" style="color:#7c3aed;border-color:#c4b5fd">🖨 Print Sheet for this List</button></div>`;
     } else {
       const log=Object.values(STATE.stockCounts||{}).sort((a,b)=>(b.date||'').localeCompare(a.date||''));
       const logRows=log.slice(0,50).map(l=>`<tr><td>${l.date||''}</td><td>${esc(l.by||'')}</td><td>${esc(l.cat||'All items')}</td><td>${l.items||0}</td><td>${l.variances>0?`<span class="badge badge-warning">${l.variances} variances</span>`:'<span class="badge badge-success">All matched</span>'}</td></tr>`).join('');
@@ -9485,7 +9485,10 @@ function renderStockMgmt() {
     const rows=items.sort((a,b)=>(a.name||'').localeCompare(b.name||'')).map(i=>`<tr><td><b>${esc(i.name)}</b></td><td style="font-size:12px;color:var(--text3)">${esc(i.cat||'—')}</td><td class="td-right">${fmt(i.costPrice||i.cost||0)}</td><td class="td-right">${fmt(i.sellPrice||i.sell||0)}</td><td style="text-align:center">${i.minQty||5}</td><td><button class="btn btn-sm" onclick="showEditItemModal('${i._id||i.id}')" style="color:var(--primary);border-color:#b6d4fe">Edit</button></td></tr>`).join('');
     body=`<div class="tbl-wrap"><table><thead><tr><th>Name</th><th>Category</th><th class="td-right">Cost (N)</th><th class="td-right">Sell (N)</th><th style="text-align:center">Min Qty</th><th></th></tr></thead><tbody>${rows||'<tr><td colspan="6"><div class="empty-state"><div class="empty-state-icon">📦</div><div>No inventory items</div></div></td></tr>'}</tbody></table></div>`;
   }
-  el.innerHTML=`<div class="subtabs">${subtabs}</div>${body}`;
+  el.innerHTML=`<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:0">
+    <div class="subtabs" style="margin-bottom:0">${subtabs}</div>
+    <button class="btn" onclick="showPrintStockSheetModal()" style="color:#7c3aed;border-color:#c4b5fd;font-weight:600">🖨 Print / Download Stock Sheet</button>
+  </div>${body}`;
 }
 
 async function saveStockAdjFromForm(){
@@ -9550,6 +9553,130 @@ async function saveAllCount(){
     setSyncStatus('synced');showToast(`Full stock count saved — ${countedTotal} items counted, ${variances} variance${variances!==1?'s':''}`,variances>0?'warning':'success');renderStockMgmt();updateInventoryBadge();
     logActivity('Stock count',`All items: ${countedTotal} items counted, ${variances} variance${variances!==1?'s':''}`,'');
   }catch(e){setSyncStatus('error');showToast('Failed.','error');}
+}
+
+// ── Print / Download Stock Sheet (blank sheet for physical counting) ──
+function showPrintStockSheetModal() {
+  const cats = [...new Set(Object.values(STATE.inventory||{}).map(i=>i.cat||'Uncategorized'))].sort();
+  const catOpts = `<option value="">-- All items --</option>` + cats.map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join('');
+  showModal('🖨 Print / Download Stock Sheet', `
+    <div class="form-group">
+      <label>Category</label>
+      <select class="form-input" id="pss-cat">${catOpts}</select>
+    </div>
+    <div class="alert alert-info" style="font-size:12px;margin-top:6px">
+      ℹ️ The sheet only lists item names — system quantities are left off so the physical count stays unbiased. Counted figures get entered back into the app afterwards.
+    </div>
+  `, [
+    {label:'Cancel', action:'close', style:''},
+    {label:'⬇ Download CSV', action:"downloadStockSheetCSV(document.getElementById('pss-cat').value)", style:''},
+    {label:'🖨 Print', action:"printStockSheet(document.getElementById('pss-cat').value)", style:'btn-primary'}
+  ]);
+}
+
+function _stockSheetItems(catFilter, searchTerm) {
+  let items = Object.values(STATE.inventory||{});
+  if (catFilter) items = items.filter(i => (i.cat||'Uncategorized') === catFilter);
+  if (searchTerm) {
+    const s = searchTerm.toLowerCase();
+    items = items.filter(i => (i.name||'').toLowerCase().includes(s) || (i.cat||'').toLowerCase().includes(s));
+  }
+  return items.sort((a,b) => (a.cat||'Uncategorized').localeCompare(b.cat||'Uncategorized') || (a.name||'').localeCompare(b.name||''));
+}
+
+function printStockSheet(catFilter='', searchTerm='') {
+  const items = _stockSheetItems(catFilter, searchTerm);
+  if (!items.length) { showToast('No items to print.','error'); return; }
+  const today = new Date().toLocaleDateString('en-NG',{day:'2-digit',month:'short',year:'numeric'});
+  const label = catFilter ? catFilter : 'All Items';
+  const rows = items.map((i,idx) => `
+    <tr style="background:${idx%2===0?'#f9fafb':'#fff'}">
+      <td style="padding:8px 10px;font-size:12px;color:#6b7280">${idx+1}</td>
+      <td style="padding:8px 10px;font-size:13px;font-weight:600">${esc(i.name)}</td>
+      ${catFilter?'':`<td style="padding:8px 10px;font-size:11px;color:#6b7280">${esc(i.cat||'Uncategorized')}</td>`}
+      <td style="padding:8px 10px;border-left:1px dashed #cbd5e1"></td>
+      <td style="padding:8px 10px;border-left:1px dashed #cbd5e1"></td>
+    </tr>`).join('');
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
+  <title>Stock Count Sheet — ${esc(label)}</title>
+  <style>
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{font-family:'Segoe UI',Arial,sans-serif;font-size:13px;color:#1e293b;padding:24px}
+    .header{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #7c3aed;padding-bottom:12px;margin-bottom:16px}
+    .biz-name{font-size:18px;font-weight:800;color:#7c3aed}
+    .biz-sub{font-size:11px;color:#6b7280;margin-top:2px}
+    .sheet-title{font-size:14px;font-weight:700;color:#374151;text-align:right}
+    .sheet-date{font-size:11px;color:#6b7280;margin-top:2px}
+    .meta-box{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 16px;margin-bottom:16px;display:flex;justify-content:space-between;gap:24px;flex-wrap:wrap;font-size:12px}
+    .meta-field{flex:1;min-width:140px}
+    .meta-field b{display:block;font-size:10px;color:#6b7280;text-transform:uppercase;margin-bottom:4px}
+    .meta-line{border-bottom:1px solid #94a3b8;height:18px}
+    table{width:100%;border-collapse:collapse;margin-bottom:16px}
+    th{background:#7c3aed;color:#fff;padding:8px 10px;font-size:11px;text-align:left;font-weight:700}
+    .footer{margin-top:14px;text-align:center;font-size:10px;color:#9ca3af;border-top:1px solid #e2e8f0;padding-top:10px}
+    @media print{body{padding:10px} .no-print{display:none}}
+  </style></head><body>
+  <div class="header">
+    <div>
+      <div class="biz-name">Great Chid Electro / Global Doors Ltd</div>
+      <div class="biz-sub">Ogbomoso & Ilorin, Nigeria</div>
+    </div>
+    <div style="text-align:right">
+      <div class="sheet-title">🧮 Stock Count Sheet</div>
+      <div class="sheet-date">${esc(label)} &nbsp;|&nbsp; ${today}</div>
+    </div>
+  </div>
+
+  <div class="meta-box">
+    <div class="meta-field"><b>Counted By</b><div class="meta-line"></div></div>
+    <div class="meta-field"><b>Date / Time</b><div class="meta-line"></div></div>
+    <div class="meta-field"><b>Signature</b><div class="meta-line"></div></div>
+  </div>
+
+  <table>
+    <thead><tr>
+      <th style="width:30px">#</th>
+      <th>Item</th>
+      ${catFilter?'':'<th>Category</th>'}
+      <th style="width:110px">Counted Qty</th>
+      <th style="width:160px">Notes</th>
+    </tr></thead>
+    <tbody>${rows}</tbody>
+  </table>
+
+  <div style="font-size:11px;color:#6b7280;margin-bottom:6px">${items.length} item${items.length!==1?'s':''} listed. Count what's physically on the shelf — do not refer to system records while counting.</div>
+
+  <div class="footer">Generated by GCE Business Dashboard v2 &nbsp;|&nbsp; ${today}</div>
+  <button class="no-print" onclick="window.print()" style="margin-top:14px;padding:8px 20px;background:#7c3aed;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px">🖨️ Print</button>
+  <script>window.onload=()=>window.print();<\/script>
+  </body></html>`;
+
+  const w = window.open('','_blank','width=850,height=1000');
+  if (w) { w.document.write(html); w.document.close(); }
+  else showToast('Allow popups to print the sheet.','error');
+  closeModal();
+  logActivity('Stock sheet printed', `${label} — ${items.length} items`, '');
+}
+
+function downloadStockSheetCSV(catFilter='', searchTerm='') {
+  const items = _stockSheetItems(catFilter, searchTerm);
+  if (!items.length) { showToast('No items to export.','error'); return; }
+  const header = catFilter
+    ? 'ITEM NAME,COUNTED QTY,NOTES'
+    : 'ITEM NAME,CATEGORY,COUNTED QTY,NOTES';
+  const rows = items.map(i => catFilter
+    ? `"${(i.name||'').replace(/"/g,'""')}",,`
+    : `"${(i.name||'').replace(/"/g,'""')}","${(i.cat||'Uncategorized').replace(/"/g,'""')}",,`
+  );
+  const csv = header + '\n' + rows.join('\n');
+  const blob = new Blob([csv], {type:'text/csv'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `stock_count_sheet_${(catFilter||'all').replace(/[^a-z0-9]+/gi,'_').toLowerCase()}.csv`;
+  a.click();
+  closeModal();
+  showToast(`✅ Downloaded blank stock sheet (${items.length} items).`,'success');
+  logActivity('Stock sheet downloaded', `${catFilter||'All items'} — ${items.length} items`, '');
 }
 
 // ── BORROWS ───────────────────────────────────────────────
