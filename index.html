@@ -8446,6 +8446,7 @@ function showTransferModal(whId, direction) {
   window._trDirection = dir;
   window._trCart = [];
   window._trNote = '';
+  window._trWaybill = '';
   renderTransferCartModal();
 }
 
@@ -8469,6 +8470,10 @@ function renderTransferCartModal() {
   const totalUnits = cart.reduce((a,c)=>a+c.qty,0);
   const title = isToShop ? '🏭 → 📦 Warehouse to Shop' : '📦 → 🏭 Shop to Warehouse';
   const body = `
+    <div class="form-group" style="margin-bottom:14px">
+      <label>Waybill No. <span class="req">*</span></label>
+      <input class="form-input" id="tr-waybill" placeholder="e.g. WB-2026-0451" value="${esc(window._trWaybill||'')}" onchange="window._trWaybill=this.value">
+    </div>
     <div class="form-grid c2" style="margin-bottom:14px">
       <div class="form-group" style="grid-column:1/-1">
         <label>Item</label>
@@ -8531,9 +8536,13 @@ async function commitTransferCart() {
   const dir = window._trDirection;
   const cart = window._trCart||[];
   if (!cart.length) { showToast('Cart is empty — add at least one item.','error'); return; }
+  const waybill = (document.getElementById('tr-waybill')?.value||window._trWaybill||'').trim();
+  if (!waybill) { showToast('Enter a waybill number.','error'); return; }
+  if (Object.values(STATE.transferLog||{}).some(t=>t.waybill===waybill)) {
+    showToast(`Waybill "${waybill}" is already in use. Enter a unique number.`,'error'); return;
+  }
   const note = document.getElementById('tr-cart-note')?.value.trim()||window._trNote||'';
   const now=new Date(); const date=now.toLocaleDateString();
-  const waybill='WB-'+Date.now().toString().slice(-8);
   setSyncStatus('saving');
   try{
     let totalUnits=0; const names=[];
@@ -8567,7 +8576,7 @@ async function commitTransferCart() {
         totalUnits+=qty; names.push(`${qty}× ${inv.name}`);
       }
     }
-    window._trCart=[]; window._trNote='';
+    window._trCart=[]; window._trNote=''; window._trWaybill='';
     closeModal();setSyncStatus('synced');renderWarehouse();renderInventory();updateInventoryBadge();
     showToast(`✅ Transferred ${cart.length} item${cart.length!==1?'s':''} (${totalUnits} units) ${dir==='to_shop'?'to shop':'to warehouse'}.`,'success');
     logActivity(dir==='to_shop'?'Transfer to shop':'Transfer to warehouse', names.join(', '), '');
