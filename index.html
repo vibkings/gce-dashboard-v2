@@ -381,6 +381,9 @@ select.form-input option{background:#1c2130;color:var(--text1)}
 .search-wrap{position:relative}
 .search-wrap input{padding-left:34px}
 .search-icon{position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--text3);font-size:14px;pointer-events:none}
+.search-clear{position:absolute;right:8px;top:50%;transform:translateY(-50%);color:var(--text3);font-size:13px;cursor:pointer;display:none;width:18px;height:18px;line-height:18px;text-align:center;border-radius:50%;background:var(--surface)}
+.search-clear:hover{color:var(--danger);background:var(--border)}
+.search-clear.show{display:block}
 
 /* ── Status chips ── */
 .chip{display:inline-flex;align-items:center;gap:4px;padding:3px 9px;border-radius:99px;font-size:11px;font-weight:600}
@@ -1067,9 +1070,12 @@ input[type=number]::-webkit-inner-spin-button{opacity:.25}
           </div>
           <div style="flex:1;min-width:110px">
             <div style="font-size:10px;font-weight:600;text-transform:uppercase;color:var(--text3);margin-bottom:4px">CATEGORY</div>
-            <select class="form-input" id="inv-inline-cat" style="width:100%">
-              <option value="">-- Category --</option>
-            </select>
+            <div style="display:flex;gap:4px">
+              <select class="form-input" id="inv-inline-cat" style="width:100%">
+                <option value="">-- Category --</option>
+              </select>
+              <button class="btn btn-sm" onclick="showAddCategoryModal('inv-inline-cat')" title="Add new category" style="padding:0 9px;white-space:nowrap">+</button>
+            </div>
           </div>
           <div style="flex:1;min-width:110px">
             <div style="font-size:10px;font-weight:600;text-transform:uppercase;color:var(--text3);margin-bottom:4px">SUPPLIER</div>
@@ -1109,7 +1115,8 @@ input[type=number]::-webkit-inner-spin-button{opacity:.25}
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
           <div class="search-wrap" style="flex:1;max-width:380px">
             <span class="search-icon">🔍</span>
-            <input type="text" class="form-input" id="inv-search" placeholder="Search by name, category or supplier...">
+            <input type="text" class="form-input" id="inv-search" placeholder="Search by name, category or supplier..." style="padding-right:30px">
+            <span id="inv-search-clear" class="search-clear" onclick="_clearSearchInput('inv-search','inv-search-clear');renderInventory()" title="Clear search">✕</span>
           </div>
           <span id="inv-subtitle" style="font-size:12px;color:var(--text3)">Loading...</span>
           <div style="margin-left:auto;display:flex;gap:6px">
@@ -1379,6 +1386,7 @@ const STATE = {
   activityLog:        {},
   banks:              {},
   settings:           {},
+  customCategories:   [],
   invCounter:         0,
   syncStatus:         'connecting'
 };
@@ -2141,6 +2149,13 @@ async function initDataLayer() {
     if (counterDoc?.value) STATE.invCounter = counterDoc.value;
   } catch(e) {}
 
+  // Load custom (no-item-yet) categories
+  try {
+    const s = _lfStore(COLS.SETTINGS);
+    const catDoc = s ? await s.getItem('customCategories') : null;
+    if (Array.isArray(catDoc?.value)) STATE.customCategories = catDoc.value;
+  } catch(e) {}
+
   // Run any pending sync
   if (_online && _syncQueue.length) runSyncQueue();
 
@@ -2578,6 +2593,20 @@ async function refreshAllData() {
 // ════════════════════════════════════════════════════════════
 // AUTH SYSTEM
 // ════════════════════════════════════════════════════════════
+
+// ── Generic search-box clear button helpers ─────────────────
+function _toggleSearchClear(inputId, clearId) {
+  const inp = document.getElementById(inputId);
+  const clr = document.getElementById(clearId);
+  if (!inp || !clr) return;
+  clr.classList.toggle('show', !!inp.value);
+}
+function _clearSearchInput(inputId, clearId) {
+  const inp = document.getElementById(inputId);
+  const clr = document.getElementById(clearId);
+  if (inp) { inp.value = ''; inp.focus(); }
+  if (clr) clr.classList.remove('show');
+}
 
 function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2,8);
@@ -3050,6 +3079,53 @@ function _sanitizeInventory() {
   }
 }
 
+// ── Categories (merges item-derived cats with standalone custom cats) ──
+function getAllCategories() {
+  const fromItems = Object.values(STATE.inventory||{}).map(i => i.cat).filter(Boolean);
+  const fromCustom = STATE.customCategories||[];
+  return [...new Set([...fromItems, ...fromCustom])].sort((a,b)=>a.localeCompare(b));
+}
+
+function showAddCategoryModal(onSavedFocusId) {
+  showModal('➕ New Category', `
+    <div class="form-group">
+      <label>Category Name <span class="req">*</span></label>
+      <input class="form-input" id="newcat-name" placeholder="e.g. SWITCHES" autofocus>
+    </div>
+  `, [
+    {label:'Cancel', action:'close', style:''},
+    {label:'➕ Add Category', action:`addCategory(${JSON.stringify(onSavedFocusId||'')})`, style:'btn-primary'}
+  ]);
+  setTimeout(()=>document.getElementById('newcat-name')?.focus(), 50);
+}
+
+async function addCategory(focusId) {
+  const input = document.getElementById('newcat-name');
+  const name = (input?.value||'').trim().toUpperCase();
+  if (!name) { showToast('Enter a category name.','error'); return; }
+  const existing = getAllCategories();
+  if (existing.some(c => c.toLowerCase() === name.toLowerCase())) {
+    showToast('Category already exists.','info'); return;
+  }
+  setSyncStatus('saving');
+  try {
+    if (!Array.isArray(STATE.customCategories)) STATE.customCategories = [];
+    STATE.customCategories.push(name);
+    await fsSave(COLS.SETTINGS, 'customCategories', {value: STATE.customCategories});
+    closeModal();
+    setSyncStatus('synced');
+    showToast(`✅ Category "${name}" added.`,'success');
+    logActivity('Category added', name, '');
+    renderInventory();
+    renderStockMgmt();
+    // If we were called from a select dropdown, select the new category there
+    if (focusId) { const sel = document.getElementById(focusId); if (sel) { sel.value = name; sel.dispatchEvent(new Event('change')); } }
+  } catch(e) {
+    setSyncStatus('error');
+    showToast('Failed to add category.','error');
+  }
+}
+
 function renderInventory() {
   // Sanitize any items with undefined string values (from bad imports/migrations)
   Object.values(STATE.inventory||{}).forEach(i => {
@@ -3066,7 +3142,7 @@ function renderInventory() {
   const statusFilter = document.getElementById('inv-status-filter')?.value || '';
 
   // Update category dropdown
-  const cats = [...new Set(items.map(i => i.cat).filter(Boolean))].sort();
+  const cats = getAllCategories();
   const catSel = document.getElementById('inv-cat-filter');
   if (catSel) {
     const curCat = catSel.value;
@@ -3188,10 +3264,11 @@ function renderInventory() {
   const search = document.getElementById('inv-search');
   if (search && !search._wired) {
     search._wired = true;
-    search.oninput = () => { window._invPage = 0; renderInventory(); };
+    search.oninput = () => { window._invPage = 0; _toggleSearchClear('inv-search','inv-search-clear'); renderInventory(); };
     document.getElementById('inv-cat-filter').onchange = () => { window._invPage = 0; renderInventory(); };
     document.getElementById('inv-status-filter').onchange = () => { window._invPage = 0; renderInventory(); };
   }
+  _toggleSearchClear('inv-search','inv-search-clear');
 }
 
 function itemStatus(i) {
@@ -3294,7 +3371,13 @@ function showEditItemModal(id) {
       </div>
       <div class="form-group">
         <label>Category</label>
-        <input class="form-input" id="ei-cat" value="${esc(i.cat||'')}">
+        <div style="display:flex;gap:4px">
+          <select class="form-input" id="ei-cat" style="width:100%">
+            <option value="">-- Category --</option>
+            ${getAllCategories().map(c=>`<option value="${esc(c)}" ${c===i.cat?'selected':''}>${esc(c)}</option>`).join('')}
+          </select>
+          <button class="btn btn-sm" onclick="showAddCategoryModal('ei-cat')" title="Add new category" style="padding:0 9px;white-space:nowrap">+</button>
+        </div>
       </div>
       <div class="form-group">
         <label>Supplier</label>
@@ -8360,78 +8443,134 @@ async function saveAddWhItem() {
 function showTransferModal(whId, direction) {
   // direction: 'to_shop' or 'to_warehouse'
   const dir = direction || (whId ? 'to_shop' : 'to_warehouse');
-
-  if (dir === 'to_shop') {
-    // Warehouse → Shop: pick from warehouse items
-    const wh = whId ? (STATE.warehouse||{})[whId] : null;
-    const whItems = Object.values(STATE.warehouse||{}).sort((a,b)=>(a.name||'').localeCompare(b.name||''));
-    const opts = whItems.map(i=>`<option value="${i._id||i.id}" ${(wh&&(i._id||i.id)===(wh._id||wh.id))?'selected':''}>${esc(i.name)} (wh: ${i.qty||0})</option>`).join('');
-    showModal('🏭 → 📦 Warehouse to Shop', `
-      <div class="form-grid c2">
-        <div class="form-group" style="grid-column:1/-1">
-          <label>Item *</label>
-          <select class="form-input" id="tr-item">${opts}</select>
-        </div>
-        <div class="form-group"><label>Qty to Transfer *</label><input class="form-input" id="tr-qty" type="number" min="1" placeholder="0"></div>
-        <div class="form-group"><label>Note</label><input class="form-input" id="tr-note" placeholder="Optional"></div>
-      </div>
-    `,[{label:'Cancel',action:'close',style:''},{label:'🏭→📦 Transfer to Shop',action:"saveTransfer('to_shop')",style:'btn-primary'}]);
-
-  } else {
-    // Shop → Warehouse: pick from shop items
-    const invItems = Object.values(STATE.inventory||{}).sort((a,b)=>(a.name||'').localeCompare(b.name||''));
-    const opts = invItems.map(i=>`<option value="${i._id||i.id}">${esc(i.name)} (shop: ${i.qty||0})</option>`).join('');
-    showModal('📦 → 🏭 Shop to Warehouse', `
-      <div class="form-grid c2">
-        <div class="form-group" style="grid-column:1/-1">
-          <label>Item *</label>
-          <select class="form-input" id="tr-item">${opts}</select>
-        </div>
-        <div class="form-group"><label>Qty to Transfer *</label><input class="form-input" id="tr-qty" type="number" min="1" placeholder="0"></div>
-        <div class="form-group"><label>Note</label><input class="form-input" id="tr-note" placeholder="Optional"></div>
-      </div>
-    `,[{label:'Cancel',action:'close',style:''},{label:'📦→🏭 Transfer to Warehouse',action:"saveTransfer('to_warehouse')",style:'btn-primary'}]);
-  }
+  window._trDirection = dir;
+  window._trCart = [];
+  window._trNote = '';
+  renderTransferCartModal();
 }
 
-async function saveTransfer(direction) {
-  const selId = document.getElementById('tr-item')?.value;
-  const qty   = parseInt(document.getElementById('tr-qty')?.value)||0;
-  const note  = document.getElementById('tr-note')?.value.trim()||'';
-  if(!selId||qty<1){showToast('Select item and quantity.','error');return;}
+function renderTransferCartModal() {
+  const dir = window._trDirection;
+  const cart = window._trCart||[];
+  const isToShop = dir==='to_shop';
+  const sourceItems = isToShop
+    ? Object.values(STATE.warehouse||{}).sort((a,b)=>(a.name||'').localeCompare(b.name||''))
+    : Object.values(STATE.inventory||{}).sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+  const cartQtyById = {}; cart.forEach(c=>{cartQtyById[c.id]=(cartQtyById[c.id]||0)+c.qty;});
+  const opts = sourceItems.map(i=>{
+    const id=i._id||i.id; const avail=(i.qty||0)-(cartQtyById[id]||0);
+    return `<option value="${id}" ${avail<=0?'disabled':''}>${esc(i.name)} (${isToShop?'wh':'shop'}: ${avail})</option>`;
+  }).join('');
+  const cartRows = cart.map((c,idx)=>`<tr>
+      <td><b>${esc(c.name)}</b></td>
+      <td style="text-align:center"><input class="form-input" type="number" min="1" value="${c.qty}" style="width:80px;padding:4px 6px" onchange="updateTransferCartQty(${idx},this.value)"></td>
+      <td><button class="btn btn-sm" onclick="removeFromTransferCart(${idx})" style="color:var(--danger);border-color:#f5c2c7">✕ Remove</button></td>
+    </tr>`).join('');
+  const totalUnits = cart.reduce((a,c)=>a+c.qty,0);
+  const title = isToShop ? '🏭 → 📦 Warehouse to Shop' : '📦 → 🏭 Shop to Warehouse';
+  const body = `
+    <div class="form-grid c2" style="margin-bottom:14px">
+      <div class="form-group" style="grid-column:1/-1">
+        <label>Item</label>
+        <select class="form-input" id="tr-add-item">${opts||'<option value="">No items available</option>'}</select>
+      </div>
+      <div class="form-group"><label>Qty</label><input class="form-input" id="tr-add-qty" type="number" min="1" placeholder="0"></div>
+      <div class="form-group" style="display:flex;align-items:flex-end"><button class="btn btn-primary" onclick="addToTransferCart()" style="width:100%">+ Add to cart</button></div>
+    </div>
+    ${cart.length?`
+    <div class="tbl-wrap" style="margin-bottom:10px"><table><thead><tr><th>Item</th><th style="text-align:center">Qty</th><th></th></tr></thead><tbody>${cartRows}</tbody></table></div>
+    <div style="font-size:12px;color:var(--text3);margin-bottom:10px">${cart.length} item${cart.length!==1?'s':''} · ${totalUnits} unit${totalUnits!==1?'s':''} total</div>
+    `:`<div style="color:var(--text3);font-size:13px;padding:10px 0">Cart is empty — add items above.</div>`}
+    <div class="form-group"><label>Note</label><input class="form-input" id="tr-cart-note" placeholder="Optional" value="${esc(window._trNote||'')}" onchange="window._trNote=this.value"></div>
+  `;
+  showModal(title, body, [
+    {label:'Cancel', action:'close', style:''},
+    {label:`${isToShop?'🏭→📦':'📦→🏭'} Transfer${cart.length?` (${cart.length})`:''}`, action:'commitTransferCart()', style:'btn-primary'}
+  ]);
+}
+
+function addToTransferCart() {
+  const dir = window._trDirection;
+  const isToShop = dir==='to_shop';
+  const id = document.getElementById('tr-add-item')?.value;
+  const qty = parseInt(document.getElementById('tr-add-qty')?.value)||0;
+  if (!id) { showToast('Select an item.','error'); return; }
+  if (qty < 1) { showToast('Enter a valid quantity.','error'); return; }
+  const source = isToShop ? STATE.warehouse?.[id] : STATE.inventory?.[id];
+  if (!source) { showToast('Item not found.','error'); return; }
+  const cart = window._trCart||(window._trCart=[]);
+  const existing = cart.find(c=>c.id===id);
+  const alreadyInCart = existing ? existing.qty : 0;
+  const avail = source.qty||0;
+  if (alreadyInCart + qty > avail) { showToast(`Only ${avail-alreadyInCart} more available for "${source.name}".`,'error'); return; }
+  if (existing) existing.qty += qty;
+  else cart.push({id, name:source.name, qty});
+  showToast(`Added ${qty} × ${source.name} to cart.`,'success');
+  renderTransferCartModal();
+}
+
+function updateTransferCartQty(idx, val) {
+  const cart = window._trCart||[];
+  const item = cart[idx]; if(!item) return;
+  const dir = window._trDirection; const isToShop = dir==='to_shop';
+  const source = isToShop ? STATE.warehouse?.[item.id] : STATE.inventory?.[item.id];
+  const avail = source?.qty||0;
+  const qty = Math.max(1, parseInt(val)||1);
+  if (qty > avail) { showToast(`Only ${avail} available for "${item.name}".`,'error'); item.qty = Math.min(item.qty, avail)||1; }
+  else item.qty = qty;
+  renderTransferCartModal();
+}
+
+function removeFromTransferCart(idx) {
+  const cart = window._trCart||[];
+  cart.splice(idx,1);
+  renderTransferCartModal();
+}
+
+async function commitTransferCart() {
+  const dir = window._trDirection;
+  const cart = window._trCart||[];
+  if (!cart.length) { showToast('Cart is empty — add at least one item.','error'); return; }
+  const note = document.getElementById('tr-cart-note')?.value.trim()||window._trNote||'';
   const now=new Date(); const date=now.toLocaleDateString();
   const waybill='WB-'+Date.now().toString().slice(-8);
   setSyncStatus('saving');
   try{
-    if(direction==='to_shop'){
-      // Warehouse → Shop
-      const wh=STATE.warehouse?.[selId]; if(!wh){showToast('Warehouse item not found.','error');return;}
-      if(qty>(wh.qty||0)){showToast(`Only ${wh.qty||0} in warehouse.`,'error');return;}
-      const updWh={...wh,qty:(wh.qty||0)-qty};
-      await fsSave('v2_warehouse',selId,updWh);STATE.warehouse[selId]={...updWh,_id:selId,_savedAt:Date.now()};
-      // Add to shop
-      const shopItem=Object.values(STATE.inventory||{}).find(i=>i.name?.toLowerCase()===wh.name?.toLowerCase());
-      if(shopItem){const updSh={...shopItem,qty:(shopItem.qty||0)+qty};await fsSave(COLS.INVENTORY,shopItem._id,updSh);STATE.inventory[shopItem._id]={...updSh};}
-      // Log
-      const logId=uid();const entry={id:logId,waybill,itemId:selId,itemName:wh.name,qty,direction,note,date,by:STATE.user?.name};
-      await fsSave('v2_transferLog',logId,entry);if(!STATE.transferLog)STATE.transferLog={};STATE.transferLog[logId]={...entry,_id:logId,_savedAt:Date.now()};
-      showToast(`✅ ${qty} × ${wh.name} transferred to shop.`,'success');
-    } else {
-      // Shop → Warehouse
-      const inv=STATE.inventory?.[selId]; if(!inv){showToast('Shop item not found.','error');return;}
-      if(qty>(inv.qty||0)){showToast(`Only ${inv.qty||0} in shop.`,'error');return;}
-      const updInv={...inv,qty:(inv.qty||0)-qty};
-      await fsSave(COLS.INVENTORY,selId,updInv);STATE.inventory[selId]={...updInv};
-      // Add to warehouse
-      const whItem=Object.values(STATE.warehouse||{}).find(w=>w.name?.toLowerCase()===inv.name?.toLowerCase());
-      if(whItem){const updWh={...whItem,qty:(whItem.qty||0)+qty};await fsSave('v2_warehouse',whItem._id,updWh);STATE.warehouse[whItem._id]={...updWh};}
-      else{const wid=uid();const newWh={id:wid,name:inv.name,cat:inv.cat||'',qty,minQty:inv.minQty||5,cost:inv.costPrice||inv.cost||0,itemId:selId};await fsSave('v2_warehouse',wid,newWh);if(!STATE.warehouse)STATE.warehouse={};STATE.warehouse[wid]={...newWh,_id:wid,_savedAt:Date.now()};}
-      // Log
-      const logId=uid();const entry={id:logId,waybill,itemId:selId,itemName:inv.name,qty,direction,note,date,by:STATE.user?.name};
-      await fsSave('v2_transferLog',logId,entry);if(!STATE.transferLog)STATE.transferLog={};STATE.transferLog[logId]={...entry,_id:logId,_savedAt:Date.now()};
-      showToast(`✅ ${qty} × ${inv.name} transferred to warehouse.`,'success');
+    let totalUnits=0; const names=[];
+    for (const c of cart) {
+      if (dir==='to_shop') {
+        // Warehouse → Shop
+        const wh=STATE.warehouse?.[c.id]; if(!wh) continue;
+        const qty=Math.min(c.qty, wh.qty||0); if(qty<1) continue;
+        const updWh={...wh,qty:(wh.qty||0)-qty};
+        await fsSave('v2_warehouse',c.id,updWh);STATE.warehouse[c.id]={...updWh,_id:c.id,_savedAt:Date.now()};
+        // Add to shop
+        const shopItem=Object.values(STATE.inventory||{}).find(i=>i.name?.toLowerCase()===wh.name?.toLowerCase());
+        if(shopItem){const updSh={...shopItem,qty:(shopItem.qty||0)+qty};await fsSave(COLS.INVENTORY,shopItem._id,updSh);STATE.inventory[shopItem._id]={...updSh,_id:shopItem._id,_savedAt:Date.now()};}
+        // Log
+        const logId=uid();const entry={id:logId,waybill,itemId:c.id,itemName:wh.name,qty,direction:dir,note,date,by:STATE.user?.name};
+        await fsSave('v2_transferLog',logId,entry);if(!STATE.transferLog)STATE.transferLog={};STATE.transferLog[logId]={...entry,_id:logId,_savedAt:Date.now()};
+        totalUnits+=qty; names.push(`${qty}× ${wh.name}`);
+      } else {
+        // Shop → Warehouse
+        const inv=STATE.inventory?.[c.id]; if(!inv) continue;
+        const qty=Math.min(c.qty, inv.qty||0); if(qty<1) continue;
+        const updInv={...inv,qty:(inv.qty||0)-qty};
+        await fsSave(COLS.INVENTORY,c.id,updInv);STATE.inventory[c.id]={...updInv,_id:c.id,_savedAt:Date.now()};
+        // Add to warehouse
+        const whItem=Object.values(STATE.warehouse||{}).find(w=>w.name?.toLowerCase()===inv.name?.toLowerCase());
+        if(whItem){const updWh={...whItem,qty:(whItem.qty||0)+qty};await fsSave('v2_warehouse',whItem._id,updWh);STATE.warehouse[whItem._id]={...updWh,_id:whItem._id,_savedAt:Date.now()};}
+        else{const wid=uid();const newWh={id:wid,name:inv.name,cat:inv.cat||'',qty,minQty:inv.minQty||5,cost:inv.costPrice||inv.cost||0,itemId:c.id};await fsSave('v2_warehouse',wid,newWh);if(!STATE.warehouse)STATE.warehouse={};STATE.warehouse[wid]={...newWh,_id:wid,_savedAt:Date.now()};}
+        // Log
+        const logId=uid();const entry={id:logId,waybill,itemId:c.id,itemName:inv.name,qty,direction:dir,note,date,by:STATE.user?.name};
+        await fsSave('v2_transferLog',logId,entry);if(!STATE.transferLog)STATE.transferLog={};STATE.transferLog[logId]={...entry,_id:logId,_savedAt:Date.now()};
+        totalUnits+=qty; names.push(`${qty}× ${inv.name}`);
+      }
     }
+    window._trCart=[]; window._trNote='';
     closeModal();setSyncStatus('synced');renderWarehouse();renderInventory();updateInventoryBadge();
+    showToast(`✅ Transferred ${cart.length} item${cart.length!==1?'s':''} (${totalUnits} units) ${dir==='to_shop'?'to shop':'to warehouse'}.`,'success');
+    logActivity(dir==='to_shop'?'Transfer to shop':'Transfer to warehouse', names.join(', '), '');
   }catch(e){setSyncStatus('error');showToast('Failed: '+e.message,'error');}
 }
 
@@ -9281,29 +9420,69 @@ async function clearAllV2Data() {
 // ════════════════════════════════════════════════════════════
 
 // ── STOCK MANAGEMENT ─────────────────────────────────────
+// ── Stock count row builder: system qty hidden until a count is entered ──
+function _countRowHtml(i, idPrefix, showCat) {
+  const id = i._id||i.id;
+  const sysQty = i.qty||0;
+  const catCell = showCat ? `<td style="font-size:12px;color:var(--text3)">${esc(i.cat||'—')}</td>` : '';
+  return `<tr><td><b>${esc(i.name)}</b></td>${catCell}<td id="${idPrefix}sq-${id}" style="text-align:center"><span style="color:var(--text3);font-size:11px">🔒 Hidden</span></td><td><input class="form-input" type="number" min="0" placeholder="Enter count" id="${idPrefix}-${id}" style="width:110px;padding:4px 8px" oninput="_smCheckCount('${idPrefix}','${id}',${sysQty})"></td><td id="${idPrefix}s-${id}"><span style="color:var(--text3);font-size:11px">Not entered</span></td></tr>`;
+}
+function _smCheckCount(idPrefix, id, sysQty) {
+  const inp = document.getElementById(`${idPrefix}-${id}`);
+  const sqCell = document.getElementById(`${idPrefix}sq-${id}`);
+  const stCell = document.getElementById(`${idPrefix}s-${id}`);
+  if (!inp || inp.value === '') {
+    if (sqCell) sqCell.innerHTML = '<span style="color:var(--text3);font-size:11px">🔒 Hidden</span>';
+    if (stCell) stCell.innerHTML = '<span style="color:var(--text3);font-size:11px">Not entered</span>';
+    return;
+  }
+  const counted = parseInt(inp.value)||0;
+  if (sqCell) sqCell.innerHTML = `<b>${sysQty}</b>`;
+  if (stCell) {
+    if (counted === sysQty) stCell.innerHTML = '<span class="badge badge-success">Match</span>';
+    else { const diff = counted - sysQty; stCell.innerHTML = `<span class="badge badge-warning">${diff>0?'+':''}${diff}</span>`; }
+  }
+}
+
 function renderStockMgmt() {
   const el=document.getElementById('stockmgmt-content');if(!el)return;
   const tab=window._smTab||'count';
   const items=Object.values(STATE.inventory||{});
   const subtabs=[{id:'count',label:'Stock Count (All)'},{id:'catcount',label:'Count by Category'},{id:'adjustment',label:'Stock Adjustment'},{id:'edit',label:'Product Editing'}].map(t=>`<button class="subtab${tab===t.id?' active':''}" onclick="window._smTab='${t.id}';renderStockMgmt()">${t.label}</button>`).join('');
+  const hiddenNote=`<div class="alert alert-info" style="margin-bottom:10px;font-size:12px">🔒 System quantities stay hidden until you enter a count for that item — this keeps the count honest. The system qty reveals next to your entry once typed, for review.</div>`;
   let body='';
   if(tab==='catcount'){
     const cats=[...new Set(items.map(i=>i.cat||'Uncategorized'))].sort();
     const catOpts=`<option value="">-- Select a category --</option>`+cats.map(c=>`<option value="${c}" ${window._smCat===c?'selected':''}>${c}</option>`).join('');
     const catItems=window._smCat?items.filter(i=>(i.cat||'Uncategorized')===window._smCat):[];
-    const catRows=catItems.map(i=>`<tr><td><b>${esc(i.name)}</b></td><td style="text-align:center">${i.qty||0}</td><td><input class="form-input" type="number" min="0" placeholder="Enter count" id="cc-${i._id||i.id}" style="width:110px;padding:4px 8px"></td><td id="ccs-${i._id||i.id}"><span style="color:var(--text3);font-size:11px">Not entered</span></td></tr>`).join('');
-    body=`<div class="sec-title">Stock count by category</div><div class="card" style="margin-bottom:1rem"><div class="form-group" style="max-width:360px;margin-bottom:1rem"><label>Select category to count</label><select class="form-input" onchange="window._smCat=this.value;renderStockMgmt()">${catOpts}</select></div>${window._smCat&&catItems.length?`<div class="tbl-wrap"><table><thead><tr><th>Item</th><th style="text-align:center">System Qty</th><th>Counted Qty</th><th>Status</th></tr></thead><tbody>${catRows}</tbody></table></div><div style="display:flex;gap:8px;margin-top:12px"><button class="btn btn-primary" onclick="saveCatCount('${window._smCat}')">Save count for: ${window._smCat}</button><button class="btn" onclick="window._smCat='';renderStockMgmt()" style="color:var(--danger)">Change category</button></div>`:window._smCat?`<div style="color:var(--text3);padding:.5rem">No items in "${window._smCat}".</div>`:`<div style="color:var(--text3);font-size:13px">Select a category above to start counting.</div>`}</div>`;
+    const catRows=catItems.map(i=>_countRowHtml(i,'cc',false)).join('');
+    body=`<div class="sec-title">Stock count by category</div><div class="card" style="margin-bottom:1rem"><div class="form-group" style="max-width:360px;margin-bottom:1rem"><label>Select category to count</label><select class="form-input" onchange="window._smCat=this.value;renderStockMgmt()">${catOpts}</select></div>${window._smCat&&catItems.length?`${hiddenNote}<div class="tbl-wrap"><table><thead><tr><th>Item</th><th style="text-align:center">System Qty</th><th>Counted Qty</th><th>Status</th></tr></thead><tbody>${catRows}</tbody></table></div><div style="display:flex;gap:8px;margin-top:12px"><button class="btn btn-primary" onclick="saveCatCount('${window._smCat}')">Save count for: ${window._smCat}</button><button class="btn" onclick="window._smCat='';renderStockMgmt()" style="color:var(--danger)">Change category</button></div>`:window._smCat?`<div style="color:var(--text3);padding:.5rem">No items in "${window._smCat}".</div>`:`<div style="color:var(--text3);font-size:13px">Select a category above to start counting.</div>`}</div>`;
   } else if(tab==='count'){
-    const log=Object.values(STATE.stockCounts||{}).sort((a,b)=>(b.date||'').localeCompare(a.date||''));
-    const logRows=log.slice(0,50).map(l=>`<tr><td>${l.date||''}</td><td>${esc(l.by||'')}</td><td>${esc(l.cat||'All items')}</td><td>${l.items||0}</td><td>${l.variances>0?`<span class="badge badge-warning">${l.variances} variances</span>`:'<span class="badge badge-success">All matched</span>'}</td></tr>`).join('');
-    body=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem"><div class="sec-title" style="margin:0">Stock Count History</div><button class="btn btn-primary" onclick="window._smTab='catcount';window._smCat='';renderStockMgmt()">Start Stock Count</button></div><div class="tbl-wrap"><table><thead><tr><th>Date</th><th>By</th><th>Category</th><th>Items</th><th>Result</th></tr></thead><tbody>${logRows||'<tr><td colspan="5"><div class="empty-state"><div class="empty-state-icon">📋</div><div>No count history yet.</div></div></td></tr>'}</tbody></table></div>`;
+    if (window._smCountAllActive) {
+      const search=(window._smAllSearch||'').toLowerCase();
+      const allItems = items.filter(i=>!search || (i.name||'').toLowerCase().includes(search) || (i.cat||'').toLowerCase().includes(search)).sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+      const allRows = allItems.map(i=>_countRowHtml(i,'cca',true)).join('');
+      body=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-wrap:wrap;gap:8px"><div class="sec-title" style="margin:0">Count all items</div><button class="btn" onclick="window._smCountAllActive=false;renderStockMgmt()" style="color:var(--danger)">✕ Cancel</button></div>
+      ${hiddenNote}
+      <div class="search-wrap" style="max-width:340px;margin-bottom:10px">
+        <span class="search-icon">🔍</span>
+        <input type="text" class="form-input" id="sm-all-search" placeholder="Search items..." value="${esc(window._smAllSearch||'')}" style="padding-right:30px" oninput="window._smAllSearch=this.value;renderStockMgmt()">
+        ${window._smAllSearch?`<span class="search-clear show" onclick="window._smAllSearch='';renderStockMgmt()" title="Clear search">✕</span>`:''}
+      </div>
+      <div class="tbl-wrap"><table><thead><tr><th>Item</th><th>Category</th><th style="text-align:center">System Qty</th><th>Counted Qty</th><th>Status</th></tr></thead><tbody>${allRows||'<tr><td colspan="5" style="text-align:center;color:var(--text3);padding:16px">No items match.</td></tr>'}</tbody></table></div>
+      <div style="display:flex;gap:8px;margin-top:12px"><button class="btn btn-primary" onclick="saveAllCount()">Save count for: All items (${allItems.length})</button></div>`;
+    } else {
+      const log=Object.values(STATE.stockCounts||{}).sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+      const logRows=log.slice(0,50).map(l=>`<tr><td>${l.date||''}</td><td>${esc(l.by||'')}</td><td>${esc(l.cat||'All items')}</td><td>${l.items||0}</td><td>${l.variances>0?`<span class="badge badge-warning">${l.variances} variances</span>`:'<span class="badge badge-success">All matched</span>'}</td></tr>`).join('');
+      body=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-wrap:wrap;gap:8px"><div class="sec-title" style="margin:0">Stock Count History</div><div style="display:flex;gap:8px"><button class="btn btn-primary" onclick="window._smCountAllActive=true;renderStockMgmt()">Start Full Stock Count</button><button class="btn" onclick="window._smTab='catcount';window._smCat='';renderStockMgmt()">Count by Category</button></div></div><div class="tbl-wrap"><table><thead><tr><th>Date</th><th>By</th><th>Category</th><th>Items</th><th>Result</th></tr></thead><tbody>${logRows||'<tr><td colspan="5"><div class="empty-state"><div class="empty-state-icon">📋</div><div>No count history yet.</div></div></td></tr>'}</tbody></table></div>`;
+    }
   } else if(tab==='adjustment'){
     const invOpts=items.sort((a,b)=>(a.name||'').localeCompare(b.name||'')).map(i=>`<option value="${i._id||i.id}">${esc(i.name)} (${i.qty||0})</option>`).join('');
     const adjLog=Object.values(STATE.adjLog||{}).sort((a,b)=>(b.date||'').localeCompare(a.date||'')).slice(0,50);
     const adjRows=adjLog.map(l=>`<tr><td style="font-size:12px">${l.date||''}</td><td><b>${esc(l.itemName||'')}</b></td><td><span class="badge ${l.type==='add'?'badge-success':l.type==='remove'?'badge-danger':'badge-info'}">${l.type||''}</span></td><td style="text-align:center;font-weight:700">${l.qty||0}</td><td style="text-align:center">${l.newQty??'—'}</td><td style="font-size:12px;color:var(--text3)">${esc(l.reason||'')}</td><td style="font-size:11px;color:var(--text3)">${esc(l.by||'')}</td></tr>`).join('');
     body=`<div class="form-card" style="max-width:520px;margin-bottom:1.5rem"><div class="form-title">Stock Adjustment</div><div class="form-grid c2"><div class="form-group" style="grid-column:1/-1"><label>Item *</label><select class="form-input" id="adj-item"><option value="">Select item...</option>${invOpts}</select></div><div class="form-group"><label>Type *</label><select class="form-input" id="adj-type"><option value="add">+ Add Stock</option><option value="remove">- Remove Stock</option><option value="count">Set Count</option></select></div><div class="form-group"><label>Quantity *</label><input class="form-input" id="adj-qty" type="number" min="0" placeholder="0"></div><div class="form-group" style="grid-column:1/-1"><label>Reason *</label><input class="form-input" id="adj-reason" placeholder="e.g. Stock count correction"></div></div><button class="btn btn-primary" onclick="saveStockAdjFromForm()">Save Adjustment</button></div><div class="sec-title" style="margin-bottom:.75rem">Adjustment Log</div><div class="tbl-wrap"><table><thead><tr><th>Date</th><th>Item</th><th>Type</th><th style="text-align:center">Qty</th><th style="text-align:center">New Qty</th><th>Reason</th><th>By</th></tr></thead><tbody>${adjRows||'<tr><td colspan="7"><div class="empty-state"><div class="empty-state-icon">📋</div><div>No adjustments yet</div></div></td></tr>'}</tbody></table></div>`;
   } else if(tab==='edit'){
-    const rows=items.sort((a,b)=>(a.name||'').localeCompare(b.name||'')).map(i=>`<tr><td><b>${esc(i.name)}</b></td><td style="font-size:12px;color:var(--text3)">${esc(i.cat||'—')}</td><td class="td-right">${fmt(i.costPrice||i.cost||0)}</td><td class="td-right">${fmt(i.sellPrice||i.sell||0)}</td><td style="text-align:center">${i.minQty||5}</td><td><button class="btn btn-sm" onclick="showEditInventoryModal('${i._id||i.id}')" style="color:var(--primary);border-color:#b6d4fe">Edit</button></td></tr>`).join('');
+    const rows=items.sort((a,b)=>(a.name||'').localeCompare(b.name||'')).map(i=>`<tr><td><b>${esc(i.name)}</b></td><td style="font-size:12px;color:var(--text3)">${esc(i.cat||'—')}</td><td class="td-right">${fmt(i.costPrice||i.cost||0)}</td><td class="td-right">${fmt(i.sellPrice||i.sell||0)}</td><td style="text-align:center">${i.minQty||5}</td><td><button class="btn btn-sm" onclick="showEditItemModal('${i._id||i.id}')" style="color:var(--primary);border-color:#b6d4fe">Edit</button></td></tr>`).join('');
     body=`<div class="tbl-wrap"><table><thead><tr><th>Name</th><th>Category</th><th class="td-right">Cost (N)</th><th class="td-right">Sell (N)</th><th style="text-align:center">Min Qty</th><th></th></tr></thead><tbody>${rows||'<tr><td colspan="6"><div class="empty-state"><div class="empty-state-icon">📦</div><div>No inventory items</div></div></td></tr>'}</tbody></table></div>`;
   }
   el.innerHTML=`<div class="subtabs">${subtabs}</div>${body}`;
@@ -9329,6 +9508,7 @@ async function saveStockAdjById(id,type,qty,reason){
     const logId=uid();const logEntry={id:logId,itemId:id,itemName:item.name,type,qty,newQty,reason,date,month,by:STATE.user?.name};
     await fsSave('v2_adjLog',logId,logEntry);if(!STATE.adjLog)STATE.adjLog={};STATE.adjLog[logId]={...logEntry,_id:logId,_savedAt:Date.now()};
     setSyncStatus('synced');showToast(`Stock adjusted: ${item.name} → ${newQty}`,'success');renderStockMgmt();updateInventoryBadge();
+    logActivity('Stock adjustment',`${item.name}: ${type} ${qty} → ${newQty} (${reason})`,'');
   }catch(e){setSyncStatus('error');showToast('Failed.','error');}
 }
 
@@ -9343,14 +9523,32 @@ async function doStockAdjModal(id){
 
 async function saveCatCount(cat){
   const items=Object.values(STATE.inventory||{}).filter(i=>(i.cat||'Uncategorized')===cat);
-  let variances=0;const updates=[];
-  items.forEach(i=>{const inp=document.getElementById(`cc-${i._id||i.id}`);if(!inp||inp.value==='')return;const counted=parseInt(inp.value)||0;if(counted!==(i.qty||0)){variances++;updates.push({id:i._id||i.id,item:i,counted});}});
+  let variances=0;const updates=[];let countedTotal=0;
+  items.forEach(i=>{const inp=document.getElementById(`cc-${i._id||i.id}`);if(!inp||inp.value==='')return;countedTotal++;const counted=parseInt(inp.value)||0;if(counted!==(i.qty||0)){variances++;updates.push({id:i._id||i.id,item:i,counted});}});
+  if(countedTotal===0){showToast('Enter at least one count.','error');return;}
   setSyncStatus('saving');
   try{
     for(const u of updates){const upd={...u.item,qty:u.counted};await fsSave(COLS.INVENTORY,u.id,upd);STATE.inventory[u.id]={...upd,_id:u.id,_savedAt:Date.now()};}
-    const logId=uid();const now=new Date();const entry={id:logId,date:now.toLocaleDateString(),by:STATE.user?.name,cat,items:items.length,variances};
+    const logId=uid();const now=new Date();const entry={id:logId,date:now.toLocaleDateString(),by:STATE.user?.name,cat,items:countedTotal,variances};
     await fsSave('v2_stockCounts',logId,entry);if(!STATE.stockCounts)STATE.stockCounts={};STATE.stockCounts[logId]={...entry,_id:logId,_savedAt:Date.now()};
     setSyncStatus('synced');showToast(`Count saved for "${cat}" — ${variances} variance${variances!==1?'s':''}`,variances>0?'warning':'success');renderStockMgmt();updateInventoryBadge();
+    logActivity('Stock count',`${cat}: ${countedTotal} items counted, ${variances} variance${variances!==1?'s':''}`,'');
+  }catch(e){setSyncStatus('error');showToast('Failed.','error');}
+}
+
+async function saveAllCount(){
+  const items=Object.values(STATE.inventory||{});
+  let variances=0;const updates=[];let countedTotal=0;
+  items.forEach(i=>{const id=i._id||i.id;const inp=document.getElementById(`cca-${id}`);if(!inp||inp.value==='')return;countedTotal++;const counted=parseInt(inp.value)||0;if(counted!==(i.qty||0)){variances++;updates.push({id,item:i,counted});}});
+  if(countedTotal===0){showToast('Enter at least one count.','error');return;}
+  setSyncStatus('saving');
+  try{
+    for(const u of updates){const upd={...u.item,qty:u.counted};await fsSave(COLS.INVENTORY,u.id,upd);STATE.inventory[u.id]={...upd,_id:u.id,_savedAt:Date.now()};}
+    const logId=uid();const now=new Date();const entry={id:logId,date:now.toLocaleDateString(),by:STATE.user?.name,cat:'All items',items:countedTotal,variances};
+    await fsSave('v2_stockCounts',logId,entry);if(!STATE.stockCounts)STATE.stockCounts={};STATE.stockCounts[logId]={...entry,_id:logId,_savedAt:Date.now()};
+    window._smCountAllActive=false; window._smAllSearch='';
+    setSyncStatus('synced');showToast(`Full stock count saved — ${countedTotal} items counted, ${variances} variance${variances!==1?'s':''}`,variances>0?'warning':'success');renderStockMgmt();updateInventoryBadge();
+    logActivity('Stock count',`All items: ${countedTotal} items counted, ${variances} variance${variances!==1?'s':''}`,'');
   }catch(e){setSyncStatus('error');showToast('Failed.','error');}
 }
 
