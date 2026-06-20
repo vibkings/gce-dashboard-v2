@@ -12164,26 +12164,17 @@ async function renderCustomerProfile(id){
   // Total actual cash received from this customer (credit payments, deposits etc.)
   const totalPayments=Object.values(STATE.cashflow||{}).filter(cf=>cf.type==='in'&&cf.custId===id&&cf.cat!=='Customer Deposit'&&cf.cat!=='Deposit Applied').reduce((a,p)=>a+(p.amount||0),0);
 
-  // Compute credit balance LIVE from sales and payments to avoid drift
-  // Sum of all unpaid credit portions across all invoices
-  const totalCreditFromSales = invList.reduce((a,g)=>{
-    if (g.payment==='credit') return a + (g.total||0);
-    if (g.payment==='part'||g.payment==='deposit') return a + Math.max(0,(g.total||0)-(g.items[0]?.partPayment||0));
-    return a;
-  }, 0);
-  // Sum of all credit payments made (cashflow type=in, cat=Credit Payment)
-  const totalCreditPaid = Object.values(STATE.cashflow||{}).filter(cf=>cf.type==='in'&&cf.custId===id&&cf.cat==='Credit Payment').reduce((a,p)=>a+(p.amount||0),0);
-  // Credit write-offs
-  const totalWriteOff = Object.values(STATE.cashflow||{}).filter(cf=>cf.custId===id&&cf.cat==='Credit Write-Off').reduce((a,p)=>a+(p.amount||0),0);
-  // Live computed credit balance
-  const liveCreditBalance = Math.max(0, totalCreditFromSales - totalCreditPaid - totalWriteOff);
-  // Use live computed value; also sync back to customer record if drifted
-  const creditBalance = liveCreditBalance;
-  if (Math.abs((c.creditBalance||0) - liveCreditBalance) > 1) {
-    // Silently fix the stored value if it's drifted
-    const fixed = {...c, creditBalance: liveCreditBalance};
-    fsSave(COLS.CUSTOMERS, id, fixed).then(()=>{ STATE.customers[id]={...fixed,_id:id}; }).catch(()=>{});
-  }
+  // Outstanding balance — read directly from the customer profile's stored
+  // running creditBalance, not recomputed live from STATE.sales/STATE.cashflow.
+  // This used to recompute live AND silently overwrite the stored balance
+  // whenever it disagreed by more than ₦1 — but sales are partitioned by month
+  // in Firestore and only the current + previous month are guaranteed to be
+  // loaded locally. That meant any customer with older unpaid invoices would
+  // get under-counted here, and the "self-heal" would corrupt a correct balance
+  // down to a wrong, lower number. The stored creditBalance is already kept
+  // accurate by every sale, payment, write-off, and item exchange, so it's
+  // trusted as-is.
+  const creditBalance = Math.max(0, c.creditBalance||0);
   const deposits=Object.values(STATE.cashflow||{}).filter(cf=>cf.type==='in'&&cf.custId===id&&cf.cat==='Customer Deposit');
   const depositBalance=Math.max(0, deposits.reduce((a,d)=>a+(d.amount||0),0) - Object.values(STATE.cashflow||{}).filter(cf=>cf.custId===id&&cf.cat==='Deposit Applied').reduce((a,d)=>a+(d.amount||0),0));
   const commissions=Object.values(STATE.cashflow||{}).filter(cf=>cf.custId===id&&cf.cat==='Commission');
@@ -12371,6 +12362,7 @@ async function renderCustomerProfile(id){
           <button class="btn btn-sm btn-primary" onclick="showFullPaymentModal('${id}')" style="font-size:12px">+ Record Payment</button>
           ${depositBalance>0?`<button class="btn btn-sm" onclick="showApplyDepositModal('${id}')" style="font-size:12px;color:#8b5cf6;border-color:#c4b5fd">💜 Apply Deposit</button>`:''}
           ${creditBalance>0?`<button class="btn btn-sm" onclick="writeOffCredit('${id}')" style="font-size:12px;background:#f59e0b;border-color:#f59e0b;color:#fff">✕ Write-off</button>`:''}
+          ${STATE.user?.role==='admin'?`<button class="btn btn-sm" onclick="verifyCustomerBalance('${id}')" style="font-size:12px;color:#1d4ed8;border-color:#93c5fd" title="Loads this customer's full purchase history (all months) and checks the stored balance against it">🔍 Verify Balance</button>`:''}
         </div>
       </div>
       ${creditBalance>0?`<div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
@@ -12805,6 +12797,78 @@ async function writeOffCredit(id){
     setSyncStatus('synced');showToast('Credit written off.','success');
     logActivity('Credit written off',`Credit written off for ${c.name}`,fmt(c.creditBalance||0));renderCustomers();
   }catch(e){setSyncStatus('error');showToast('Failed.','error');}
+}
+
+// ── Safe balance verification: loads the customer's FULL sales history
+// (every month, not just current+previous) before comparing, and only ever
+// changes the stored balance if an admin explicitly confirms. Nothing here
+// auto-corrects silently — that was the bug in the old "self-heal" logic.
+async function verifyCustomerBalance(id) {
+  const c = STATE.customers?.[id]; if (!c) return;
+  showToast('Loading full purchase history — this may take a moment…','info');
+  try {
+    const start = c.createdAt ? new Date(c.createdAt) : new Date(2023,0,1);
+    const now = new Date();
+    let y = start.getFullYear(), m = start.getMonth()+1;
+    const endY = now.getFullYear(), endM = now.getMonth()+1;
+    let guard = 0;
+    while ((y < endY || (y===endY && m<=endM)) && guard < 120) {
+      await loadMonthlySales(y, m);
+      m++; if (m>12) { m=1; y++; }
+      guard++;
+    }
+  } catch(e) {}
+
+  const allSales = Object.values(STATE.sales||{}).filter(s=>s.custId===id && !s.voided);
+  const invGroups = {};
+  allSales.forEach(s=>{
+    const k=s.invoiceNum;
+    if(!invGroups[k]) invGroups[k]={total:0,payment:s.payment,partPayment:s.partPayment||0};
+    invGroups[k].total+=s.total||0;
+    if(s.partPayment) invGroups[k].partPayment=s.partPayment;
+  });
+  const totalCreditFromSales = Object.values(invGroups).reduce((a,g)=>{
+    if(g.payment==='credit') return a+(g.total||0);
+    if(g.payment==='part'||g.payment==='deposit') return a+Math.max(0,(g.total||0)-(g.partPayment||0));
+    return a;
+  },0);
+  const totalCreditPaid = Object.values(STATE.cashflow||{}).filter(cf=>cf.type==='in'&&cf.custId===id&&cf.cat==='Credit Payment').reduce((a,p)=>a+(p.amount||0),0);
+  const totalWriteOff = Object.values(STATE.cashflow||{}).filter(cf=>cf.custId===id&&cf.cat==='Credit Write-Off').reduce((a,p)=>a+(p.amount||0),0);
+  const liveBalance = Math.max(0, totalCreditFromSales - totalCreditPaid - totalWriteOff);
+  const stored = c.creditBalance||0;
+  const diff = liveBalance - stored;
+
+  if (Math.abs(diff) <= 1) {
+    showToast(`✅ Verified against full history — balance is correct (${fmt(stored)}).`,'success');
+    return;
+  }
+  showModal('🔍 Balance Verification', `
+    <div style="font-size:13px;margin-bottom:10px">Checked <b>${esc(c.name)}</b>'s complete purchase history across every month.</div>
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:10px 14px;font-size:13px">
+      <div>Stored balance: <b>${fmt(stored)}</b></div>
+      <div>Recalculated from full history: <b>${fmt(liveBalance)}</b></div>
+      <div style="margin-top:6px;font-weight:700;color:${diff>0?'#dc2626':'#15803d'}">Difference: ${diff>0?'+':''}${fmt(diff)}</div>
+    </div>
+    <div class="alert alert-info" style="font-size:12px;margin-top:10px">Nothing has changed yet — this only updates the stored balance if you confirm below.</div>
+  `,[
+    {label:'Cancel', action:'close', style:''},
+    {label:'✓ Apply Corrected Balance', action:`applyVerifiedBalance('${id}',${liveBalance})`, style:'btn-primary'}
+  ]);
+}
+
+async function applyVerifiedBalance(id, newBalance) {
+  const c = STATE.customers?.[id]; if (!c) return;
+  setSyncStatus('saving');
+  try {
+    const upd = {...c, creditBalance: newBalance};
+    await fsSave(COLS.CUSTOMERS, id, upd);
+    STATE.customers[id] = {...upd, _id:id, _savedAt:Date.now()};
+    closeModal();
+    setSyncStatus('synced');
+    showToast(`✅ Balance corrected to ${fmt(newBalance)}.`,'success');
+    logActivity('Balance corrected', `${c.name}: corrected to ${fmt(newBalance)} after full-history verification`, '');
+    renderCustomers();
+  } catch(e) { setSyncStatus('error'); showToast('Failed.','error'); }
 }
 
 function showCustomerDepositModal(id){
