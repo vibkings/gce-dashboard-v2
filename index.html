@@ -6414,6 +6414,7 @@ function renderPurchases() {
     histGroupsMap[k].totalQty += p.qty||0;
   });
   pending.forEach(pd=>{
+    if (pd.fromReturn) return; // return replacements track separately — don't touch the original PO's frozen totals
     const k = pd.purchaseInvoiceNum || pd._id || pd.id;
     if (!histGroupsMap[k]) histGroupsMap[k] = {invoiceNum:k, supplier:pd.supplier||'', date:pd.date||'', payMode:pd.payMode||'cash', items:[], itemNames:[], totalCost:0, totalQty:0, pendingQty:0, pendingCost:0};
     const stillPending = Math.max(0,(pd.orderedQty||0)-(pd.receivedQty||0));
@@ -6422,17 +6423,6 @@ function renderPurchases() {
     histGroupsMap[k].totalQty += stillPending;
     histGroupsMap[k].pendingQty += stillPending;
     histGroupsMap[k].pendingCost += stillPending*(pd.costPrice||0);
-  });
-  // Returns (exchange or complete) reduce what's actually "supplied" — an
-  // exchange already adds its own replacement entry into Pending Deliveries
-  // above, so without this the same unit would be double-counted as both
-  // still-kept stock AND a fresh pending delivery.
-  Object.values(STATE.purchaseReturns||{}).forEach(r=>{
-    const k = r.purchaseInvoiceNum || r._id || r.id;
-    if (!histGroupsMap[k]) return;
-    const value = (r.qty||0)*(r.costPrice||0);
-    histGroupsMap[k].totalQty -= (r.qty||0);
-    histGroupsMap[k].totalCost -= value;
   });
   let histGroupList = Object.values(histGroupsMap).filter(g =>
     !searchVal ||
@@ -7324,7 +7314,8 @@ async function confirmReturnPurchase() {
       // 3a) Back to Pending Deliveries, awaiting a replacement
       const pendId = uid();
       const pend = {id:pendId, purchaseInvoiceNum:st.invoiceNum, itemName:sel.name, itemId:sel.itemId,
-        supplier, orderedQty:st.qty, receivedQty:0, costPrice:sel.avgCost, payMode:'cash', date};
+        supplier, orderedQty:st.qty, receivedQty:0, costPrice:sel.avgCost, payMode:'cash', date,
+        fromReturn:true, returnId:retId};
       await fsSave('v2_pendingDeliveries', pendId, pend);
       if (!STATE.pendingDeliveries) STATE.pendingDeliveries={};
       STATE.pendingDeliveries[pendId] = {...pend, _id:pendId, _savedAt:Date.now()};
@@ -7377,6 +7368,7 @@ function _buildPurchaseOrderHTML(invoiceNum, includeButtons, autoPrint) {
     groupedItems[key].cost = p.costPrice||groupedItems[key].cost;
   });
   pendItems.forEach(pd=>{
+    if (pd.fromReturn) return; // return replacements track separately — don't touch the original PO's frozen totals
     const stillPending = Math.max(0,(pd.orderedQty||0)-(pd.receivedQty||0));
     if (stillPending<=0) return;
     const key = pd.itemName||'';
@@ -7385,18 +7377,7 @@ function _buildPurchaseOrderHTML(invoiceNum, includeButtons, autoPrint) {
     groupedItems[key].total += stillPending*(pd.costPrice||0);
     if (!groupedItems[key].cost) groupedItems[key].cost = pd.costPrice||0;
   });
-  // Returns (exchange or complete) reduce what's actually "supplied" — an
-  // exchange already adds its own replacement entry into Pending Deliveries
-  // above, so without this the same unit gets double-counted.
-  Object.values(STATE.purchaseReturns||{})
-    .filter(r=>(r.purchaseInvoiceNum||r._id||r.id)===invoiceNum)
-    .forEach(r=>{
-      const key = r.itemName||'';
-      if (!groupedItems[key]) return;
-      groupedItems[key].supplied -= (r.qty||0);
-      groupedItems[key].total -= (r.qty||0)*(r.costPrice||0);
-    });
-  const combinedRows = Object.values(groupedItems).map(g=>({name:g.name, qty:Math.max(0,g.supplied)+g.pending, supplied:Math.max(0,g.supplied), pending:g.pending, cost:g.cost, total:g.total}));
+  const combinedRows = Object.values(groupedItems).map(g=>({name:g.name, qty:g.supplied+g.pending, supplied:g.supplied, pending:g.pending, cost:g.cost, total:g.total}));
   const grandTotal = combinedRows.reduce((a,r)=>a+r.total,0);
   const itemRows = combinedRows.map((r,i)=>`<tr style="border-bottom:1px solid #eee">
     <td style="padding:7px 10px;text-align:center;color:#666;font-size:11px">${i+1}</td>
