@@ -9432,6 +9432,7 @@ function renderClosing() {
     const k=s.invoiceNum||s.id;
     if(!invMap[k]) invMap[k]={invoiceNum:k,custName:s.custName||'Walk-in',total:0,profit:0,
       payment:s.payment,payMode:s.payMode,splitPayment:s.splitPayment||null,
+      partPayment:s.partPayment||0,
       bankName:s.bankName||'',posName:s.posName||'',seller:s.seller||'',items:[]};
     invMap[k].total+=s.total||0; invMap[k].profit+=s.profit||0;
     invMap[k].items.push(s);
@@ -9447,18 +9448,26 @@ function renderClosing() {
   let cashIncome=0, posIncome=0, transferIncome=0, creditPayIn=0;
   invList.forEach(g=>{
     if(g.payment==='credit') return; // credit — not collected yet, skip
+    const amtReceived = g.payment==='part' ? (g.partPayment||0) : g.total;
     if(g.payMode==='split'&&g.splitPayment){
       const sp=g.splitPayment;
       const add=(m,v)=>{if(m==='cash')cashIncome+=v;else if(m==='pos')posIncome+=v;else if(m==='transfer')transferIncome+=v;};
       add(sp.mode1,sp.amt1||0); add(sp.mode2,sp.amt2||0);
-    } else if(g.payMode==='pos') posIncome+=g.total;
-    else if(g.payMode==='transfer') transferIncome+=g.total;
-    else cashIncome+=g.total; // cash, part-cash, walk-in default
+    } else if(g.payMode==='pos') posIncome+=amtReceived;
+    else if(g.payMode==='transfer') transferIncome+=amtReceived;
+    else cashIncome+=amtReceived; // cash, part-cash, walk-in default
   });
 
-  // Credit payments received today (from cashflow)
+  // Credit payments received today (from cashflow) — bucketed by the mode the
+  // customer actually paid with (cash/POS/transfer), not lumped together.
   const creditPayments = Object.values(STATE.cashflow||{}).filter(c=>c.type==='in'&&c.cat==='Credit Payment'&&c.date===closingDate);
   creditPayIn = creditPayments.reduce((a,c)=>a+(c.amount||0),0);
+  creditPayments.forEach(c=>{
+    const m = c.payMode||'cash';
+    if (m==='pos') posIncome += c.amount||0;
+    else if (m==='transfer') transferIncome += c.amount||0;
+    else cashIncome += c.amount||0;
+  });
 
   // Cash change given out today (money that left the till as change to customers)
   // Only count when changeDisp === 'cash' (not applied to credit/deposit)
@@ -9651,12 +9660,6 @@ function renderClosing() {
             <td style="padding:10px 12px;text-align:right;color:var(--danger);font-weight:600">${fmt(creditOwed)}</td>
             <td style="padding:10px 12px;text-align:right;color:var(--text3)">-</td>
             <td style="padding:10px 12px;text-align:right;font-weight:700;color:var(--danger)">${fmt(creditOwed)}</td>
-          </tr>`:''}
-          ${creditPayIn>0?`<tr style="border-bottom:1px solid var(--border);background:#f0fdf4">
-            <td style="padding:10px 12px">✅ Credit Payments</td>
-            <td style="padding:10px 12px;text-align:right;color:var(--success);font-weight:600">${fmt(creditPayIn)}</td>
-            <td style="padding:10px 12px;text-align:right;color:var(--text3)">-</td>
-            <td style="padding:10px 12px;text-align:right;font-weight:700;color:var(--success)">${fmt(creditPayIn)}</td>
           </tr>`:''}
         </tbody>
         <tfoot>
