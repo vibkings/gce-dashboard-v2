@@ -7575,9 +7575,11 @@ async function receivePendingItem(pendId) {
     if (!STATE.purchases) STATE.purchases={};
     STATE.purchases[purchId] = {...purch, _id:purchId,_savedAt:Date.now()};
 
-    // Update inventory
+    // Update inventory — cost is set to this delivery's purchase price
+    // (same "latest cost wins" rule used for immediate-receipt purchases,
+    // since restocking only happens once quantity is already low).
     if (pend.itemId) {
-      await _safeAdjustInventory(pend.itemId, qty);
+      await _safeAdjustInventory(pend.itemId, qty, {cost:pend.costPrice, costPrice:pend.costPrice});
     }
 
     // Update or delete pending record
@@ -7623,8 +7625,9 @@ async function receiveAllNow(invoiceNum) {
       if (!STATE.purchases) STATE.purchases={};
       STATE.purchases[purchId] = {...purch, _id:purchId,_savedAt:Date.now()};
 
+      // Same "latest cost wins" rule as receivePendingItem above
       if (pend.itemId) {
-        await _safeAdjustInventory(pend.itemId, qty);
+        await _safeAdjustInventory(pend.itemId, qty, {cost:pend.costPrice, costPrice:pend.costPrice});
       }
 
       const pendId = pend._id||pend.id;
@@ -12412,6 +12415,21 @@ function renderInvValuation() {
 // ── PROFIT & LOSS ────────────────────────────────────────
 function renderPandL() {
   const el=document.getElementById('pandl-content'); if(!el)return;
+
+  // Year/Custom-range filters and the 6-month trend below read STATE.sales
+  // directly, but only current+previous month are guaranteed loaded by
+  // default — same concern as Customer Overview. Load full history in the
+  // background and re-render once done; renders with what's available now
+  // in the meantime.
+  const historyLoading = !window._allSalesHistoryLoaded;
+  if (historyLoading) {
+    _ensureFullSalesHistory().then(()=>{
+      if (document.getElementById('page-pandl')?.classList.contains('active')) {
+        renderPandL();
+      }
+    });
+  }
+
   const filter=window._pandlFilter||'month';
   const from=window._pandlFrom||''; const to=window._pandlTo||'';
   const now=new Date();
@@ -12444,10 +12462,13 @@ function renderPandL() {
   const invs={};
   salesF.forEach(s=>{
     const k=s.invoiceNum||s.id;
-    if(!invs[k])invs[k]={total:0,cost:0,profit:0,payment:s.payment};
+    if(!invs[k])invs[k]={total:0,cost:0,profit:0,payment:s.payment,partPayment:0};
     invs[k].total+=s.total||0;
     invs[k].cost+=(s.cost||0)*(s.qty||1);
     invs[k].profit+=s.profit||0;
+    // partPayment is the same invoice-level amount repeated on every line —
+    // assign rather than add, or multi-item invoices would double-count it.
+    invs[k].partPayment = s.partPayment||0;
   });
   const grossRevenue=Object.values(invs).reduce((a,i)=>a+i.total,0);
   const cogs=Object.values(invs).reduce((a,i)=>a+i.cost,0);
@@ -12488,8 +12509,12 @@ function renderPandL() {
   const restockF=Object.values(STATE.cashflow||{}).filter(c=>c.type==='out'&&c.cat==='Restock'&&inRange(c.date,c.month));
   const restockTotal=restockF.reduce((a,c)=>a+(c.amount||0),0);
 
-  // Credit still owed (from this period's sales)
-  const creditUnpaid=Object.values(invs).filter(i=>i.payment==='credit').reduce((a,i)=>a+i.total,0);
+  // Credit still owed (from this period's sales) — includes both fully
+  // credit invoices and the unpaid remainder of Part Payment invoices.
+  // Missing the part-payment shortfall here previously undercounted this
+  // figure, the same bug pattern already fixed for the Financial Dashboard.
+  const creditUnpaid=Object.values(invs).filter(i=>i.payment==='credit').reduce((a,i)=>a+i.total,0)
+    + Object.values(invs).filter(i=>i.payment==='part').reduce((a,i)=>a+Math.max(0,i.total-i.partPayment),0);
 
   // 6-month trend
   const months=[];
@@ -12535,6 +12560,7 @@ function renderPandL() {
   const labelFor=filter==='today'?'Today':filter==='month'?new Date(curMonth+'-02').toLocaleString('en',{month:'long',year:'numeric'}):filter==='lastmonth'?'Last Month':filter==='year'?String(now.getFullYear()):'Custom Range';
 
   el.innerHTML=`
+    ${historyLoading?`<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:var(--radius);padding:10px 14px;margin-bottom:1rem;font-size:12px;color:#1d4ed8;display:flex;align-items:center;gap:8px">⏳ Loading full sales history — figures for Year/Custom range and the 6-month chart will update automatically once this finishes.</div>`:''}
     <!-- Period filter -->
     <div style="display:flex;gap:6px;margin-bottom:1rem;flex-wrap:wrap;align-items:center">
       ${['today','month','lastmonth','year','custom'].map(f=>`<button class="btn btn-sm ${filter===f?'btn-primary':''}" onclick="window._pandlFilter='${f}';renderPandL()">${f==='today'?'Today':f==='month'?'This Month':f==='lastmonth'?'Last Month':f==='year'?'This Year':'Custom'}</button>`).join('')}
