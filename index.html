@@ -10674,7 +10674,8 @@ function printClosingReport(){
 // WEEK 4 — IMPROVED SETTINGS + V1 MIGRATION
 // ════════════════════════════════════════════════════════════
 
-function renderSettings() {
+function renderSettings() { renderSettingsFull(); }
+function _renderSettingsOld_unused() {
   document.getElementById('settings-content').innerHTML = `
     <!-- Business Info -->
     <div class="form-card">
