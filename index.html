@@ -1965,6 +1965,46 @@ async function loadMonthlySales(year, month) {
   return items.filter(i => !i._deleted);
 }
 
+// Ensure every sales month, all the way back, has been loaded into STATE.sales.
+// Used by Customer Overview so its totals/charts aren't silently understated
+// by only the current+previous month being loaded by default (see
+// loadMonthlySales / renderCustomerProfile comments for the same concern).
+// Walks backward month-by-month; a missing/empty Firestore collection just
+// returns [] (loadMonthlySales handles the 404 case), so this is cheap to
+// probe. Stops once it hits a year of consecutive empty months, or a hard
+// 5-year cap, so a long-dormant period doesn't cause it to scan forever.
+async function _ensureFullSalesHistory() {
+  if (window._allSalesHistoryLoaded) return;
+  if (window._allSalesHistoryLoading) return window._allSalesHistoryLoading;
+  if (!window._loadedSalesMonths) window._loadedSalesMonths = new Set();
+
+  window._allSalesHistoryLoading = (async () => {
+    const HARD_CAP_MONTHS = 60;   // 5 years back, safety net
+    const EMPTY_STREAK_STOP = 12; // give up after a full year with nothing
+    const now = new Date();
+    let emptyStreak = 0;
+    for (let i = 0; i < HARD_CAP_MONTHS; i++) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const y = d.getFullYear(), m = d.getMonth() + 1;
+      const monthKey = `${y}-${String(m).padStart(2,'0')}`;
+      const colKey = `v2_sales_${monthKey}`;
+      let hasData;
+      if (window._loadedSalesMonths.has(colKey)) {
+        hasData = Object.values(STATE.sales||{}).some(s => s.month === monthKey);
+      } else {
+        window._loadedSalesMonths.add(colKey);
+        let items = [];
+        try { items = await loadMonthlySales(y, m); } catch(e) {}
+        hasData = items.length > 0;
+      }
+      emptyStreak = hasData ? 0 : emptyStreak + 1;
+      if (emptyStreak >= EMPTY_STREAK_STOP) break;
+    }
+    window._allSalesHistoryLoaded = true;
+  })();
+  return window._allSalesHistoryLoading;
+}
+
 // Save a sale — goes to monthly collection
 async function saveSaleDoc(invoiceMonth, id, data) {
   const [year, month] = invoiceMonth.split('-').map(Number);
@@ -4800,14 +4840,30 @@ function togglePurchBankField() {
   const label = document.getElementById('pnp-bank-label');
   const sel = document.getElementById('pnp-bank-name');
   const modeEl = document.getElementById('pnp-pay-mode');
+  const partWrap = document.getElementById('pnp-part-wrap');
   if (!wrap) return;
-  // Purchases = pay-out: only show bank for transfer, NOT for POS
-  const show = type==='transfer';
+
+  // Part Payment: show the "amount paid now" field. The Payment Mode
+  // dropdown describes how THAT portion was paid — Credit makes no sense
+  // for an amount being paid right now, so disable it while in this mode.
+  if (partWrap) partWrap.style.display = type==='part' ? '' : 'none';
+  if (modeEl) {
+    const creditOpt = modeEl.querySelector('option[value="credit"]');
+    if (creditOpt) {
+      creditOpt.disabled = (type==='part');
+      creditOpt.hidden = (type==='part');
+    }
+    if (type==='part' && modeEl.value==='credit') modeEl.value='cash';
+  }
+
+  // Purchases = pay-out: only show bank for transfer, NOT for POS.
+  // For Part Payment, also show it if the part was paid by transfer.
+  const show = type==='transfer' || (type==='part' && modeEl?.value==='transfer');
   wrap.style.display = show ? '' : 'none';
   if (show) {
     if (label) label.textContent = 'BANK ACCOUNT';
     if (sel) sel.innerHTML = bankSelectOpts('transfer');
-    if (modeEl) modeEl.value = 'transfer';
+    if (type==='transfer' && modeEl) modeEl.value = 'transfer';
   } else if (type==='pos' && modeEl) {
     modeEl.value = 'pos';
   } else if (type==='credit' && modeEl) {
@@ -6703,12 +6759,20 @@ function renderPurchases() {
   const invoiceNums    = [...new Set(purchases.map(p=>p.purchaseInvoiceNum).filter(Boolean))];
   const invoiceCount   = invoiceNums.length;
 
-  // Paid = purchases where mode != credit, grouped by invoice
-  const paidInvoices   = new Set(purchases.filter(p=>p.payMode!=='credit').map(p=>p.purchaseInvoiceNum));
-  const totalPaid      = purchases.filter(p=>p.payMode!=='credit').reduce((a,p)=>a+(p.totalCost||0),0);
+  // Paid = actual cash that left the till for purchases. Using purchase
+  // totalCost filtered by payMode!=='credit' overstated this for Part
+  // Payment purchases, since those keep their full totalCost on the line
+  // item even though only part of it was ever paid — so we sum the real
+  // Restock cashflow entries instead, which only ever record what was
+  // actually paid.
+  const totalPaid      = Object.values(STATE.cashflow||{}).filter(cf=>cf.type==='out'&&cf.cat==='Restock').reduce((a,cf)=>a+(cf.amount||0),0);
+  const paidInvoices   = new Set(purchases.filter(p=>p.payMode!=='credit'&&p.payMode!=='part').map(p=>p.purchaseInvoiceNum));
   const paidFull       = paidInvoices.size;
 
-  // Outstanding = credit purchases not yet paid
+  // Outstanding = suppliers' authoritative owedToSupplier balance, not
+  // recomputed from purchase docs by payMode==='credit' — that summation
+  // would miss the unpaid remainder of Part Payment purchases entirely,
+  // since those carry their full totalCost as 'part', not 'credit'.
   const creditPurchases= purchases.filter(p=>p.payMode==='credit');
   const creditTotal    = creditPurchases.reduce((a,p)=>a+(p.totalCost||0),0);
   const creditInvoices = [...new Set(creditPurchases.map(p=>p.purchaseInvoiceNum))];
@@ -6717,8 +6781,8 @@ function renderPurchases() {
   // Part payment invoices
   const partInvoices   = [...new Set(purchases.filter(p=>p.payMode==='part').map(p=>p.purchaseInvoiceNum))];
 
-  // Outstanding debt
-  const outstanding    = creditTotal;
+  // Outstanding debt — authoritative running balance across all suppliers
+  const outstanding    = Object.values(STATE.suppliers||{}).reduce((a,s)=>a+(s.owedToSupplier||0),0);
 
   // Pending goods
   const pendingCount   = pending.length;
@@ -6991,7 +7055,7 @@ function renderPurchases() {
         </div>
         <div>
           <div style="font-size:10px;color:var(--text3);margin-bottom:3px">PAYMENT MODE</div>
-          <select class="form-input" id="pnp-pay-mode" style="width:100%">
+          <select class="form-input" id="pnp-pay-mode" style="width:100%" onchange="togglePurchBankField()">
             <option value="cash">Cash</option>
             <option value="transfer">Bank Transfer</option>
             <option value="pos">POS</option>
@@ -7002,6 +7066,11 @@ function renderPurchases() {
         <div id="pnp-bank-wrap" style="display:none">
           <div style="font-size:10px;color:var(--text3);margin-bottom:3px" id="pnp-bank-label">BANK / POS</div>
           <select class="form-input" id="pnp-bank-name" style="width:100%">${bankSelectOpts('transfer')}</select>
+        </div>
+        <div id="pnp-part-wrap" style="display:none;grid-column:1/-1">
+          <div style="font-size:10px;color:var(--text3);margin-bottom:3px">AMOUNT PAID NOW (₦)</div>
+          <input class="form-input" id="pnp-part-payment" type="number" min="0" placeholder="0" style="width:100%">
+          <div style="font-size:10px;color:var(--text3);margin-top:3px">Applies against the value of items received now. The rest is added to this supplier's outstanding balance.</div>
         </div>
       </div>
 
@@ -7249,11 +7318,12 @@ function pickInvForPurch(id, name, cost) {
 
 function clearPurchaseForm() {
   ['pnp-sup-input','pnp-sup-val','pnp-inv-num','pnp-date','pnp-item','pnp-item-id',
-   'pnp-ordered','pnp-received','pnp-cost','pnp-disc-val','pnp-new-sell'].forEach(id=>{
+   'pnp-ordered','pnp-received','pnp-cost','pnp-disc-val','pnp-new-sell','pnp-part-payment'].forEach(id=>{
     const el=document.getElementById(id); if(el) el.value='';
   });
   const pt=document.getElementById('pnp-pay-type'); if(pt) pt.value='cash';
   const pm=document.getElementById('pnp-pay-mode'); if(pm) pm.value='cash';
+  const pw=document.getElementById('pnp-part-wrap'); if(pw) pw.style.display='none';
   const dt=document.getElementById('pnp-disc-type'); if(dt) dt.value='none';
   const newCatSel=document.getElementById('pnp-new-cat'); if(newCatSel) newCatSel.value='';
   const panel=document.getElementById('pnp-new-item-panel'); if(panel) panel.style.display='none';
@@ -7269,20 +7339,27 @@ async function savePurchaseRecord() {
   const payType   = document.getElementById('pnp-pay-type')?.value||'cash';
   const payMode   = document.getElementById('pnp-pay-mode')?.value||'cash';
   const bankName  = document.getElementById('pnp-bank-name')?.value||'';
+  const partAmtPaidInput = payType==='part' ? (parseFloat(document.getElementById('pnp-part-payment')?.value)||0) : 0;
   const cart      = window._purchCart;
 
   if (!supplier) { showToast('Enter supplier name.','error'); return; }
   if (!invNum)   { showToast('Enter supplier invoice number.','error'); return; }
   if (!cart.length) { showToast('Add at least one item.','error'); return; }
+  if (payType==='part' && partAmtPaidInput<=0) { showToast('Enter the amount paid now for a part payment.','error'); return; }
 
   const dateObj  = dateVal?(()=>{const d=dateVal.split('-');return new Date(+d[0],+d[1]-1,+d[2]);})():new Date();
   const date     = dateObj.toLocaleDateString();
   const month    = dateObj.getFullYear()+'-'+String(dateObj.getMonth()+1).padStart(2,'0');
   const purchaseInvoiceNum = invNum;
-  const mode     = payType==='cash'||payType==='transfer'||payType==='pos' ? payType : payMode;
+  // Part Payment: line items below stay tagged payMode:'part' (frozen — doesn't
+  // touch cashflow/owedToSupplier itself). The real cash movement + remaining
+  // balance owed for the WHOLE PO are recorded once, after the loop, from
+  // partAmtPaidInput — mirrors how Sales handles a customer's part payment.
+  const mode     = payType==='part' ? 'part' : (payType==='cash'||payType==='transfer'||payType==='pos' ? payType : payMode);
 
   setSyncStatus('saving');
   try {
+    let grandTotalReceived = 0; // sum of totalCost for the RECEIVED portion only — pending items aren't owed/paid for yet
     for (const item of cart) {
       const isPending = item.received < item.ordered;
       const receivedQty = item.received || 0;
@@ -7318,13 +7395,16 @@ async function savePurchaseRecord() {
         await fsSave(COLS.PURCHASES, purchId, purch);
         if (!STATE.purchases) STATE.purchases={};
         STATE.purchases[purchId]={...purch,_id:purchId,_savedAt:Date.now()};
+        grandTotalReceived += purch.totalCost;
 
         // Update inventory
         if (item.itemId) {
           await _safeAdjustInventory(item.itemId, receivedQty, {cost:item.cost, costPrice:item.cost});
         }
-        // Cashflow (non-credit)
-        if (payType!=='credit') {
+        if (payType==='part') {
+          // Handled once for the whole PO after this loop — see below.
+        } else if (payType!=='credit') {
+          // Cashflow (non-credit)
           const cfId=uid();
           const cf={id:cfId,type:'out',cat:'Restock',desc:`Purchase: ${item.name} (${receivedQty} units)`,
             amount:receivedQty*item.cost-(item.discAmt||0),payMode:mode,date,month,supplier,by:STATE.user?.name};
@@ -7351,7 +7431,33 @@ async function savePurchaseRecord() {
       }
     }
 
-    window._purchCart=[];
+    // Part Payment settlement for the whole PO — one cashflow entry for what
+    // was actually paid now, and the shortfall added to the supplier's
+    // running owedToSupplier balance (same pattern as a customer part-paying
+    // a sale). Only counted against the received portion — pending items
+    // aren't priced/owed until they're actually received.
+    if (payType==='part' && grandTotalReceived>0) {
+      const amtPaidNow = Math.min(partAmtPaidInput, grandTotalReceived);
+      const owedNow = Math.max(0, grandTotalReceived - amtPaidNow);
+      if (amtPaidNow>0) {
+        const cfId=uid();
+        const cf={id:cfId,type:'out',cat:'Restock',
+          desc:`Purchase (part payment): ${[...new Set(cart.map(i=>i.name))].join(', ')}`,
+          amount:amtPaidNow,payMode,bankName,date,month,supplier,purchaseInvoiceNum,by:STATE.user?.name};
+        await fsSave(COLS.CASHFLOW, cfId, cf);
+        if(!STATE.cashflow)STATE.cashflow={};
+        STATE.cashflow[cfId]={...cf,_id:cfId,_savedAt:Date.now()};
+      }
+      if (owedNow>0) {
+        const sup=Object.values(STATE.suppliers||{}).find(s=>s.name===supplier);
+        if(sup){const updSup={...sup,owedToSupplier:(sup.owedToSupplier||0)+owedNow};
+          await fsSave(COLS.SUPPLIERS||'v2_suppliers',sup._id||sup.id,updSup);
+          STATE.suppliers[sup._id||sup.id]=updSup;}
+      }
+      if (partAmtPaidInput > grandTotalReceived) {
+        showToast(`Note: amount entered (${fmt(partAmtPaidInput)}) was more than the received goods' value (${fmt(grandTotalReceived)}) — only ${fmt(grandTotalReceived)} was recorded as paid.`,'info');
+      }
+    }
     clearPurchaseForm();
     setSyncStatus('synced');
     renderPurchases();
@@ -11789,8 +11895,18 @@ function renderSupplierOverview() {
       if(!supMap[sid].lastPurchase||d>supMap[sid].lastPurchase)supMap[sid].lastPurchase=d;
       const m=p.month||(d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'));
       supMap[sid].monthlySpend[m]=(supMap[sid].monthlySpend[m]||0)+(p.totalCost||0);
-      if(p.payMode!=='credit')supMap[sid].totalPaid+=p.totalCost||0;
+      // totalPaid is computed below from actual Restock cashflow entries —
+      // a Part Payment purchase keeps its full totalCost here even though
+      // only part of it was ever paid, so payMode!=='credit' alone can't
+      // tell us how much cash actually moved.
     }
+  });
+  // Actual cash paid to suppliers — summed from real Restock cashflow
+  // entries, which only ever record what was actually paid (correctly
+  // excludes the unpaid remainder of Part Payment purchases).
+  Object.values(STATE.cashflow||{}).filter(cf=>cf.type==='out'&&cf.cat==='Restock'&&cf.supplier).forEach(cf=>{
+    const sid=sups.find(s=>s.name===cf.supplier)?._id||sups.find(s=>s.name===cf.supplier)?.id;
+    if(sid&&supMap[sid])supMap[sid].totalPaid+=cf.amount||0;
   });
   pending.forEach(p=>{
     const sid=sups.find(s=>s.name===p.supplier)?._id||sups.find(s=>s.name===p.supplier)?.id;
@@ -11873,6 +11989,21 @@ function renderSupplierOverview() {
 // ── CUSTOMER OVERVIEW ────────────────────────────────────
 function renderCustomerOverview() {
   const el=document.getElementById('customeroverview-content'); if(!el)return;
+
+  // Totals/charts below read STATE.sales directly, but sales are partitioned
+  // monthly and only current+previous month are guaranteed loaded by default.
+  // Kick off a full-history load in the background (cheap — empty months
+  // just come back as []) and re-render once it's done, without blocking
+  // this render. Renders with whatever's loaded so far in the meantime.
+  const historyLoading = !window._allSalesHistoryLoaded;
+  if (historyLoading) {
+    _ensureFullSalesHistory().then(()=>{
+      if (document.getElementById('page-customeroverview')?.classList.contains('active')) {
+        renderCustomerOverview();
+      }
+    });
+  }
+
   const custs=Object.values(STATE.customers||{});
   const sales=Object.values(STATE.sales||{});
 
@@ -11974,6 +12105,7 @@ function renderCustomerOverview() {
   }).join('');
 
   el.innerHTML=`
+    ${historyLoading?`<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:var(--radius);padding:10px 14px;margin-bottom:1rem;font-size:12px;color:#1d4ed8;display:flex;align-items:center;gap:8px">⏳ Loading full sales history — totals and charts will update automatically once this finishes.</div>`:''}
     <!-- 6 KPI cards matching v1 -->
     <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:1.25rem">
       <div class="kpi-card" style="border-left:3px solid #8b5cf6"><div class="kpi-label" style="color:#8b5cf6">👤 TOTAL CUSTOMERS</div><div class="kpi-value" style="font-size:26px;font-weight:800">${custs.length}</div><div class="kpi-sub">${activeCusts} active</div></div>
