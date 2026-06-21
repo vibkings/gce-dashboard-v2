@@ -4839,6 +4839,22 @@ function generateInvoiceNum() { return v2GenerateInvoiceNum(); }
 async function v2SaveSale(mode) {
   if (!invoiceItems.length) { showToast('Add items first.','error'); return; }
   if (invoiceType==='registered' && !invoiceCustomer) { showToast('Select a customer.','error'); return; }
+
+  // A Proforma is a quote only — it must NOT touch inventory, customer
+  // balances, or cashflow. Previously this fell through into the full sale
+  // flow below (deducting stock and charging the customer) before crashing
+  // on an out-of-scope variable when trying to save the proforma itself.
+  if (mode === 'proforma') {
+    const printName = document.getElementById('s-print-name')?.value?.trim() || invoiceCustomer?.name || 'Walk-in';
+    const dateVal = document.getElementById('s-inv-date')?.value;
+    const dateObj = dateVal?(()=>{const dp=dateVal.split('-');return new Date(+dp[0],+dp[1]-1,+dp[2]);})():new Date();
+    const date = dateObj.toLocaleDateString();
+    await _saveProformaRecord(printName, date);
+    invoiceItems = []; invoiceCustomer = null;
+    renderSales();
+    return;
+  }
+
   const pt = document.getElementById('s-payment')?.value || 'cash';
   const partAmt = parseFloat(document.getElementById('s-part-payment')?.value)||0;
 
@@ -5184,7 +5200,6 @@ async function v2SaveSale(mode) {
     showToast(`✅ Invoice #${invNum} saved!`,'success');
     logActivity('Invoice saved',`Invoice #${invNum} — ${printName||''} — ${fmt(grandTotalCalc)}`,payMode||'');
     if (mode==='print') printSaleInvoice(invNum);
-  else if (mode==='proforma') { await _saveProformaRecord(invNum, printName, date); }
   else if (mode==='draft') { showToast('Draft saved.','info'); }
     invoiceItems=[]; invoiceCustomer=null;
     window._salesFilter='today';
@@ -5192,12 +5207,19 @@ async function v2SaveSale(mode) {
   } catch(e) { setSyncStatus('error'); showToast('Failed: '+e.message,'error'); }
 }
 
-async function _saveProformaRecord(invNum, custName, date){
+function _generateProformaNum() {
+  const nums = Object.values(STATE.proformas||{}).map(p=>parseInt((p.prfNum||'').split('-').pop())||0).filter(n=>!isNaN(n));
+  const max = nums.length ? Math.max(...nums) : 0;
+  return `PRF-${String(max+1).padStart(4,'0')}`;
+}
+
+async function _saveProformaRecord(custName, date){
+  const total = invoiceItems.reduce((a,l)=>a+Math.round(l.price*l.qty*(1-(l.discPct||0)/100)),0);
   const prf = {
-    id: uid(), prfNum: invNum.replace('2026/','PRF-'),
-    custId: invoiceCustomer?._id||null, custName: custName||'Walk-in',
+    id: uid(), prfNum: _generateProformaNum(),
+    custId: invoiceCustomer?._id||invoiceCustomer?.id||null, custName: custName||'Walk-in',
     items: invoiceItems.map(l=>({name:l.name,qty:l.qty,price:l.price,cost:l.cost,discPct:l.discPct||0,total:Math.round(l.price*l.qty*(1-(l.discPct||0)/100))})),
-    grandTotal: grandTotal,
+    grandTotal: total,
     date, status:'pending', validDays:7,
     by: STATE.user?.name, createdAt: new Date().toISOString()
   };
