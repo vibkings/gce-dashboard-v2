@@ -5003,7 +5003,7 @@ async function _allocateNextInvoiceNum() {
   return null; // retries exhausted — caller falls back to local computation
 }
 
-async // Display-only preview (synchronous, local cache only — NOT used for the
+// Display-only preview (synchronous, local cache only — NOT used for the
 // actual allocation, which goes through the atomic counter or the
 // authoritative v2GenerateInvoiceNum() fallback at save time).
 function _previewNextInvoiceNum() {
