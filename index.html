@@ -4836,6 +4836,62 @@ function v2SetCustType(t) { invoiceType=t; if(t==='walkin') invoiceCustomer=null
 // (a "lost update"). This reads the live Firestore doc, computes how much
 // can actually be taken right now, and writes it back ONLY if nobody else
 // touched the doc in between — retrying with the fresh number if they did.
+// Generic atomic adjustment (positive delta = add, negative = subtract).
+// Same read-check-write-retry pattern as the deduction helpers above, just
+// not constrained to "selling" — used for receiving purchases, warehouse
+// transfers, and manual add/remove stock adjustments. For negative deltas,
+// the change is clamped so qty never goes below 0, and the actual applied
+// amount is returned (which may be less than requested if stock changed
+// in between).
+async function _atomicAdjustInventory(itemId, delta, extraFields={}, maxRetries=8, col=COLS.INVENTORY, stateKey='inventory') {
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      const r = await fetch(`${FB.base}/${col}/${itemId}?key=${FB.apiKey}`);
+      if (!r.ok) return {applied:0, item:null, notFound:true};
+      const doc = await r.json();
+      const updateTime = doc.updateTime;
+      const serverItem = fromFsDoc(doc);
+      const currentQty = serverItem?.qty||0;
+      let newQty, applied;
+      if (delta >= 0) { applied = delta; newQty = currentQty + applied; }
+      else { applied = -Math.min(-delta, currentQty); newQty = currentQty + applied; }
+      const body = {fields: toFsFields({...serverItem, ...extraFields, qty:newQty})};
+      const w = await fetch(`${FB.base}/${col}/${itemId}?key=${FB.apiKey}&currentDocument.updateTime=${encodeURIComponent(updateTime)}`, {
+        method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)
+      });
+      if (w.ok) {
+        const updated = fromFsDoc(await w.json());
+        if (!STATE[stateKey]) STATE[stateKey] = {};
+        STATE[stateKey][itemId] = {...updated, _id:itemId, _savedAt:Date.now()};
+        try { const store=_lfStore(col); if(store) await store.setItem(itemId, STATE[stateKey][itemId]); } catch(e){}
+        return {applied, item:STATE[stateKey][itemId]};
+      }
+      await new Promise(res=>setTimeout(res, 60+Math.random()*180));
+    } catch(e) {
+      await new Promise(res=>setTimeout(res, 150));
+    }
+  }
+  return {applied:0, item:null, failed:true};
+}
+
+async function _safeAdjustInventory(itemId, delta, extraFields={}, col=COLS.INVENTORY, stateKey='inventory') {
+  if (!itemId) return {applied:0, item:STATE[stateKey]?.[itemId]||null};
+  if (_online) {
+    const result = await _atomicAdjustInventory(itemId, delta, extraFields, 8, col, stateKey);
+    if (!result.failed && !result.notFound) return result;
+  }
+  const inv = STATE[stateKey]?.[itemId];
+  const currentQty = inv?.qty||0;
+  const applied = delta>=0 ? delta : -Math.min(-delta, currentQty);
+  if (inv) {
+    const u = {...inv, ...extraFields, qty:Math.max(0, currentQty+applied)};
+    await fsSave(col, itemId, u);
+    if (!STATE[stateKey]) STATE[stateKey] = {};
+    STATE[stateKey][itemId] = {...u, _id:itemId,_savedAt:Date.now()};
+  }
+  return {applied, item:STATE[stateKey]?.[itemId]};
+}
+
 async function _atomicDeductInventory(itemId, requestedQty, maxRetries=8) {
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
@@ -7139,11 +7195,8 @@ async function savePurchaseRecord() {
         STATE.purchases[purchId]={...purch,_id:purchId,_savedAt:Date.now()};
 
         // Update inventory
-        if (item.itemId && STATE.inventory?.[item.itemId]) {
-          const inv = STATE.inventory[item.itemId];
-          const upd = {...inv, qty:(inv.qty||0)+receivedQty, cost:item.cost, costPrice:item.cost};
-          await fsSave(COLS.INVENTORY, item.itemId, upd);
-          STATE.inventory[item.itemId]={...upd,_id:item.itemId,_savedAt:Date.now()};
+        if (item.itemId) {
+          await _safeAdjustInventory(item.itemId, receivedQty, {cost:item.cost, costPrice:item.cost});
         }
         // Cashflow (non-credit)
         if (payType!=='credit') {
@@ -7260,11 +7313,8 @@ async function receivePendingItem(pendId) {
     STATE.purchases[purchId] = {...purch, _id:purchId,_savedAt:Date.now()};
 
     // Update inventory
-    if (pend.itemId && STATE.inventory?.[pend.itemId]) {
-      const inv = STATE.inventory[pend.itemId];
-      const upd = {...inv, qty:(inv.qty||0)+qty};
-      await fsSave('v2_inventory', pend.itemId, upd);
-      STATE.inventory[pend.itemId] = {...upd, _id:pend.itemId,_savedAt:Date.now()};
+    if (pend.itemId) {
+      await _safeAdjustInventory(pend.itemId, qty);
     }
 
     // Update or delete pending record
@@ -7308,11 +7358,8 @@ async function receiveAllNow(invoiceNum) {
       if (!STATE.purchases) STATE.purchases={};
       STATE.purchases[purchId] = {...purch, _id:purchId,_savedAt:Date.now()};
 
-      if (pend.itemId && STATE.inventory?.[pend.itemId]) {
-        const inv = STATE.inventory[pend.itemId];
-        const upd = {...inv, qty:(inv.qty||0)+qty};
-        await fsSave('v2_inventory', pend.itemId, upd);
-        STATE.inventory[pend.itemId] = {...upd, _id:pend.itemId,_savedAt:Date.now()};
+      if (pend.itemId) {
+        await _safeAdjustInventory(pend.itemId, qty);
       }
 
       const pendId = pend._id||pend.id;
@@ -9770,12 +9817,11 @@ async function commitTransferCart() {
       if (dir==='to_shop') {
         // Warehouse → Shop
         const wh=STATE.warehouse?.[c.id]; if(!wh) continue;
-        const qty=Math.min(c.qty, wh.qty||0); if(qty<1) continue;
-        const updWh={...wh,qty:(wh.qty||0)-qty};
-        await fsSave('v2_warehouse',c.id,updWh);STATE.warehouse[c.id]={...updWh,_id:c.id,_savedAt:Date.now()};
+        const whResult = await _safeAdjustInventory(c.id, -c.qty, {}, 'v2_warehouse', 'warehouse');
+        const qty = -whResult.applied; if(qty<1) continue;
         // Add to shop
         const shopItem=Object.values(STATE.inventory||{}).find(i=>i.name?.toLowerCase()===wh.name?.toLowerCase());
-        if(shopItem){const updSh={...shopItem,qty:(shopItem.qty||0)+qty};await fsSave(COLS.INVENTORY,shopItem._id,updSh);STATE.inventory[shopItem._id]={...updSh,_id:shopItem._id,_savedAt:Date.now()};}
+        if(shopItem){ await _safeAdjustInventory(shopItem._id||shopItem.id, qty); }
         // Log
         const logId=uid();const entry={id:logId,waybill,itemId:c.id,itemName:wh.name,qty,direction:dir,note,date,by:STATE.user?.name};
         await fsSave('v2_transferLog',logId,entry);if(!STATE.transferLog)STATE.transferLog={};STATE.transferLog[logId]={...entry,_id:logId,_savedAt:Date.now()};
@@ -9783,12 +9829,11 @@ async function commitTransferCart() {
       } else {
         // Shop → Warehouse
         const inv=STATE.inventory?.[c.id]; if(!inv) continue;
-        const qty=Math.min(c.qty, inv.qty||0); if(qty<1) continue;
-        const updInv={...inv,qty:(inv.qty||0)-qty};
-        await fsSave(COLS.INVENTORY,c.id,updInv);STATE.inventory[c.id]={...updInv,_id:c.id,_savedAt:Date.now()};
+        const invResult = await _safeAdjustInventory(c.id, -c.qty);
+        const qty = -invResult.applied; if(qty<1) continue;
         // Add to warehouse
         const whItem=Object.values(STATE.warehouse||{}).find(w=>w.name?.toLowerCase()===inv.name?.toLowerCase());
-        if(whItem){const updWh={...whItem,qty:(whItem.qty||0)+qty};await fsSave('v2_warehouse',whItem._id,updWh);STATE.warehouse[whItem._id]={...updWh,_id:whItem._id,_savedAt:Date.now()};}
+        if(whItem){ await _safeAdjustInventory(whItem._id||whItem.id, qty, {}, 'v2_warehouse', 'warehouse'); }
         else{const wid=uid();const newWh={id:wid,name:inv.name,cat:inv.cat||'',qty,minQty:inv.minQty||5,cost:inv.costPrice||inv.cost||0,itemId:c.id};await fsSave('v2_warehouse',wid,newWh);if(!STATE.warehouse)STATE.warehouse={};STATE.warehouse[wid]={...newWh,_id:wid,_savedAt:Date.now()};}
         // Log
         const logId=uid();const entry={id:logId,waybill,itemId:c.id,itemName:inv.name,qty,direction:dir,note,date,by:STATE.user?.name};
@@ -10761,12 +10806,23 @@ async function saveStockAdjFromForm(){
 
 async function saveStockAdjById(id,type,qty,reason){
   const item=STATE.inventory?.[id];if(!item)return;
-  let newQty=item.qty||0;
-  if(type==='add')newQty+=qty;else if(type==='remove')newQty=Math.max(0,newQty-qty);else newQty=qty;
   const now=new Date();const date=now.toLocaleDateString();const month=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
   setSyncStatus('saving');
   try{
-    const upd={...item,qty:newQty};await fsSave(COLS.INVENTORY,id,upd);STATE.inventory[id]={...upd,_id:id,_savedAt:Date.now()};
+    let newQty;
+    if (type==='add' || type==='remove') {
+      // Relative change — must be conflict-safe, same as sales deductions
+      const delta = type==='add' ? qty : -qty;
+      const result = await _safeAdjustInventory(id, delta);
+      newQty = result.item?.qty ?? Math.max(0,(item.qty||0)+delta);
+    } else {
+      // Set Count — an absolute physical count intentionally overrides
+      // whatever the running total said, so this stays last-write-wins.
+      newQty = qty;
+      const upd={...item,qty:newQty};
+      await fsSave(COLS.INVENTORY,id,upd);
+      STATE.inventory[id]={...upd,_id:id,_savedAt:Date.now()};
+    }
     const logId=uid();const logEntry={id:logId,itemId:id,itemName:item.name,type,qty,newQty,reason,date,month,by:STATE.user?.name};
     await fsSave('v2_adjLog',logId,logEntry);if(!STATE.adjLog)STATE.adjLog={};STATE.adjLog[logId]={...logEntry,_id:logId,_savedAt:Date.now()};
     setSyncStatus('synced');showToast(`Stock adjusted: ${item.name} → ${newQty}`,'success');renderStockMgmt();updateInventoryBadge();
