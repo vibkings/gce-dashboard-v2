@@ -1382,6 +1382,7 @@ const STATE = {
   salesReturns:       {},
   purchaseReturns:    {},
   demoSales:          {},
+  tillCounts:         {},
   stockCounts:        {},
   recycleBin:         {},
   activityLog:        {},
@@ -1450,6 +1451,7 @@ const COLS = {
   BORROWS:    'v2_borrows',
   ADJLOG:     'v2_adjLog',
   HELDCHANGE: 'v2_heldChange',
+  TILLCOUNTS: 'v2_tillCounts',
 };
 
 // ── Nav Config ─────────────────────────────────────────────
@@ -2160,6 +2162,7 @@ async function initDataLayer() {
     loadCollection(COLS.SALESRETURNS, 'salesReturns'),
     loadCollection(COLS.PURCHASERETURNS, 'purchaseReturns'),
     loadCollection(COLS.HELDCHANGE,   'heldChange'),
+    loadCollection(COLS.TILLCOUNTS,   'tillCounts'),
   ]);
   await withTimeout(mainLoadPromise, TIMEOUT);
   _watchSlowLoad(mainLoadPromise);
@@ -10081,8 +10084,10 @@ function renderClosing() {
   // Till / Cash in hand
   const openingFloat = STATE.settings?.openingFloat || 0;
   const expectedTill = openingFloat + cashIncome - cashExpenses - cashChangeOut;
-  const actualCount  = window._closingActualCount ?? expectedTill;
-  const tillDiff     = actualCount - expectedTill;
+  const tillCountRec = STATE.tillCounts?.[closingISO] || null;
+  const hasCount     = tillCountRec && tillCountRec.actualCount != null;
+  const actualCount  = hasCount ? tillCountRec.actualCount : null;
+  const tillDiff     = hasCount ? (actualCount - expectedTill) : 0;
 
   // By staff
   const staffMap = {};
@@ -10102,8 +10107,8 @@ function renderClosing() {
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:1.5rem;flex-wrap:wrap">
       <label style="font-size:13px;font-weight:600;color:var(--text2)">Date:</label>
       <input type="date" class="form-input" value="${closingISO}" style="width:auto"
-        onchange="window._closingISO=this.value;window._closingDate=new Date(this.value+'T00:00:00').toLocaleDateString();window._closingActualCount=null;renderClosing()">
-      <button class="btn" onclick="window._closingISO='${todayISO}';window._closingDate=new Date().toLocaleDateString();window._closingActualCount=null;renderClosing()">Today</button>
+        onchange="window._closingISO=this.value;window._closingDate=new Date(this.value+'T00:00:00').toLocaleDateString();renderClosing()">
+      <button class="btn" onclick="window._closingISO='${todayISO}';window._closingDate=new Date().toLocaleDateString();renderClosing()">Today</button>
       <button class="btn btn-primary" onclick="printClosingReport()">🖨️ Print Report</button>
     </div>
 
@@ -10160,13 +10165,17 @@ function renderClosing() {
         <div style="font-size:22px;font-weight:800;color:var(--text1)">${fmt(expectedTill)}</div>
         <div style="font-size:11px;color:var(--text3)">Float + Sales − Expenses${cashChangeOut>0?' − Change':''}</div>
       </div>
-      <div style="background:${Math.abs(tillDiff)<1?'#f0fdf4':'#fef2f2'};border-radius:var(--radius);padding:12px 16px;text-align:center">
+      <div style="background:${!hasCount?'var(--surface)':(Math.abs(tillDiff)<1?'#f0fdf4':'#fef2f2')};border-radius:var(--radius);padding:12px 16px;text-align:center">
         <div style="font-size:11px;color:var(--text3);margin-bottom:4px">Actual count</div>
-        <div style="font-size:22px;font-weight:800;color:${Math.abs(tillDiff)<1?'var(--success)':'var(--danger)'}">${fmt(actualCount)}</div>
-        ${Math.abs(tillDiff)<1
-          ? `<div style="font-size:12px;color:var(--success);font-weight:600">✓ Balanced</div>`
-          : `<div style="font-size:12px;color:var(--danger);font-weight:600">${tillDiff>0?'Surplus':'Shortage'}: ${fmt(Math.abs(tillDiff))}</div>`}
-        <button class="btn btn-sm" onclick="editTillCount()" style="margin-top:8px;font-size:11px">✎ Edit count</button>
+        <div style="font-size:22px;font-weight:800;color:${!hasCount?'var(--text3)':(Math.abs(tillDiff)<1?'var(--success)':'var(--danger)')}">${hasCount?fmt(actualCount):'— Not yet counted —'}</div>
+        ${!hasCount
+          ? `<div style="font-size:12px;color:var(--text3);font-weight:600">Tap "Count till" to record today's physical cash count</div>`
+          : (Math.abs(tillDiff)<1
+            ? `<div style="font-size:12px;color:var(--success);font-weight:600">✓ Balanced</div>`
+            : `<div style="font-size:12px;color:var(--danger);font-weight:600">${tillDiff>0?'Surplus':'Shortage'}: ${fmt(Math.abs(tillDiff))}</div>`)
+        }
+        ${hasCount&&tillCountRec?.countedBy?`<div style="font-size:10px;color:var(--text3);margin-top:4px">Counted by ${esc(tillCountRec.countedBy)}${tillCountRec.countedAt?' · '+new Date(tillCountRec.countedAt).toLocaleTimeString():''}</div>`:''}
+        <button class="btn btn-sm" onclick="editTillCount()" style="margin-top:8px;font-size:11px">${hasCount?'✎ Edit count':'💰 Count till'}</button>
       </div>
     </div>
 
@@ -10388,16 +10397,26 @@ function setOpeningFloat(){
     logActivity('Opening float set',`Float set`,String(val));}).catch(()=>showToast('Failed.','error'));
 }
 
-function editTillCount(){
-  const val=parseFloat(prompt('Enter actual cash counted in till:',window._closingActualCount??0));
+async function editTillCount(){
+  const closingISO = window._closingISO || _todayLocalISO();
+  const existing = STATE.tillCounts?.[closingISO];
+  const val=parseFloat(prompt('Enter actual cash counted in till:', existing?.actualCount ?? ''));
   if(isNaN(val))return;
-  window._closingActualCount=val;
-  logActivity('Closing cash count',`${window._closingDate||new Date().toLocaleDateString()} — counted ${fmt(val)}`,'')
-  renderClosing();
+  const rec = {id:closingISO, date:closingISO, actualCount:val, countedBy:STATE.user?.name||'', countedAt:new Date().toISOString()};
+  setSyncStatus('saving');
+  try {
+    await fsSave(COLS.TILLCOUNTS, closingISO, rec);
+    if (!STATE.tillCounts) STATE.tillCounts = {};
+    STATE.tillCounts[closingISO] = {...rec, _id:closingISO, _savedAt:Date.now()};
+    setSyncStatus('synced');
+    logActivity('Closing cash count',`${closingISO} — counted ${fmt(val)}`,'');
+    renderClosing();
+  } catch(e) { setSyncStatus('error'); showToast('Failed to save till count.','error'); }
 }
 
 function printClosingReport(){
   const closingDate=window._closingDate||new Date().toLocaleDateString();
+  const closingISO=window._closingISO||_todayLocalISO();
   const daySales=Object.values(STATE.sales||{}).filter(s=>s.date===closingDate);
   const invMap={};
   daySales.forEach(s=>{const k=s.invoiceNum||s.id;if(!invMap[k])invMap[k]={invoiceNum:k,custName:s.custName||'Walk-in',total:0,profit:0,payment:s.payment,payMode:s.payMode,seller:s.seller||''};invMap[k].total+=s.total||0;invMap[k].profit+=s.profit||0;});
@@ -10416,6 +10435,14 @@ function printClosingReport(){
   });
   const invRows=invList.map((g,i)=>`<tr><td>${i+1}</td><td><b>${g.invoiceNum}</b></td><td>${g.custName}</td><td>${g.payMode||g.payment||'Cash'}</td><td style="text-align:right">₦${Math.round(g.total).toLocaleString()}</td><td style="text-align:right;color:green">₦${Math.round(g.profit).toLocaleString()}</td><td>${g.seller}</td></tr>`).join('');
   const expRows=dayExp.map(e=>`<tr><td>${e.desc}</td><td>${e.cat}</td><td>${e.payMode||'Cash'}</td><td style="text-align:right;color:red">₦${Math.round(e.amount||0).toLocaleString()}</td></tr>`).join('');
+  // Till / Cash in hand
+  const openingFloatP = STATE.settings?.openingFloat || 0;
+  const cashExpensesP = dayExp.filter(e=>e.payMode==='cash'||!e.payMode).reduce((a,e)=>a+(e.amount||0),0);
+  const cashChangeOutP = Object.values(STATE.sales||{}).filter(s=>s.date===closingDate&&s.changeAmt>0&&(!s.changeDisp||s.changeDisp==='cash')).reduce((a,s)=>{const mode=s.payMode||'cash';return mode==='cash'?a+(s.changeAmt||0):a;},0);
+  const expectedTillP = openingFloatP + cashIncome - cashExpensesP - cashChangeOutP;
+  const tillRecP = STATE.tillCounts?.[closingISO] || null;
+  const hasCountP = tillRecP && tillRecP.actualCount != null;
+  const tillDiffP = hasCountP ? (tillRecP.actualCount - expectedTillP) : 0;
   const w=window.open('','_blank');
   if(!w)return;
   w.document.write(`<!DOCTYPE html><html><head><title>Daily Closing ${closingDate}</title>
@@ -10428,6 +10455,12 @@ function printClosingReport(){
     <div class="box"><div class="lbl">Gross Profit</div><div class="val" style="color:green">₦${Math.round(totalProfit).toLocaleString()}</div><div style="font-size:11px;color:#888">${margin}% margin</div></div>
     <div class="box"><div class="lbl">Expenses</div><div class="val" style="color:red">₦${Math.round(totalExp).toLocaleString()}</div></div>
     <div class="box"><div class="lbl">Net Profit</div><div class="val" style="color:${netProfit>=0?'green':'red'}">₦${Math.round(netProfit).toLocaleString()}</div></div>
+  </div>
+  <h3>💰 Till / Cash in Hand</h3>
+  <div class="summary" style="grid-template-columns:repeat(3,1fr)">
+    <div class="box"><div class="lbl">Expected in Till</div><div class="val">₦${Math.round(expectedTillP).toLocaleString()}</div></div>
+    <div class="box"><div class="lbl">Actual Count</div><div class="val" style="color:${!hasCountP?'#888':(Math.abs(tillDiffP)<1?'green':'red')}">${hasCountP?'₦'+Math.round(tillRecP.actualCount).toLocaleString():'Not counted'}</div></div>
+    <div class="box"><div class="lbl">${hasCountP?(Math.abs(tillDiffP)<1?'Status':(tillDiffP>0?'Surplus':'Shortage')):'Status'}</div><div class="val" style="color:${!hasCountP?'#888':(Math.abs(tillDiffP)<1?'green':'red')}">${hasCountP?(Math.abs(tillDiffP)<1?'✓ Balanced':'₦'+Math.round(Math.abs(tillDiffP)).toLocaleString()):'—'}</div></div>
   </div>
   <table><thead><tr><th>Mode</th><th style="text-align:right">Income</th><th style="text-align:right">Expenses</th><th style="text-align:right">Balance</th></tr></thead>
   <tbody>
