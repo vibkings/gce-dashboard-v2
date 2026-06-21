@@ -3032,7 +3032,7 @@ function renderOverview() {
   const allSups = Object.values(STATE.suppliers||{});
   const suppOwed = allSups.reduce((a,s)=>a+(s.owedToSupplier||0),0);
   const cashflow = Object.values(STATE.cashflow||{});
-  const monthExp = cashflow.filter(c=>c.type==='out'&&!['Restock','Supplier Payment','Supplier Deposit','Change'].includes(c.cat)&&(c.month||'')===curMonth)
+  const monthExp = cashflow.filter(c=>c.type==='out'&&!['Restock','Supplier Payment','Supplier Deposit','Change','Deposit Applied'].includes(c.cat)&&(c.month||'')===curMonth)
     .reduce((a,c)=>a+(c.amount||0),0);
 
   function pct(a,b){return b>0?'('+Math.round(a/b*100)+'%)':'';}
@@ -8766,7 +8766,7 @@ let purchaseItems = [];
 
 const ADMIN_SIG_DATAURL = "data:image/png;base64,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";
 const DEFAULT_EXP_CATS = ['Transport','Food','Maintenance','Salary','Commission','Utilities','Rent','Generator','Marketing','Office Supplies','Other'];
-const EXP_EXCLUDE_CATS = ['Restock','Supplier Payment','Supplier Deposit','Change'];
+const EXP_EXCLUDE_CATS = ['Restock','Supplier Payment','Supplier Deposit','Change','Deposit Applied'];
 
 function _getExpenses() {
   return Object.values(STATE.cashflow||{})
@@ -9363,7 +9363,7 @@ function renderReports() {
 
   const allSales     = Object.values(STATE.sales||{});
   const allCashflow  = Object.values(STATE.cashflow||{});
-  const EXC = ['Restock','Supplier Payment','Supplier Deposit','Change'];
+  const EXC = ['Restock','Supplier Payment','Supplier Deposit','Change','Deposit Applied'];
   const allExp       = allCashflow.filter(c=>c.type==='out'&&!EXC.includes(c.cat));
   const restocking   = allCashflow.filter(c=>c.type==='out'&&c.cat==='Restock');
 
@@ -10389,7 +10389,7 @@ function renderClosing() {
   const transferChangeOut = transferChangeEntries.reduce((a,s)=>a+(s.changeAmt||0),0);
 
   // Expenses
-  const EXC=['Restock','Supplier Payment','Supplier Deposit','Change'];
+  const EXC=['Restock','Supplier Payment','Supplier Deposit','Change','Deposit Applied'];
   const dayExp = Object.values(STATE.cashflow||{}).filter(c=>c.type==='out'&&c.date===closingDate&&!EXC.includes(c.cat));
   const totalExp = dayExp.reduce((a,e)=>a+(e.amount||0),0);
   const cashExpenses = dayExp.filter(e=>e.payMode==='cash'||!e.payMode).reduce((a,e)=>a+(e.amount||0),0);
@@ -10764,7 +10764,7 @@ function printClosingReport(){
   const totalRev=invList.reduce((a,g)=>a+g.total,0);
   const totalProfit=invList.reduce((a,g)=>a+g.profit,0);
   const margin=totalRev>0?Math.round(totalProfit/totalRev*100):0;
-  const EXC=['Restock','Supplier Payment','Supplier Deposit','Change'];
+  const EXC=['Restock','Supplier Payment','Supplier Deposit','Change','Deposit Applied'];
   const dayExp=Object.values(STATE.cashflow||{}).filter(c=>c.type==='out'&&c.date===closingDate&&!EXC.includes(c.cat));
   const totalExp=dayExp.reduce((a,e)=>a+(e.amount||0),0);
   const netProfit=totalProfit-totalExp;
@@ -12454,7 +12454,7 @@ function renderPandL() {
   }
 
   // Sales data
-  const EXC_CF=['Restock','Change','Supplier Payment','Supplier Deposit'];
+  const EXC_CF=['Restock','Change','Supplier Payment','Supplier Deposit','Deposit Applied'];
   const allSales=Object.values(STATE.sales||{}).filter(s=>!s.voided);
   const salesF=allSales.filter(s=>inRange(s.date,s.month));
 
@@ -13176,7 +13176,7 @@ function renderMonthlySummary() {
   const monthName=selDate.toLocaleString('en',{month:'long',year:'numeric'});
   function inMonth(date){if(!date)return false;const d=new Date(date);return d.getMonth()===selMon&&d.getFullYear()===selYear;}
 
-  const EXC=['Restock','Change','Supplier Payment','Supplier Deposit'];
+  const EXC=['Restock','Change','Supplier Payment','Supplier Deposit','Deposit Applied'];
   const allSales=Object.values(STATE.sales||{}).filter(s=>!s.voided);
   const sales=allSales.filter(s=>(s.month||'')===selectedMonth||inMonth(s.date));
 
@@ -13403,7 +13403,7 @@ function shareMonthlySummaryWhatsApp(){
   const monthName=selectedMonth?new Date(selectedMonth+'-02').toLocaleString('en',{month:'long',year:'numeric'}):'';
   const now=new Date();
   const pad=n=>String(n).padStart(2,'0');
-  const EXC=['Restock','Change','Supplier Payment','Supplier Deposit'];
+  const EXC=['Restock','Change','Supplier Payment','Supplier Deposit','Deposit Applied'];
   function inMonth(date){if(!date)return false;const d=new Date(date);const sd=new Date(selectedMonth+'-02');return d.getMonth()===sd.getMonth()&&d.getFullYear()===sd.getFullYear();}
   const sales=Object.values(STATE.sales||{}).filter(s=>!s.voided&&((s.month||'')===selectedMonth||inMonth(s.date)));
   const invs={};
