@@ -3992,6 +3992,7 @@ function renderSales() {
               <option value="cash">Give as cash change</option>
               <option value="credit">Apply to outstanding balance</option>
               <option value="deposit">Add to customer deposit</option>
+              <option value="hold">🔒 Hold — give change later</option>
             </select>
           </div>
         </div>
@@ -5096,7 +5097,7 @@ async function v2SaveSale(mode) {
   const posName = document.getElementById('s-pos-name')?.value||'';
   // Tendered amount and change disposition
   const tenderedAmt = parseFloat(document.getElementById('s-change-tendered')?.value)||0;
-  const changeDisp = document.getElementById('s-change-disp')?.value||'cash'; // cash/credit/deposit
+  const changeDisp = document.getElementById('s-change-disp')?.value||'cash'; // cash/credit/deposit/hold
   const grandTotalForChange = invoiceItems.reduce((a,l)=>a+Math.round(l.price*l.qty*(1-(l.discPct||0)/100)),0);
   const changeAmt = Math.max(0, tenderedAmt - grandTotalForChange);
   const wholeInvoicePending = document.getElementById('s-pending-supply')?.checked||false;
@@ -5172,7 +5173,21 @@ async function v2SaveSale(mode) {
     //   (cash out is tracked in TILL, not cashflow).
     // - 'credit': explicitly applied to balance. Record as Credit Payment in cashflow.
     // - 'deposit': add to customer deposit balance. Record as Customer Deposit in cashflow.
-    if (changeAmt > 0 && invoiceCustomer) {
+    if (changeAmt > 0 && changeDisp === 'hold') {
+      // Customer wasn't given physical change now — tracked in the standalone
+      // Held Change Register (own collection, never written to cashflow), the
+      // same place the Daily Closing till math already reads from. Works for
+      // walk-ins too since it doesn't need an existing customer record.
+      const hcId = uid();
+      const hcEntry = {id:hcId, custName:printName||'Walk-in', amount:changeAmt,
+        invoiceNum:invNum, note:'Held from sale',
+        date:dateObj.getFullYear()+'-'+String(dateObj.getMonth()+1).padStart(2,'0')+'-'+String(dateObj.getDate()).padStart(2,'0'),
+        month, status:'pending', by:STATE.user?.name||''};
+      await fsSave(COLS.HELDCHANGE, hcId, hcEntry);
+      if (!STATE.heldChange) STATE.heldChange = {};
+      STATE.heldChange[hcId] = {...hcEntry, _id:hcId, _savedAt:Date.now()};
+      showToast(`🔒 ${fmt(changeAmt)} change held for ${printName||'customer'} — see Held Change Register.`,'success');
+    } else if (changeAmt > 0 && invoiceCustomer) {
       if (changeDisp === 'cash') {
         // Physical cash returned — reduce outstanding balance silently (no cashflow entry)
         // The till already shows this as cash out
