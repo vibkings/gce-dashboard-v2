@@ -15644,6 +15644,7 @@ async function settleHeldChange(id) {
 }
 
 async function deleteHeldChange(id) {
+  const entry = STATE.heldChange?.[id];
   if (!confirm('Delete this entry?')) return;
   setSyncStatus('saving');
   try {
@@ -15651,6 +15652,7 @@ async function deleteHeldChange(id) {
     if (STATE.heldChange) delete STATE.heldChange[id];
     setSyncStatus('synced');
     showToast('Entry deleted.','info');
+    logActivity('Held Change deleted', `${entry?.custName||'Walk-in'} — ${fmt(entry?.amount||0)} deleted by ${STATE.user?.name||'Unknown'}`, '');
     renderHeldChange();
   } catch(e) { setSyncStatus('error'); showToast('Failed: '+e.message,'error'); }
 }
