@@ -1882,12 +1882,33 @@ async function _refreshFromFirestore(col, stateKey) {
     // Snapshot queued IDs at the moment of merge (prevents race condition)
     const queuedIds = new Set(_syncQueue.filter(q=>q.col===col).map(q=>q.id));
 
+    // Locally-tombstoned IDs (records deleted on this device). A deleted
+    // record is removed from both STATE and the sync queue once its delete
+    // succeeds, so neither of those alone can tell us "this was deleted on
+    // purpose" — but the tombstone written to IndexedDB at delete time
+    // persists regardless. Without this check, if Firestore's read lags
+    // even slightly behind a delete (or the delete is still mid-flight),
+    // this background refresh would silently resurrect the deleted record
+    // back into STATE.
+    const tombstonedIds = new Set();
+    if (store) {
+      try { await store.iterate((val, key) => { if (val?._deleted) tombstonedIds.add(key); }); }
+      catch(e) {}
+    }
+
     for (const serverDoc of docs) {
       const docId = serverDoc._id;
       if (!docId) continue;
 
       // If doc is in sync queue → our local version is newer, keep it
       if (queuedIds.has(docId)) continue;
+
+      // Locally deleted, and the server hasn't reflected that yet — keep it
+      // deleted and nudge the delete to sync again rather than reviving it.
+      if (tombstonedIds.has(docId) && !serverDoc._deleted) {
+        if (STATE[stateKey]) delete STATE[stateKey][docId];
+        continue;
+      }
 
       const localDoc = STATE[stateKey]?.[docId];
       // Timestamp-based conflict resolution: server wins only if newer
