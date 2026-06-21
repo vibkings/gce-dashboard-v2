@@ -1452,6 +1452,7 @@ const COLS = {
   ADJLOG:     'v2_adjLog',
   HELDCHANGE: 'v2_heldChange',
   TILLCOUNTS: 'v2_tillCounts',
+  DEMOSALES: 'v2_demoSales',
 };
 
 // ── Nav Config ─────────────────────────────────────────────
@@ -2163,6 +2164,7 @@ async function initDataLayer() {
     loadCollection(COLS.PURCHASERETURNS, 'purchaseReturns'),
     loadCollection(COLS.HELDCHANGE,   'heldChange'),
     loadCollection(COLS.TILLCOUNTS,   'tillCounts'),
+    loadCollection(COLS.DEMOSALES,    'demoSales'),
   ]);
   await withTimeout(mainLoadPromise, TIMEOUT);
   _watchSlowLoad(mainLoadPromise);
@@ -15330,6 +15332,7 @@ async function cleanupFlaggedInvoices(){
   setSyncStatus('saving');
   try {
     let restoredCount = 0;
+    let deleteFailures = 0;
     for (const [id, s] of salesToDelete) {
       // Restore inventory that this test sale deducted (skip if it was a
       // Hold/pending-supply line, since those never deducted stock yet).
@@ -15345,12 +15348,20 @@ async function cleanupFlaggedInvoices(){
       const month = s.month || (s.date ? s.date.slice(0,7) : null);
       let col = COLS.SALES;
       if (month) { const [yr,mo]=month.split('-').map(Number); col = salesCol(yr,mo); }
-      await fsDelete(col, id);
+      // Use the real, immediate Firestore delete here (not the soft-delete
+      // sync queue) — this is a deliberate, confirmed, irreversible bulk
+      // cleanup, so we wait for the actual server deletion to complete
+      // rather than queuing it in the background, where a reload shortly
+      // after could race with an unfinished sync and pull the old record
+      // back in from the server before the delete had a chance to land.
+      try { await _fsDelete(col, id); } catch(e) { deleteFailures++; console.warn('Delete failed for', id, e.message); }
       delete STATE.sales[id];
+      try { const store = _lfStore(col); if (store) await store.removeItem(id); } catch(e) {}
     }
     for (const [id] of cfToDelete) {
-      await fsDelete(COLS.CASHFLOW, id);
+      try { await _fsDelete(COLS.CASHFLOW, id); } catch(e) { deleteFailures++; }
       if (STATE.cashflow) delete STATE.cashflow[id];
+      try { const store = _lfStore(COLS.CASHFLOW); if (store) await store.removeItem(id); } catch(e) {}
     }
     // Reset the invoice counter safely above whatever's left loaded. Note:
     // this only sees sales currently loaded in this browser session — if
@@ -15362,7 +15373,7 @@ async function cleanupFlaggedInvoices(){
     await fsSave('v2_settings','invCounter',{value:safeCounter});
     STATE.invCounter = safeCounter;
     setSyncStatus('synced');
-    showToast(`Deleted ${salesToDelete.length} line items, restored stock on ${restoredCount}, removed ${cfToDelete.length} cashflow entries. Counter set to ${safeCounter}.`,'success');
+    showToast(`Deleted ${salesToDelete.length} line items, restored stock on ${restoredCount}, removed ${cfToDelete.length} cashflow entries. Counter set to ${safeCounter}.${deleteFailures?` (${deleteFailures} delete${deleteFailures===1?'':'s'} failed — check console)`:''}`, deleteFailures?'error':'success');
     logActivity('Test data cleanup', `Removed test sales for invoice(s) ${targetInvNums.join(', ')} by ${STATE.user?.name||'Unknown'}`, `${salesToDelete.length} line items`);
     window._dupInvoiceNums = null;
     closeModal();
