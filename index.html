@@ -2658,6 +2658,18 @@ function _todayLocalISO() {
   return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
 }
 
+// Parses a 'YYYY-MM-DD' string as a LOCAL date (midnight local time), unlike
+// new Date('YYYY-MM-DD') which the JS spec parses as UTC midnight — that
+// mismatch silently shifts date-range filter boundaries by the local UTC
+// offset (e.g. an hour early in Nigeria/UTC+1), excluding "today" records
+// from "today" filters. Always use this instead of new Date(isoString) when
+// comparing against locally-stored date values.
+function _localDateFromISO(iso) {
+  if (!iso) return null;
+  const p = iso.split('-');
+  return new Date(+p[0], +p[1]-1, +p[2]);
+}
+
 function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2,8);
 }
@@ -8594,8 +8606,8 @@ function renderExpenses() {
   const filtered = allExp.filter(e=>{
     // Date range filter
     const d = new Date(e.date);
-    const f = customFrom ? new Date(customFrom) : null;
-    const t = customTo   ? (() => { const x=new Date(customTo); x.setHours(23,59,59,999); return x; })() : null;
+    const f = customFrom ? _localDateFromISO(customFrom) : null;
+    const t = customTo   ? (() => { const x=_localDateFromISO(customTo); x.setHours(23,59,59,999); return x; })() : null;
     if (f && d < f) return false;
     if (t && d > t) return false;
     // Category filter
@@ -9044,8 +9056,8 @@ function exportExpensesCSV() {
   const catFilter  = window._expCat||'';
   const filtered = _getExpenses().filter(e=>{
     const d=new Date(e.date);
-    const f=customFrom?new Date(customFrom):null;
-    const t=customTo?(()=>{const x=new Date(customTo);x.setHours(23,59,59,999);return x;})():null;
+    const f=customFrom?_localDateFromISO(customFrom):null;
+    const t=customTo?(()=>{const x=_localDateFromISO(customTo);x.setHours(23,59,59,999);return x;})():null;
     if(f&&d<f)return false; if(t&&d>t)return false;
     if(catFilter&&e.cat!==catFilter)return false;
     return true;
@@ -9085,8 +9097,8 @@ function renderReports() {
     if (repFilter==='month') return (month||'')===curMonth;
     if (repFilter==='custom') {
       const d=new Date(date);
-      const f=customFrom?new Date(customFrom):null;
-      const t=customTo?(()=>{const x=new Date(customTo);x.setHours(23,59,59,999);return x;})():null;
+      const f=customFrom?_localDateFromISO(customFrom):null;
+      const t=customTo?(()=>{const x=_localDateFromISO(customTo);x.setHours(23,59,59,999);return x;})():null;
       return (!f||d>=f)&&(!t||d<=t);
     }
     return true;
@@ -11388,7 +11400,88 @@ function v2DemoFilterDd(term){const box=document.getElementById('demo-item-dd');
 function selectDemoItem(id,name,price){const inp=document.getElementById('demo-item-search');const hid=document.getElementById('demo-item-id');const priceInp=document.getElementById('demo-price');const box=document.getElementById('demo-item-dd');if(inp)inp.value=name;if(hid)hid.value=id;if(box)box.style.display='none';if(priceInp&&!priceInp.value)priceInp.value=price;}
 function addDemoItem(){const id=document.getElementById('demo-item-id')?.value;const name=document.getElementById('demo-item-search')?.value.trim();const qty=parseInt(document.getElementById('demo-qty')?.value)||1;const price=parseFloat(document.getElementById('demo-price')?.value)||0;if(!name){showToast('Select an item first.','error');return;}if(!window._demoItems)window._demoItems=[];window._demoItems.push({id,name,qty,price,total:qty*price});renderDemoSales();}
 async function saveDemoSale(){if(!window._demoItems||!window._demoItems.length){showToast('Add items first.','error');return;}const id=uid();const now=new Date();const date=now.toLocaleDateString();const invoiceNum='DEM-'+Date.now().toString().slice(-6);const printName=document.getElementById('demo-print-name')?.value.trim()||'Walk-in';const grandTotal=window._demoItems.reduce((a,i)=>a+i.price*i.qty,0);const demo={id,invoiceNum,printName,custName:printName,items:[...window._demoItems],grandTotal,date,by:STATE.user?.name};setSyncStatus('saving');try{await fsSave('v2_demoSales',id,demo);if(!STATE.demoSales)STATE.demoSales={};STATE.demoSales[id]={...demo,_id:id,_savedAt:Date.now()};window._demoItems=[];setSyncStatus('synced');showToast('Demo recorded.','success');printDemoInvoice(id);window._demoSub='list';renderDemoSales();}catch(e){setSyncStatus('error');showToast('Failed.','error');}}
-function printDemoInvoice(id){const d=STATE.demoSales?.[id];if(!d)return;const rows=(d.items||[]).map((i,idx)=>`<tr><td>${idx+1}</td><td>${esc(i.name)}</td><td style="text-align:center">${i.qty}</td><td style="text-align:right">N${(i.price||0).toLocaleString()}</td><td style="text-align:right"><b>N${((i.price||0)*i.qty).toLocaleString()}</b></td></tr>`).join('');const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Demo ${d.invoiceNum}</title><style>body{font-family:Arial;max-width:600px;margin:20px auto;padding:16px}table{width:100%;border-collapse:collapse}thead tr{background:#7c3aed;color:#fff}thead th{padding:7px;font-size:11px;text-align:left}@media print{body{padding:4px}}</style></head><body><div style="text-align:center;border-bottom:3px solid #7c3aed;padding-bottom:10px;margin-bottom:14px"><div style="font-size:18px;font-weight:900;color:#c0392b">GREAT CHID ELECTRO (NIG.)</div><div style="font-size:16px;font-weight:900;color:#1a237e">GLOBAL DOORS LTD</div><div style="display:inline-block;background:#f59e0b;color:#fff;padding:4px 24px;border-radius:4px;font-weight:800;letter-spacing:2px;margin-top:10px">DEMO SALES</div></div><div style="display:flex;justify-content:space-between;margin-bottom:12px;font-size:13px"><div><b>Customer:</b> ${esc(d.printName||'Walk-in')}</div><div style="text-align:right"><b>#:</b> ${esc(d.invoiceNum)}<br><b>Date:</b> ${d.date}</div></div><table><thead><tr><th>#</th><th>Item</th><th style="text-align:center">Qty</th><th style="text-align:right">Price</th><th style="text-align:right">Total</th></tr></thead><tbody>${rows}</tbody><tfoot><tr style="font-weight:800;border-top:2px solid #7c3aed"><td colspan="4" style="padding:8px;text-align:right">TOTAL</td><td style="padding:8px;text-align:right;color:#7c3aed;font-size:16px">N${(d.grandTotal||0).toLocaleString()}</td></tr></tfoot></table><div style="margin-top:14px;text-align:center;font-size:11px;color:#888;font-style:italic">DEMO SALE - Stock not deducted.</div><script>setTimeout(()=>window.print(),400)<\/script></body></html>`;const w=window.open('','_blank','width=640,height=850');if(w){w.document.write(html);w.document.close();}}
+function printDemoInvoice(id){const d=STATE.demoSales?.[id];if(!d)return;
+  const rows=(d.items||[]).map(i=>`<tr style="border-bottom:1px solid #e8e8e8"><td style="padding:6px 8px;font-size:12px;font-weight:600">${esc(i.name)}</td><td style="padding:6px 8px;text-align:center;font-size:12px">${i.qty}</td><td style="padding:6px 8px;text-align:right;font-size:12px">₦${(i.price||0).toLocaleString()}</td><td style="padding:6px 8px;text-align:right;font-size:13px;font-weight:700">₦${((i.price||0)*i.qty).toLocaleString()}</td></tr>`).join('');
+  const shieldSVG=`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 95" width="70" height="83">
+    <defs>
+      <linearGradient id="sg2" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" style="stop-color:#c0392b"/><stop offset="100%" style="stop-color:#7b241c"/></linearGradient>
+      <linearGradient id="gg2" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" style="stop-color:#f9d835"/><stop offset="100%" style="stop-color:#c9a227"/></linearGradient>
+    </defs>
+    <path d="M40 2 L76 17 L76 50 C76 70 40 90 40 90 C40 90 4 70 4 50 L4 17 Z" fill="url(#sg2)" stroke="url(#gg2)" stroke-width="3"/>
+    <path d="M40 10 L68 23 L68 50 C68 66 40 82 40 82 C40 82 12 66 12 50 L12 23 Z" fill="none" stroke="url(#gg2)" stroke-width="1" opacity="0.4"/>
+    <text x="40" y="34" text-anchor="middle" font-family="Arial Black,sans-serif" font-size="13" font-weight="900" fill="#f9d835" letter-spacing="2">GCE</text>
+    <line x1="14" y1="40" x2="66" y2="40" stroke="#f9d835" stroke-width="1" opacity="0.5"/>
+    <rect x="29" y="45" width="22" height="26" rx="2" fill="none" stroke="#f9d835" stroke-width="1.6"/>
+    <rect x="35" y="56" width="10" height="15" rx="1" fill="#f9d835"/>
+    <circle cx="40" cy="51" r="3.5" fill="#f9d835"/>
+    <text x="40" y="79" text-anchor="middle" font-family="Arial,sans-serif" font-size="7" font-weight="700" fill="#f9d835" letter-spacing="1.5">ELECTRO</text>
+  </svg>`;
+  const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>INVOICE — ${esc(d.invoiceNum)}</title>
+  <style>
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{font-family:Arial,Helvetica,sans-serif;font-size:12px;color:#1a1a1a;background:#fff;width:210mm;margin:0 auto;padding:15mm}
+    table{width:100%;border-collapse:collapse}
+    @media print{body{padding:10mm}button{display:none!important}}
+  </style>
+  </head><body>
+  <div style="display:flex;align-items:flex-start;justify-content:space-between;padding-bottom:10px;border-bottom:3px solid #c0392b;margin-bottom:10px">
+    <div style="flex:1;padding-right:12px">
+      <div style="font-size:22px;font-weight:900;color:#c0392b;line-height:1.1">GREAT CHID ELECTRO (NIG.) |</div>
+      <div style="font-size:20px;font-weight:900;color:#1a237e;line-height:1.15;margin-bottom:4px">GLOBAL DOORS LTD</div>
+      <div style="font-size:8.5px;color:#444;margin-bottom:5px">A Subsidiary of DE-CHIDEX ELECTRIC INTERNATIONAL. Multi-Stockist of Electrical Materials, Fancy Well Brackets, Chandellers, and Home Furnitures.</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:8.5px">
+        <div>
+          <div style="font-weight:700;color:#c0392b;margin-bottom:1px">OGBOMOSO OFFICE</div>
+          <div><b>Address:</b> Ile-Bara Cke-Ado, Sabo Ilorin Rd, Ogbomoso, Oyo State.</div>
+          <div><b>Tel:</b> 08035158594, 08100170802</div>
+        </div>
+        <div>
+          <div style="font-weight:700;color:#1a237e;margin-bottom:1px">ILORIN HEAD OFFICE</div>
+          <div><b>Address:</b> 189, Ibrahim Taiwo Rd, beside UBA Bank, Horin, Kwara State.</div>
+          <div><b>Tel:</b> 08033617798, 08000589040</div>
+        </div>
+      </div>
+    </div>
+    <div style="flex-shrink:0">${shieldSVG}</div>
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
+    <div style="border:1px solid #ccc;border-radius:4px;padding:9px 11px">
+      <div style="font-size:11px;font-weight:700;color:#555;margin-bottom:4px">Bill To:</div>
+      <div style="font-size:14px;font-weight:700">${esc(d.printName||d.custName||'Walk-in')}</div>
+    </div>
+    <div style="border:1px solid #ccc;border-radius:4px;padding:9px 11px">
+      <div style="font-size:11px;font-weight:700;color:#555;margin-bottom:4px">Invoice Details:</div>
+      <div style="font-size:10.5px;line-height:1.8">
+        <div><b>Invoice Number:</b> ${esc(d.invoiceNum)}</div>
+        <div><b>Issue Date:</b> ${d.date}</div>
+        <div><b>Served By:</b> ${esc(d.by||'—')}</div>
+      </div>
+    </div>
+  </div>
+  <div style="text-align:center;margin-bottom:10px">
+    <div style="display:inline-block;font-size:18px;font-weight:900;color:#000;letter-spacing:3px;border-top:2px solid #000;border-bottom:2px solid #000;padding:4px 32px">INVOICE</div>
+  </div>
+  <table style="border:1px solid #ccc">
+    <thead>
+      <tr style="background:#f0f0f0;border-bottom:2px solid #ccc">
+        <th style="padding:7px 8px;text-align:left;font-size:10px;font-weight:800">Item Description</th>
+        <th style="padding:7px 8px;text-align:center;font-size:10px;font-weight:800;width:42px">Qty</th>
+        <th style="padding:7px 8px;text-align:right;font-size:10px;font-weight:800;width:100px">Unit Price</th>
+        <th style="padding:7px 8px;text-align:right;font-size:10px;font-weight:800;width:100px">Total</th>
+      </tr>
+    </thead>
+    <tbody>${rows}</tbody>
+    <tfoot>
+      <tr>
+        <td colspan="3" style="border-top:1px solid #ccc;padding:5px 8px;text-align:right;font-size:12px;font-weight:800;background:#fafafa">Total:</td>
+        <td style="padding:5px 8px;border-top:1px solid #ccc;border-left:1px solid #ccc;text-align:right;font-size:14px;font-weight:900;background:#fafafa">₦${(d.grandTotal||0).toLocaleString()}</td>
+      </tr>
+    </tfoot>
+  </table>
+  <script>setTimeout(()=>window.print(),400)<\/script>
+  </body></html>`;
+  const w=window.open('','_blank','width=900,height=1000');if(w){w.document.write(html);w.document.close();}
+}
 async function deleteDemoSale(id){if(!confirm('Delete this demo sale?'))return;setSyncStatus('saving');try{await fsDelete('v2_demoSales',id);delete STATE.demoSales[id];setSyncStatus('synced');showToast('Deleted.','info');renderDemoSales();}catch(e){setSyncStatus('error');showToast('Failed.','error');}}
 
 // ── CREDIT ────────────────────────────────────────────────
