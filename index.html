@@ -15316,7 +15316,58 @@ async function checkDuplicateInvoiceNumbers(){
       ${lines}
     </div>`;
   }).join('');
-  showModal('🔍 Duplicate Invoice Check — Collisions Found', `<div style="padding:8px 0">Found ${suspects.length} invoice number(s) shared by sales from different dates — this means two unrelated invoices got merged under one number.<br><br>${rows}<br>These need manual separation. Tell Claude the affected invoice number(s) above and the correct details for each sale, and they can be split back out.</div>`, [{label:'Close',action:'close',style:'btn-primary'}]);
+  window._dupInvoiceNums = suspects.map(([k])=>k);
+  showModal('🔍 Duplicate Invoice Check — Collisions Found', `<div style="padding:8px 0">Found ${suspects.length} invoice number(s) shared by sales from different dates — this means two unrelated invoices got merged under one number.<br><br>${rows}<br>If all of the above is genuinely test/garbage data (not real customer transactions), you can use "Delete Flagged Test Data" below to remove every line item under these invoice numbers, restore any inventory they deducted, remove related cashflow entries, and reset the invoice counter safely. <b>This cannot be undone</b> — only do this if you're certain none of it is real.</div>`, [{label:'Close',action:'close',style:''},{label:'🗑️ Delete Flagged Test Data',action:'cleanupFlaggedInvoices()',style:'btn-danger'}]);
+}
+
+async function cleanupFlaggedInvoices(){
+  const targetInvNums = window._dupInvoiceNums||[];
+  if (!targetInvNums.length) { showToast('Nothing flagged to clean up.','error'); return; }
+  const salesToDelete = Object.entries(STATE.sales||{}).filter(([id,s])=>targetInvNums.includes(s.invoiceNum));
+  const cfToDelete = Object.entries(STATE.cashflow||{}).filter(([id,c])=>targetInvNums.includes(c.invoiceNum));
+  if (!salesToDelete.length) { showToast('No matching sales found — they may already be gone.','info'); return; }
+  if (!confirm(`Permanently delete ${salesToDelete.length} sale line item(s) across invoice(s) ${targetInvNums.join(', ')}, restore any deducted inventory, remove ${cfToDelete.length} related cashflow entr${cfToDelete.length===1?'y':'ies'}, and reset the invoice counter? This cannot be undone.`)) return;
+  setSyncStatus('saving');
+  try {
+    let restoredCount = 0;
+    for (const [id, s] of salesToDelete) {
+      // Restore inventory that this test sale deducted (skip if it was a
+      // Hold/pending-supply line, since those never deducted stock yet).
+      if (s.itemId && s.qty && s.supplyMode !== 'hold') {
+        const inv = STATE.inventory?.[s.itemId];
+        if (inv) {
+          const updInv = {...inv, qty:(inv.qty||0)+s.qty};
+          await fsSave(COLS.INVENTORY, s.itemId, updInv);
+          STATE.inventory[s.itemId] = {...updInv, _id:s.itemId, _savedAt:Date.now()};
+          restoredCount++;
+        }
+      }
+      const month = s.month || (s.date ? s.date.slice(0,7) : null);
+      let col = COLS.SALES;
+      if (month) { const [yr,mo]=month.split('-').map(Number); col = salesCol(yr,mo); }
+      await fsDelete(col, id);
+      delete STATE.sales[id];
+    }
+    for (const [id] of cfToDelete) {
+      await fsDelete(COLS.CASHFLOW, id);
+      if (STATE.cashflow) delete STATE.cashflow[id];
+    }
+    // Reset the invoice counter safely above whatever's left loaded. Note:
+    // this only sees sales currently loaded in this browser session — if
+    // other months might contain higher real invoice numbers, load them via
+    // the Sales date filter before relying on this reset.
+    const remainingNums = Object.values(STATE.sales||{})
+      .map(s=>parseInt((s.invoiceNum||'').split('/').pop())||0).filter(n=>!isNaN(n));
+    const safeCounter = Math.max(remainingNums.length?Math.max(...remainingNums):0, STATE.invCounter||0);
+    await fsSave('v2_settings','invCounter',{value:safeCounter});
+    STATE.invCounter = safeCounter;
+    setSyncStatus('synced');
+    showToast(`Deleted ${salesToDelete.length} line items, restored stock on ${restoredCount}, removed ${cfToDelete.length} cashflow entries. Counter set to ${safeCounter}.`,'success');
+    logActivity('Test data cleanup', `Removed test sales for invoice(s) ${targetInvNums.join(', ')} by ${STATE.user?.name||'Unknown'}`, `${salesToDelete.length} line items`);
+    window._dupInvoiceNums = null;
+    closeModal();
+    renderSales(); updateInventoryBadge();
+  } catch(e) { setSyncStatus('error'); showToast('Cleanup failed: '+e.message,'error'); }
 }
 
 async function addBankByType(type){
