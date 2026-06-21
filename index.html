@@ -4382,23 +4382,23 @@ async function confirmSupplyQty(saleId) {
   const qty = parseInt(document.getElementById('sq-qty')?.value)||0;
   if (qty<1) { showToast('Enter a valid quantity.','error'); return; }
   if (qty>pendingQty) { showToast(`Cannot supply more than the pending amount (${pendingQty}).`,'error'); return; }
-  const invItem = STATE.inventory?.[s.itemId];
-  const avail = invItem?.qty||0;
-  if (qty>avail) { showToast(`Only ${avail} currently in stock.`,'error'); return; }
   setSyncStatus('saving');
   try {
-    const updInv = {...invItem, qty:Math.max(0, avail-qty)};
-    await fsSave(COLS.INVENTORY, s.itemId, updInv);
-    STATE.inventory[s.itemId] = {...updInv, _id:s.itemId, _savedAt:Date.now()};
-    const newSupplied = (s.suppliedQty||0)+qty;
-    const newPending = Math.max(0, pendingQty-qty);
+    const result = await _safeDeductInventory(s.itemId, qty);
+    const actualQty = result.deducted;
+    if (actualQty < qty) {
+      showToast(`Only ${actualQty} could be supplied — stock changed since this was opened.`, actualQty>0?'info':'error');
+      if (actualQty<=0) { setSyncStatus('synced'); return; }
+    }
+    const newSupplied = (s.suppliedQty||0)+actualQty;
+    const newPending = Math.max(0, pendingQty-actualQty);
     const updSale = {...s, suppliedQty:newSupplied, pendingQty:newPending, pendingSupply:newPending>0, supplyStatus:newPending>0?'pending':'supplied'};
     await saveSaleDoc(s.month, saleId, updSale);
     STATE.sales[saleId] = {...updSale, _id:saleId, _savedAt:Date.now()};
     closeModal();
     setSyncStatus('synced');
-    showToast(`✅ Supplied ${qty} × ${s.name}.${newPending>0?` ${newPending} still pending.`:' Fully supplied.'}`,'success');
-    logActivity('Stock supplied', `${s.name} — ${qty} supplied (Inv #${s.invoiceNum})${newPending>0?`, ${newPending} still pending`:''}`, '');
+    showToast(`✅ Supplied ${actualQty} × ${s.name}.${newPending>0?` ${newPending} still pending.`:' Fully supplied.'}`,'success');
+    logActivity('Stock supplied', `${s.name} — ${actualQty} supplied (Inv #${s.invoiceNum})${newPending>0?`, ${newPending} still pending`:''}`, '');
     renderSales(); updateInventoryBadge();
   } catch(e) { setSyncStatus('error'); showToast('Failed to supply.','error'); }
 }
@@ -4412,13 +4412,9 @@ async function supplyAllNow(invoiceNum) {
     for (const s of items) {
       const pendingQty = s.pendingQty!=null ? s.pendingQty : Math.max(0,(s.qty||0)-(s.suppliedQty||0));
       if (pendingQty<=0) continue;
-      const invItem = STATE.inventory?.[s.itemId];
-      const avail = invItem?.qty||0;
-      const qty = Math.min(pendingQty, avail);
+      const result = await _safeDeductInventory(s.itemId, pendingQty);
+      const qty = result.deducted;
       if (qty<1) { stillShort++; continue; }
-      const updInv = {...invItem, qty:Math.max(0, avail-qty)};
-      await fsSave(COLS.INVENTORY, s.itemId, updInv);
-      STATE.inventory[s.itemId] = {...updInv, _id:s.itemId, _savedAt:Date.now()};
       const newSupplied = (s.suppliedQty||0)+qty;
       const newPending = Math.max(0, pendingQty-qty);
       const updSale = {...s, suppliedQty:newSupplied, pendingQty:newPending, pendingSupply:newPending>0, supplyStatus:newPending>0?'pending':'supplied'};
@@ -4558,14 +4554,9 @@ async function confirmChangeItem() {
     STATE.sales[st.saleId] = {...updOrig, _id:st.saleId, _savedAt:Date.now()};
 
     // 2) Supply the replacement now, as much as stock allows
-    const avail = newItem.qty||0;
-    const supplyNowQty = Math.min(avail, st.qty);
+    const result = await _safeDeductInventory(st.newItemId, st.qty);
+    const supplyNowQty = result.deducted;
     const stillPendingQty = st.qty - supplyNowQty;
-    if (supplyNowQty>0) {
-      const updInv = {...newItem, qty:Math.max(0, avail-supplyNowQty)};
-      await fsSave(COLS.INVENTORY, st.newItemId, updInv);
-      STATE.inventory[st.newItemId] = {...updInv, _id:st.newItemId, _savedAt:Date.now()};
-    }
 
     // 3) Create the new line for the replacement item, on the same invoice
     const newSaleId = uid();
@@ -4838,6 +4829,64 @@ function v2SetCustType(t) { invoiceType=t; if(t==='walkin') invoiceCustomer=null
 // preconditions) — if another device updates the counter in between our
 // read and write, our write is rejected and we retry with a short random
 // backoff, so two clients can never both succeed with the same number.
+// ── Concurrency-safe inventory deduction ────────────────────
+// Same problem, same fix as the invoice counter above: reading local stock,
+// subtracting, and writing back blindly means two devices selling the same
+// item at the same time can silently overwrite each other's deduction
+// (a "lost update"). This reads the live Firestore doc, computes how much
+// can actually be taken right now, and writes it back ONLY if nobody else
+// touched the doc in between — retrying with the fresh number if they did.
+async function _atomicDeductInventory(itemId, requestedQty, maxRetries=8) {
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      const r = await fetch(`${FB.base}/v2_inventory/${itemId}?key=${FB.apiKey}`);
+      if (!r.ok) return {deducted:0, item:null, notFound:true};
+      const doc = await r.json();
+      const updateTime = doc.updateTime;
+      const serverItem = fromFsDoc(doc);
+      const currentQty = serverItem?.qty||0;
+      const actualDeduct = Math.max(0, Math.min(requestedQty, currentQty));
+      const newQty = currentQty - actualDeduct;
+      const body = {fields: toFsFields({...serverItem, qty:newQty})};
+      const w = await fetch(`${FB.base}/v2_inventory/${itemId}?key=${FB.apiKey}&currentDocument.updateTime=${encodeURIComponent(updateTime)}`, {
+        method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)
+      });
+      if (w.ok) {
+        const updated = fromFsDoc(await w.json());
+        STATE.inventory[itemId] = {...updated, _id:itemId, _savedAt:Date.now()};
+        try { const store=_lfStore(COLS.INVENTORY); if(store) await store.setItem(itemId, STATE.inventory[itemId]); } catch(e){}
+        return {deducted:actualDeduct, item:STATE.inventory[itemId]};
+      }
+      // Someone else updated this item between our read and write — retry with the fresh value
+      await new Promise(res=>setTimeout(res, 60+Math.random()*180));
+    } catch(e) {
+      await new Promise(res=>setTimeout(res, 150));
+    }
+  }
+  return {deducted:0, item:null, failed:true}; // retries exhausted
+}
+
+// Wrapper: tries the live atomic path when online, falls back to a local
+// best-effort deduction when offline or if the atomic path couldn't get
+// through — same online/offline split as invoice numbering.
+async function _safeDeductInventory(itemId, requestedQty) {
+  if (!itemId || requestedQty<=0) return {deducted:0, item:STATE.inventory?.[itemId]||null};
+  if (_online) {
+    const result = await _atomicDeductInventory(itemId, requestedQty);
+    if (!result.failed && !result.notFound) return result;
+  }
+  // Offline, item not found on server yet, or atomic path exhausted retries
+  const inv = STATE.inventory[itemId];
+  const avail = inv?.qty||0;
+  const deducted = Math.max(0, Math.min(avail, requestedQty));
+  if (inv && deducted>0) {
+    const u = {...inv, qty:Math.max(0,(inv.qty||0)-deducted)};
+    await fsSave(COLS.INVENTORY, itemId, u);
+    STATE.inventory[itemId] = {...u, _id:itemId,_savedAt:Date.now()};
+  }
+  return {deducted, item:STATE.inventory[itemId]};
+}
+
 async function _allocateNextInvoiceNum() {
   const year = new Date().getFullYear();
   for (let attempt = 0; attempt < 8; attempt++) {
@@ -4999,14 +5048,15 @@ async function v2SaveSale(mode) {
         inv = Object.values(STATE.inventory||{}).find(i=>i.name===l.name);
         if (inv) { l.itemId = inv._id||inv.id; logActivity('Inventory ID mismatch (auto-corrected)', `${l.name} — matched by name instead of ID`, ''); }
       }
-      const avail = inv?.qty||0;
+      const mode = l.supplyMode||'supply';
       let suppliedQty, pendingQty;
-      if (wholeInvoicePending) { suppliedQty=0; pendingQty=l.qty; }
-      else if (l.qty > avail) {
-        const mode = l.supplyMode||'supply';
-        suppliedQty = mode==='supply' ? Math.min(avail, l.qty) : 0;
+      if (wholeInvoicePending || mode==='hold') {
+        suppliedQty = 0; pendingQty = l.qty;
+      } else {
+        const result = await _safeDeductInventory(l.itemId, l.qty);
+        suppliedQty = result.deducted;
         pendingQty = l.qty - suppliedQty;
-      } else { suppliedQty = l.qty; pendingQty = 0; }
+      }
       const sale = {
         id:saleId, invoiceId, invoiceNum:invNum, name:l.name, itemId:l.itemId,
         qty:l.qty, salePrice:l.price, cost:l.cost,
@@ -5031,12 +5081,6 @@ async function v2SaveSale(mode) {
       };
       await saveSaleDoc(month, saleId, sale);
       STATE.sales[saleId] = {...sale, _id:saleId,_savedAt:Date.now()};
-      // Deduct inventory — only the quantity actually being supplied now
-      if (inv && suppliedQty>0) {
-        const u = {...inv, qty:Math.max(0,(inv.qty||0)-suppliedQty)};
-        await fsSave(COLS.INVENTORY, l.itemId, u);
-        STATE.inventory[l.itemId] = {...u, _id:l.itemId,_savedAt:Date.now()};
-      }
     }
     // ── CHANGE DISPOSITION ───────────────────────────────────
     // When customer overpays and change > 0:
