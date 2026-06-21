@@ -5103,6 +5103,16 @@ async function v2SaveSale(mode) {
   // Part payment: use whichever mode was actually selected for the amount paid now
   // (cash/transfer/pos/split), instead of always recording it as 'cash'.
   const partModeVal = pt==='part' ? (document.getElementById('s-part-mode')?.value||'cash') : null;
+  // Deposit shortfall mode — captured here (not just on the separate cashflow
+  // doc) so Reports/Daily Closing can correctly bucket the shortfall by its
+  // real payment mode without re-counting the deposit-applied portion, which
+  // was already received as cash whenever the customer's deposit was funded.
+  const depSfMode = pt==='deposit' ? (document.getElementById('s-deposit-sf-mode')?.value||'cash') : null;
+  const depSfBank = (pt==='deposit' && (depSfMode==='transfer'||depSfMode==='pos')) ? (document.getElementById('s-deposit-sf-bank')?.value||'') : '';
+  const depSfShortfallAmt = pt==='deposit' ? (window._saleDepositShortfall||0) : 0;
+  const depSfSplitCash = (pt==='deposit' && depSfMode==='split') ? (parseFloat(document.getElementById('s-deposit-sf-cash')?.value)||0) : 0;
+  const depSfSplitTransfer = (pt==='deposit' && depSfMode==='split') ? Math.max(0, depSfShortfallAmt - depSfSplitCash) : 0;
+  const depSplitPayment = (pt==='deposit' && depSfMode==='split') ? {mode1:'cash',amt1:depSfSplitCash,mode2:'transfer',amt2:depSfSplitTransfer,bank1:'',bank2:depSfBank} : null;
   const partBankVal = (partModeVal==='transfer'||partModeVal==='pos') ? (document.getElementById('s-part-bank')?.value||'') : '';
   const partSplitCashVal = partModeVal==='split' ? (parseFloat(document.getElementById('s-part-split-cash')?.value)||0) : 0;
   const partSplitTransferVal = partModeVal==='split' ? Math.max(0, partAmt - partSplitCashVal) : 0;
@@ -5138,8 +5148,10 @@ async function v2SaveSale(mode) {
         discount:l.discAmt||0,
         payment:(pt==='credit'?'credit':pt==='part'?'part':pt==='deposit'?'deposit':'paid'),
         payMode:(pt==='credit'?'credit':pt==='part'?partModeVal:pt==='deposit'?'deposit':payMode),
-        splitPayment: pt==='part' ? partSplitPayment : splitPayment,
+        splitPayment: pt==='part' ? partSplitPayment : pt==='deposit' ? depSplitPayment : splitPayment,
         partPayment: pt==='part' ? partAmt : pt==='deposit' ? (window._saleDepositPortion||0) : 0,
+        depositShortfallMode: pt==='deposit' ? depSfMode : '',
+        depositShortfallBank: pt==='deposit' ? depSfBank : '',
         bankName: pt==='part' ? (partModeVal==='transfer'?partBankVal:bankName) : bankName,
         posName: pt==='part' ? (partModeVal==='pos'?partBankVal:posName) : posName,
         tenderedAmt: tenderedAmt||0, changeAmt: changeAmt||0, changeDisp: changeAmt>0?changeDisp:'cash',
@@ -5270,8 +5282,8 @@ async function v2SaveSale(mode) {
     if (payment_type === 'deposit') {
       const depPortion = window._saleDepositPortion||0;
       const shortfall  = window._saleDepositShortfall||0;
-      const sfMode = document.getElementById('s-deposit-sf-mode')?.value||'cash';
-      const sfBank = document.getElementById('s-deposit-sf-bank')?.value||'';
+      const sfMode = depSfMode||'cash';
+      const sfBank = depSfBank||'';
       const custId = invoiceCustomer&&(invoiceCustomer._id||invoiceCustomer.id)||null;
       // Record deposit used — internal tracking, NOT a new cash inflow
       if (depPortion > 0) {
@@ -5285,8 +5297,8 @@ async function v2SaveSale(mode) {
       // Record shortfall cash received (only if not credit)
       if (shortfall > 0 && sfMode !== 'credit') {
         if (sfMode === 'split') {
-          const cashPortion = parseFloat(document.getElementById('s-deposit-sf-cash')?.value)||0;
-          const transferPortion = Math.max(0, shortfall - cashPortion);
+          const cashPortion = depSfSplitCash;
+          const transferPortion = depSfSplitTransfer;
           if (cashPortion>0) {
             const cId=uid(),cCf={id:cId,type:'in',cat:'Sales',desc:'Split cash deposit shortfall - Inv #'+invNum+' - '+printName,amount:cashPortion,payMode:'cash',custId,date,month,invoiceNum:invNum,by:STATE.user.name};
             await fsSave(COLS.CASHFLOW,cId,cCf);STATE.cashflow[cId]={...cCf,_id:cId,_savedAt:Date.now()};
@@ -9155,10 +9167,31 @@ function renderReports() {
   // Payment mode breakdown — split amounts distributed into their actual modes
   let cashSales = 0, posSales = 0, transferSales = 0;
   salesF.forEach(s => {
-    // For part payments and deposits, only the partPayment amount was
-    // actually received now — the rest is still owed (credit) and must not
-    // be counted as cash/POS/transfer received.
-    const amtReceived = (s.payment==='part'||s.payment==='deposit') ? (s.partPayment||0) : (s.total||0);
+    if (s.payment === 'deposit') {
+      // The deposit portion (s.partPayment) was already received and bucketed
+      // as cash/POS/transfer back when the customer's deposit balance was
+      // first funded — re-adding it here on every invoice it gets applied to
+      // would double count it. Only the shortfall, if any, is new money
+      // received today, and it's bucketed by the mode it was actually paid
+      // with (depositShortfallMode), not the literal payMode:'deposit'.
+      const shortfall = Math.max(0, (s.total||0) - (s.partPayment||0));
+      if (shortfall <= 0) return;
+      if (s.depositShortfallMode === 'split' && s.splitPayment) {
+        cashSales += s.splitPayment.amt1||0;
+        transferSales += s.splitPayment.amt2||0;
+      } else if (s.depositShortfallMode === 'pos') {
+        posSales += shortfall;
+      } else if (s.depositShortfallMode === 'transfer') {
+        transferSales += shortfall;
+      } else if (s.depositShortfallMode !== 'credit') {
+        cashSales += shortfall; // default mode is cash
+      }
+      return;
+    }
+    // For part payments, only the partPayment amount was actually received
+    // now — the rest is still owed (credit) and must not be counted as
+    // cash/POS/transfer received.
+    const amtReceived = s.payment==='part' ? (s.partPayment||0) : (s.total||0);
     if (s.payMode === 'split' && s.splitPayment) {
       const sp = s.splitPayment;
       const add = (mode, amt) => {
@@ -10037,6 +10070,7 @@ function renderClosing() {
     if(!invMap[k]) invMap[k]={invoiceNum:k,custName:s.custName||'Walk-in',total:0,profit:0,
       payment:s.payment,payMode:s.payMode,splitPayment:s.splitPayment||null,
       partPayment:s.partPayment||0,
+      depositShortfallMode:s.depositShortfallMode||'',depositShortfallBank:s.depositShortfallBank||'',
       bankName:s.bankName||'',posName:s.posName||'',seller:s.seller||'',items:[]};
     invMap[k].total+=s.total||0; invMap[k].profit+=s.profit||0;
     invMap[k].items.push(s);
@@ -10054,7 +10088,29 @@ function renderClosing() {
   let cashIncome=0, posIncome=0, transferIncome=0, creditPayIn=0;
   invList.forEach(g=>{
     if(g.payment==='credit') return; // credit — not collected yet, skip
-    const amtReceived = (g.payment==='part'||g.payment==='deposit') ? (g.partPayment||0) : g.total;
+    if (g.payment === 'deposit') {
+      // The deposit portion (g.partPayment) was already received and
+      // bucketed into the till whenever the customer's deposit was first
+      // funded — counting it again here (which the old catch-all 'else
+      // cashIncome' branch did, since payMode is the literal string
+      // 'deposit' and matches no other branch) double-counted it and
+      // inflated Expected in Till. Only the shortfall, if any, is new
+      // money actually received today.
+      const shortfall = Math.max(0, (g.total||0) - (g.partPayment||0));
+      if (shortfall <= 0) return;
+      if (g.depositShortfallMode === 'split' && g.splitPayment) {
+        cashIncome += g.splitPayment.amt1||0;
+        transferIncome += g.splitPayment.amt2||0;
+      } else if (g.depositShortfallMode === 'pos') {
+        posIncome += shortfall;
+      } else if (g.depositShortfallMode === 'transfer') {
+        transferIncome += shortfall;
+      } else if (g.depositShortfallMode !== 'credit') {
+        cashIncome += shortfall; // default mode is cash
+      }
+      return;
+    }
+    const amtReceived = g.payment==='part' ? (g.partPayment||0) : g.total;
     if(g.payMode==='split'&&g.splitPayment){
       const sp=g.splitPayment;
       const add=(m,v)=>{if(m==='cash')cashIncome+=v;else if(m==='pos')posIncome+=v;else if(m==='transfer')transferIncome+=v;};
@@ -10430,7 +10486,7 @@ function printClosingReport(){
   const closingISO=window._closingISO||_todayLocalISO();
   const daySales=Object.values(STATE.sales||{}).filter(s=>s.date===closingDate);
   const invMap={};
-  daySales.forEach(s=>{const k=s.invoiceNum||s.id;if(!invMap[k])invMap[k]={invoiceNum:k,custName:s.custName||'Walk-in',total:0,profit:0,payment:s.payment,payMode:s.payMode,seller:s.seller||''};invMap[k].total+=s.total||0;invMap[k].profit+=s.profit||0;});
+  daySales.forEach(s=>{const k=s.invoiceNum||s.id;if(!invMap[k])invMap[k]={invoiceNum:k,custName:s.custName||'Walk-in',total:0,profit:0,payment:s.payment,payMode:s.payMode,splitPayment:s.splitPayment||null,partPayment:s.partPayment||0,depositShortfallMode:s.depositShortfallMode||'',seller:s.seller||''};invMap[k].total+=s.total||0;invMap[k].profit+=s.profit||0;});
   const invList=Object.values(invMap);
   const totalRev=invList.reduce((a,g)=>a+g.total,0);
   const totalProfit=invList.reduce((a,g)=>a+g.profit,0);
@@ -10441,8 +10497,19 @@ function printClosingReport(){
   const netProfit=totalProfit-totalExp;
   let cashIncome=0,posIncome=0,transferIncome=0;
   invList.forEach(g=>{
+    if(g.payment==='credit')return;
+    if(g.payment==='deposit'){
+      const shortfall=Math.max(0,(g.total||0)-(g.partPayment||0));
+      if(shortfall<=0)return;
+      if(g.depositShortfallMode==='split'&&g.splitPayment){cashIncome+=g.splitPayment.amt1||0;transferIncome+=g.splitPayment.amt2||0;}
+      else if(g.depositShortfallMode==='pos')posIncome+=shortfall;
+      else if(g.depositShortfallMode==='transfer')transferIncome+=shortfall;
+      else if(g.depositShortfallMode!=='credit')cashIncome+=shortfall;
+      return;
+    }
+    const amt=g.payment==='part'?(g.partPayment||0):g.total;
     if(g.payMode==='split'&&g.splitPayment){const sp=g.splitPayment;const add=(m,v)=>{if(m==='cash')cashIncome+=v;else if(m==='pos')posIncome+=v;else if(m==='transfer')transferIncome+=v;};add(sp.mode1,sp.amt1||0);add(sp.mode2,sp.amt2||0);}
-    else if(g.payment==='credit'){}else if(g.payMode==='pos')posIncome+=g.total;else if(g.payMode==='transfer')transferIncome+=g.total;else cashIncome+=g.total;
+    else if(g.payMode==='pos')posIncome+=amt;else if(g.payMode==='transfer')transferIncome+=amt;else cashIncome+=amt;
   });
   const invRows=invList.map((g,i)=>`<tr><td>${i+1}</td><td><b>${g.invoiceNum}</b></td><td>${g.custName}</td><td>${g.payMode||g.payment||'Cash'}</td><td style="text-align:right">₦${Math.round(g.total).toLocaleString()}</td><td style="text-align:right;color:green">₦${Math.round(g.profit).toLocaleString()}</td><td>${g.seller}</td></tr>`).join('');
   const expRows=dayExp.map(e=>`<tr><td>${e.desc}</td><td>${e.cat}</td><td>${e.payMode||'Cash'}</td><td style="text-align:right;color:red">₦${Math.round(e.amount||0).toLocaleString()}</td></tr>`).join('');
