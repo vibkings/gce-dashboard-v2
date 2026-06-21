@@ -9127,8 +9127,16 @@ function renderReports() {
   const grossMargin  = revenue>0?Math.round(grossProfit/revenue*100):0;
 
   // Cash received vs credit
-  const cashReceived = salesF.filter(s=>s.payment!=='credit'&&s.payment!=='deposit').reduce((a,s)=>a+(s.total||0),0);
-  const creditOwed   = salesF.filter(s=>s.payment==='credit').reduce((a,s)=>a+(s.total||0),0);
+  // 'part' payments only had partPayment actually collected now — the rest is
+  // still owed. Previously cashReceived counted the FULL total for 'part'
+  // sales while creditOwed only looked at payment==='credit', so the unpaid
+  // remainder of a part-payment sale vanished from both sides — overstating
+  // Cash Received/Net Cash while the dashboard's own reconciliation check
+  // still showed "balanced" because the two errors cancelled out exactly.
+  const cashReceived = salesF.filter(s=>s.payment!=='credit'&&s.payment!=='deposit')
+    .reduce((a,s)=>a+(s.payment==='part'?(s.partPayment||0):(s.total||0)),0);
+  const creditOwed   = salesF.filter(s=>s.payment==='credit').reduce((a,s)=>a+(s.total||0),0)
+    + salesF.filter(s=>s.payment==='part').reduce((a,s)=>a+Math.max(0,(s.total||0)-(s.partPayment||0)),0);
   const allCreditOwed= Object.values(STATE.customers||{}).reduce((a,c)=>a+(c.creditBalance||0),0);
   const depositPaid  = salesF.filter(s=>s.payment==='deposit').reduce((a,s)=>a+(s.partPayment||s.total||0),0);
 
@@ -9147,9 +9155,10 @@ function renderReports() {
   // Payment mode breakdown — split amounts distributed into their actual modes
   let cashSales = 0, posSales = 0, transferSales = 0;
   salesF.forEach(s => {
-    // For part payments, only the partPayment amount was actually received now —
-    // the rest is still owed (credit) and must not be counted as cash in till.
-    const amtReceived = s.payment==='part' ? (s.partPayment||0) : (s.total||0);
+    // For part payments and deposits, only the partPayment amount was
+    // actually received now — the rest is still owed (credit) and must not
+    // be counted as cash/POS/transfer received.
+    const amtReceived = (s.payment==='part'||s.payment==='deposit') ? (s.partPayment||0) : (s.total||0);
     if (s.payMode === 'split' && s.splitPayment) {
       const sp = s.splitPayment;
       const add = (mode, amt) => {
@@ -10036,14 +10045,16 @@ function renderClosing() {
   const totalRev = invList.reduce((a,g)=>a+g.total,0);
   const totalProfit = invList.reduce((a,g)=>a+g.profit,0);
   const margin = totalRev>0?Math.round(totalProfit/totalRev*100):0;
-  const creditOwed = invList.filter(g=>g.payment==='credit').reduce((a,g)=>a+g.total,0);
-  const totalPaid  = invList.filter(g=>g.payment!=='credit').reduce((a,g)=>a+g.total,0);
+  const creditOwed = invList.filter(g=>g.payment==='credit').reduce((a,g)=>a+g.total,0)
+    + invList.filter(g=>g.payment==='part'||g.payment==='deposit').reduce((a,g)=>a+Math.max(0,g.total-(g.partPayment||0)),0);
+  const totalPaid  = invList.filter(g=>g.payment!=='credit')
+    .reduce((a,g)=>a+((g.payment==='part'||g.payment==='deposit')?(g.partPayment||0):g.total),0);
 
   // Payment mode breakdown (split distributed)
   let cashIncome=0, posIncome=0, transferIncome=0, creditPayIn=0;
   invList.forEach(g=>{
     if(g.payment==='credit') return; // credit — not collected yet, skip
-    const amtReceived = g.payment==='part' ? (g.partPayment||0) : g.total;
+    const amtReceived = (g.payment==='part'||g.payment==='deposit') ? (g.partPayment||0) : g.total;
     if(g.payMode==='split'&&g.splitPayment){
       const sp=g.splitPayment;
       const add=(m,v)=>{if(m==='cash')cashIncome+=v;else if(m==='pos')posIncome+=v;else if(m==='transfer')transferIncome+=v;};
