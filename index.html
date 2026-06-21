@@ -4245,6 +4245,13 @@ function renderSales() {
     <p class="sec-title" style="margin-top:1.5rem">↩️ Sales Returns — ${filterLabel}</p>
     <div style="text-align:center;padding:1.25rem;color:#888;font-size:13px">No returns for this period.</div>
   `;
+  // The payment-type select defaults to "Cash" via the browser's normal
+  // first-option behavior, but its onchange handler (which reveals the
+  // tendered-amount field, paymode options, etc.) never fires for that
+  // default — only when the user actively changes the dropdown. Without
+  // this, the tendered/change field silently never appears for the most
+  // common payment type. Run it once now that the form is in the DOM.
+  if (document.getElementById('s-payment')) v2OnPayTypeChange();
 }
 function v2CustSearch(val) {
   const dd = document.getElementById('s-cust-dd'); if(!dd) return;
