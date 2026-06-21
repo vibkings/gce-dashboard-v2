@@ -4119,7 +4119,7 @@ function renderSales() {
       </div>
     </div>`:'' ;
 
-  const nextInv = v2GenerateInvoiceNum();
+  const nextInv = _previewNextInvoiceNum();
 
   el.innerHTML = `
     <!-- KPIs — mirrors v1 exactly -->
@@ -5002,12 +5002,39 @@ async function _allocateNextInvoiceNum() {
   return null; // retries exhausted — caller falls back to local computation
 }
 
-function v2GenerateInvoiceNum() {
+async // Display-only preview (synchronous, local cache only — NOT used for the
+// actual allocation, which goes through the atomic counter or the
+// authoritative v2GenerateInvoiceNum() fallback at save time).
+function _previewNextInvoiceNum() {
   const year = new Date().getFullYear();
   const nums = Object.values(STATE.sales||{})
     .map(s=>parseInt((s.invoiceNum||'').split('/').pop())||0).filter(n=>!isNaN(n));
   const maxFromSales = nums.length ? Math.max(...nums) : 0;
   const max = Math.max(maxFromSales, STATE.invCounter||0);
+  return `${year}/${String(max+1).padStart(4,'0')}`;
+}
+
+async function v2GenerateInvoiceNum() {
+  const year = new Date().getFullYear();
+  const nums = Object.values(STATE.sales||{})
+    .map(s=>parseInt((s.invoiceNum||'').split('/').pop())||0).filter(n=>!isNaN(n));
+  const maxFromSales = nums.length ? Math.max(...nums) : 0;
+  let max = Math.max(maxFromSales, STATE.invCounter||0);
+  // Local STATE.sales is only ever a partial cache (monthly partitioned), so
+  // before trusting it for something as collision-sensitive as an invoice
+  // number, also try one authoritative read of the real server-side counter
+  // — the same simple document GET the atomic allocator already uses
+  // successfully elsewhere. This is only reached when that allocator's own
+  // retries were exhausted, so this is a best-effort second opinion, not a
+  // guarantee — true offline use still carries inherent collision risk.
+  try {
+    const r = await fetch(`${FB.base}/v2_settings/invCounter?key=${FB.apiKey}`);
+    if (r.ok) {
+      const doc = await r.json();
+      const serverVal = fromFsDoc(doc)?.value || 0;
+      max = Math.max(max, serverVal);
+    }
+  } catch(e) { /* genuinely offline — proceed with best local estimate */ }
   return `${year}/${String(max+1).padStart(4,'0')}`;
 }
 
@@ -5067,7 +5094,7 @@ async function v2SaveSale(mode) {
   const deliveryAddr = document.getElementById('s-inv-address')?.value.trim()||
     (invoiceCustomer?.address||'');
   let invNum = _online ? await _allocateNextInvoiceNum() : null;
-  if (!invNum) invNum = v2GenerateInvoiceNum(); // offline, or allocator exhausted its retries
+  if (!invNum) invNum = await v2GenerateInvoiceNum(); // offline, or allocator exhausted its retries
   const invoiceId = uid();
   // Payment mode details
   let payMode = pt;
@@ -15220,9 +15247,37 @@ function renderSettingsFull(){
     <div class="form-card" style="margin-bottom:1.25rem;border:1.5px solid var(--danger)">
       ${secTitle('⚠️','Danger Zone')}
       <div style="display:flex;gap:10px;flex-wrap:wrap">
+        <button class="btn" onclick="checkDuplicateInvoiceNumbers()" style="color:var(--warning);border-color:var(--warning)">🔍 Check for Duplicate Invoice Numbers</button>
         <button class="btn btn-danger" onclick="if(confirm('Clear ALL v2 data? This cannot be undone.'))clearAllV2Data()" style="background:var(--danger);color:#fff;border-color:var(--danger)">🗑️ Clear All V2 Data</button>
       </div>
+      <div style="font-size:11px;color:var(--text3);margin-top:8px">Duplicate check only scans sales currently loaded in this browser session — load more months first (via Sales date filter) for a fuller scan.</div>
     </div>`:''}`
+}
+
+async function checkDuplicateInvoiceNumbers(){
+  showToast('Scanning loaded sales for duplicate invoice numbers…','info');
+  const groups = {};
+  Object.values(STATE.sales||{}).forEach(s=>{
+    const k = s.invoiceNum; if(!k) return;
+    if(!groups[k]) groups[k]=[];
+    groups[k].push(s);
+  });
+  const suspects = Object.entries(groups).filter(([k,items])=>{
+    const dates = new Set(items.map(i=>i.date));
+    return dates.size>1; // same invoice # but more than one distinct date = collision
+  });
+  if (!suspects.length) {
+    showModal('🔍 Duplicate Invoice Check', `<div style="padding:8px 0">No collisions found among ${Object.keys(groups).length} invoice numbers currently loaded in this session.<br><br>This only checked months already loaded in your browser — if you suspect an older invoice is involved, open Sales, filter to that month/date, then run this check again.</div>`, [{label:'Close',action:'close',style:'btn-primary'}]);
+    return;
+  }
+  const rows = suspects.map(([k,items])=>{
+    const lines = items.map(i=>`<div style="padding:6px 0;border-bottom:1px solid var(--border)"><b>${esc(i.date||'—')}</b> — ${esc(i.custName||'Walk-in')} — ${esc(i.name||'')} ×${i.qty||0} — ${fmt(i.total||0)}</div>`).join('');
+    return `<div style="margin-bottom:14px;border:1.5px solid var(--danger);border-radius:8px;padding:10px">
+      <div style="font-weight:800;color:var(--danger);margin-bottom:6px">Invoice #${esc(k)} — ${items.length} line items across ${new Set(items.map(i=>i.date)).size} different dates</div>
+      ${lines}
+    </div>`;
+  }).join('');
+  showModal('🔍 Duplicate Invoice Check — Collisions Found', `<div style="padding:8px 0">Found ${suspects.length} invoice number(s) shared by sales from different dates — this means two unrelated invoices got merged under one number.<br><br>${rows}<br>These need manual separation. Tell Claude the affected invoice number(s) above and the correct details for each sale, and they can be split back out.</div>`, [{label:'Close',action:'close',style:'btn-primary'}]);
 }
 
 async function addBankByType(type){
