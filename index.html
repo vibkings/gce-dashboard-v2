@@ -7515,6 +7515,7 @@ async function cancelPendingItem(pendId) {
     delete STATE.pendingDeliveries[pendId];
     setSyncStatus('synced');
     showToast('Pending delivery cancelled.','info');
+    logActivity('Pending delivery cancelled', `${pend.itemName} — PO #${pend.purchaseInvoiceNum||pendId} cancelled by ${STATE.user?.name||'Unknown'}`, `Ordered ${pend.orderedQty||0}, received ${pend.receivedQty||0}`);
     renderPurchases();
   } catch(e) { setSyncStatus('error'); showToast('Failed.','error'); }
 }
