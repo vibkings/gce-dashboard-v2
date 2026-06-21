@@ -3990,6 +3990,7 @@ function renderSales() {
             <label style="font-size:11px;font-weight:700;color:var(--text2)">Apply change to:</label>
             <select class="form-input" id="s-change-disp" style="margin-top:4px">
               <option value="cash">Give as cash change</option>
+              <option value="transfer">Send back by transfer</option>
               <option value="credit">Apply to outstanding balance</option>
               <option value="deposit">Add to customer deposit</option>
               <option value="hold">🔒 Hold — give change later</option>
@@ -4653,7 +4654,7 @@ function v2OnPayTypeChange() {
   show('s-part-split-wrap',       false);
   show('s-credit-due-wrap',       pt==='credit'||pt==='part');
   show('s-split-wrap',            pt==='split');
-  show('s-change-wrap',           pt==='cash');
+  show('s-change-wrap',           pt==='cash'||pt==='pos'||pt==='transfer');
   show('s-deposit-info-wrap',     pt==='deposit');
   show('s-deposit-shortfall-wrap',pt==='deposit');
   show('s-deposit-sf-bank-wrap',  false);
@@ -5233,6 +5234,31 @@ async function v2SaveSale(mode) {
           STATE.customers[invoiceCustomer._id||invoiceCustomer.id] = {...upd, _id:(invoiceCustomer._id||invoiceCustomer.id), _savedAt:Date.now()};
         }
         // If no outstanding, cash change just leaves till — nothing to record
+      } else if (changeDisp === 'transfer') {
+        // Sent back via bank transfer instead of physical cash — doesn't
+        // touch the till at all (no cash left the drawer), but unlike cash
+        // it IS a real traceable bank outflow, so it needs a cashflow record
+        // for the books. cat:'Change' is already excluded from expense
+        // totals everywhere in this codebase, so it won't distort Daily
+        // Closing/Reports expense figures — it just shows on its own line.
+        const existingBal = invoiceCustomer.creditBalance||0;
+        if (existingBal > 0) {
+          const newBal = Math.max(0, existingBal - changeAmt);
+          const upd = {...invoiceCustomer, creditBalance: newBal};
+          await fsSave(COLS.CUSTOMERS, (invoiceCustomer._id||invoiceCustomer.id), upd);
+          STATE.customers[invoiceCustomer._id||invoiceCustomer.id] = {...upd, _id:(invoiceCustomer._id||invoiceCustomer.id), _savedAt:Date.now()};
+          showToast(`✅ ${fmt(changeAmt)} change applied to outstanding balance. New balance: ${fmt(newBal)}.`,'success');
+        } else {
+          const cfId = uid();
+          const cf = {id:cfId,type:'out',cat:'Change',
+            desc:`Change sent by transfer — Inv #${invNum} — ${printName}`,
+            amount:changeAmt,payMode:'transfer',bankName,custId:(invoiceCustomer._id||invoiceCustomer.id),
+            date,month,invoiceNum:invNum,by:STATE.user.name};
+          await fsSave(COLS.CASHFLOW,cfId,cf);
+          if(!STATE.cashflow)STATE.cashflow={};
+          STATE.cashflow[cfId]={...cf,_id:cfId,_savedAt:Date.now()};
+          showToast(`✅ ${fmt(changeAmt)} change to be sent by transfer.`,'success');
+        }
       } else if (changeDisp === 'credit') {
         // Applied to balance — reduce credit + record in cashflow
         const newBal = Math.max(0, (invoiceCustomer.creditBalance||0) - changeAmt);
@@ -10181,15 +10207,19 @@ function renderClosing() {
   });
 
   // Cash change given out today (money that left the till as change to customers)
-  // Only count when changeDisp === 'cash' (not applied to credit/deposit)
+  // Checks changeDisp (how the change itself was given), not the sale's own
+  // payMode — a POS or transfer sale can still give cash change from the
+  // till now that tendered/change applies to those payment types too.
   const cashChangeOut = Object.values(STATE.sales||{})
     .filter(s => s.date === closingDate && s.changeAmt > 0 && (!s.changeDisp || s.changeDisp === 'cash'))
-    .reduce((a, s) => {
-      // Only count change from cash sales (not transfer/POS where change doesn't come from till)
-      const mode = s.payMode || 'cash';
-      if (mode === 'cash') return a + (s.changeAmt||0);
-      return a;
-    }, 0);
+    .reduce((a, s) => a + (s.changeAmt||0), 0);
+
+  // Change sent back by bank transfer — a real bank outflow, but it never
+  // touched the till, so it must NOT reduce expectedTill. Shown separately
+  // in Daily Closing purely for visibility/record-keeping.
+  const transferChangeEntries = Object.values(STATE.sales||{})
+    .filter(s => s.date === closingDate && s.changeAmt > 0 && s.changeDisp === 'transfer');
+  const transferChangeOut = transferChangeEntries.reduce((a,s)=>a+(s.changeAmt||0),0);
 
   // Expenses
   const EXC=['Restock','Supplier Payment','Supplier Deposit','Change'];
@@ -10287,6 +10317,11 @@ function renderClosing() {
         <div style="font-size:11px;color:var(--text3);margin-bottom:4px">Cash change given out</div>
         <div style="font-size:18px;font-weight:700;color:var(--danger)">-${fmt(cashChangeOut)}</div>
         <div style="font-size:10px;color:var(--text3)">Change returned to customers</div>
+      </div>`:''}
+      ${transferChangeOut>0?`<div style="background:var(--surface);border-radius:var(--radius);padding:12px 16px;margin-bottom:10px;border:1px dashed var(--text3)">
+        <div style="font-size:11px;color:var(--text3);margin-bottom:4px;text-align:center">🏦 Change sent by transfer (does not affect till)</div>
+        <div style="font-size:18px;font-weight:700;color:var(--text2);text-align:center">${fmt(transferChangeOut)}</div>
+        <div style="font-size:11px;color:var(--text3);margin-top:6px">${transferChangeEntries.map(s=>`Transfer change — ${esc(s.custName||'Walk-in')}${s.invoiceNum?` Inv #${esc(s.invoiceNum)}`:''} — ${fmt(s.changeAmt||0)}`).join('<br>')}</div>
       </div>`:''}
       ${heldHeldAmt>0?`<div style="background:#fffbeb;border-radius:var(--radius);padding:12px 16px;margin-bottom:10px">
         <div style="font-size:11px;color:var(--text3);margin-bottom:4px;text-align:center">🔒 Change held today (still in till)</div>
@@ -10587,7 +10622,9 @@ function printClosingReport(){
   // Till / Cash in hand
   const openingFloatP = STATE.settings?.openingFloat || 0;
   const cashExpensesP = dayExp.filter(e=>e.payMode==='cash'||!e.payMode).reduce((a,e)=>a+(e.amount||0),0);
-  const cashChangeOutP = Object.values(STATE.sales||{}).filter(s=>s.date===closingDate&&s.changeAmt>0&&(!s.changeDisp||s.changeDisp==='cash')).reduce((a,s)=>{const mode=s.payMode||'cash';return mode==='cash'?a+(s.changeAmt||0):a;},0);
+  const cashChangeOutP = Object.values(STATE.sales||{}).filter(s=>s.date===closingDate&&s.changeAmt>0&&(!s.changeDisp||s.changeDisp==='cash')).reduce((a,s)=>a+(s.changeAmt||0),0);
+  const transferChangeEntriesP = Object.values(STATE.sales||{}).filter(s=>s.date===closingDate&&s.changeAmt>0&&s.changeDisp==='transfer');
+  const transferChangeOutP = transferChangeEntriesP.reduce((a,s)=>a+(s.changeAmt||0),0);
   const heldTodayEntriesP = Object.values(STATE.heldChange||{}).filter(e=>e.date===closingISO);
   const settledTodayEntriesP = Object.values(STATE.heldChange||{}).filter(e=>e.settledDate===closingISO);
   const heldHeldAmtP = heldTodayEntriesP.reduce((a,e)=>a+(e.amount||0),0);
@@ -10615,6 +10652,7 @@ function printClosingReport(){
     <div class="box"><div class="lbl">Actual Count</div><div class="val" style="color:${!hasCountP?'#888':(Math.abs(tillDiffP)<1?'green':'red')}">${hasCountP?'₦'+Math.round(tillRecP.actualCount).toLocaleString():'Not counted'}</div></div>
     <div class="box"><div class="lbl">${hasCountP?(Math.abs(tillDiffP)<1?'Status':(tillDiffP>0?'Surplus':'Shortage')):'Status'}</div><div class="val" style="color:${!hasCountP?'#888':(Math.abs(tillDiffP)<1?'green':'red')}">${hasCountP?(Math.abs(tillDiffP)<1?'✓ Balanced':'₦'+Math.round(Math.abs(tillDiffP)).toLocaleString()):'—'}</div></div>
   </div>
+  ${transferChangeOutP>0?`<div style="font-size:11px;color:#475569;margin:4px 0">🏦 Change sent by transfer (₦${Math.round(transferChangeOutP).toLocaleString()}, does not affect till): ${transferChangeEntriesP.map(s=>`${esc(s.custName||'Walk-in')}${s.invoiceNum?' Inv #'+esc(s.invoiceNum):''} — ₦${Math.round(s.changeAmt||0).toLocaleString()}`).join(', ')}</div>`:''}
   ${heldHeldAmtP>0?`<div style="font-size:11px;color:#92400e;margin:4px 0">🔒 Change held today (+₦${Math.round(heldHeldAmtP).toLocaleString()}): ${heldTodayEntriesP.map(e=>`${esc(e.custName||'Walk-in')}${e.invoiceNum?' Inv #'+esc(e.invoiceNum):''} — ₦${Math.round(e.amount||0).toLocaleString()}`).join(', ')}</div>`:''}
   ${heldSettledAmtP>0?`<div style="font-size:11px;color:#991b1b;margin:4px 0">🔓 Change paid out today (-₦${Math.round(heldSettledAmtP).toLocaleString()}): ${settledTodayEntriesP.map(e=>`${esc(e.custName||'Walk-in')}${e.invoiceNum?' Inv #'+esc(e.invoiceNum):''} — ₦${Math.round(e.amount||0).toLocaleString()}`).join(', ')}</div>`:''}
   <table><thead><tr><th>Mode</th><th style="text-align:right">Income</th><th style="text-align:right">Expenses</th><th style="text-align:right">Balance</th></tr></thead>
