@@ -7070,7 +7070,7 @@ function renderPurchases() {
         <div id="pnp-part-wrap" style="display:none;grid-column:1/-1">
           <div style="font-size:10px;color:var(--text3);margin-bottom:3px">AMOUNT PAID NOW (₦)</div>
           <input class="form-input" id="pnp-part-payment" type="number" min="0" placeholder="0" style="width:100%">
-          <div style="font-size:10px;color:var(--text3);margin-top:3px">Applies against the value of items received now. The rest is added to this supplier's outstanding balance.</div>
+          <div style="font-size:10px;color:var(--text3);margin-top:3px">Applies against the full order value (including any pending items). The rest is added to this supplier's outstanding balance.</div>
         </div>
       </div>
 
@@ -7359,11 +7359,14 @@ async function savePurchaseRecord() {
 
   setSyncStatus('saving');
   try {
-    let grandTotalReceived = 0; // sum of totalCost for the RECEIVED portion only — pending items aren't owed/paid for yet
     for (const item of cart) {
       const isPending = item.received < item.ordered;
       const receivedQty = item.received || 0;
       const orderedQty  = item.ordered  || 0;
+      // The FULL line commitment — what this line item costs in total,
+      // whether received now or still pending. This is what actually moves
+      // money/credit below, regardless of how much physically arrives today.
+      const lineTotal = Math.max(0, orderedQty*item.cost - (item.discAmt||0));
 
       // New product (typed a name that didn't match an existing inventory
       // item) — create it now so it exists in Inventory right away. Stock
@@ -7386,7 +7389,9 @@ async function savePurchaseRecord() {
         }
       }
 
-      // Save received portion as purchase
+      // Save received portion as a purchase record — inventory/cost-basis
+      // tracking only. The financial side is handled separately below, once
+      // per line, based on the FULL ordered quantity.
       if (receivedQty > 0) {
         const purchId = uid();
         const purch = {id:purchId, purchaseInvoiceNum, itemName:item.name, itemId:item.itemId||null,
@@ -7395,32 +7400,20 @@ async function savePurchaseRecord() {
         await fsSave(COLS.PURCHASES, purchId, purch);
         if (!STATE.purchases) STATE.purchases={};
         STATE.purchases[purchId]={...purch,_id:purchId,_savedAt:Date.now()};
-        grandTotalReceived += purch.totalCost;
 
         // Update inventory
         if (item.itemId) {
           await _safeAdjustInventory(item.itemId, receivedQty, {cost:item.cost, costPrice:item.cost});
         }
-        if (payType==='part') {
-          // Handled once for the whole PO after this loop — see below.
-        } else if (payType!=='credit') {
-          // Cashflow (non-credit)
-          const cfId=uid();
-          const cf={id:cfId,type:'out',cat:'Restock',desc:`Purchase: ${item.name} (${receivedQty} units)`,
-            amount:receivedQty*item.cost-(item.discAmt||0),payMode:mode,date,month,supplier,by:STATE.user?.name};
-          await fsSave(COLS.CASHFLOW, cfId, cf);
-          if(!STATE.cashflow)STATE.cashflow={};
-          STATE.cashflow[cfId]={...cf,_id:cfId,_savedAt:Date.now()};
-        } else {
-          // Credit — add to supplier owed
-          const sup=Object.values(STATE.suppliers||{}).find(s=>s.name===supplier);
-          if(sup){const updSup={...sup,owedToSupplier:(sup.owedToSupplier||0)+(receivedQty*item.cost-(item.discAmt||0))};
-            await fsSave(COLS.SUPPLIERS||'v2_suppliers',sup._id||sup.id,updSup);
-            STATE.suppliers[sup._id||sup.id]=updSup;}
-        }
       }
 
-      // Save pending portion
+      // Save pending portion — PURELY inventory tracking (what hasn't
+      // physically arrived yet). It has no further financial meaning: the
+      // money/credit for this whole line was already settled below, the
+      // moment the PO was created. Receiving it later via
+      // receivePendingItem()/receiveAllNow() only ever updates stock — never
+      // cashflow or the supplier's balance again. payMode is kept here only
+      // so the Pending Deliveries view can still show how the PO was paid.
       if (isPending && orderedQty > receivedQty) {
         const pendId=uid();
         const pend={id:pendId,purchaseInvoiceNum,itemName:item.name,itemId:item.itemId||null,
@@ -7429,33 +7422,56 @@ async function savePurchaseRecord() {
         if(!STATE.pendingDeliveries)STATE.pendingDeliveries={};
         STATE.pendingDeliveries[pendId]={...pend,_id:pendId,_savedAt:Date.now()};
       }
+
+      // Whole-line financial settlement — covers the FULL ordered quantity
+      // now, regardless of receipt status. Part Payment is handled once for
+      // the entire PO after this loop (a single "amount paid now" can't be
+      // cleanly split across separate line items).
+      if (lineTotal > 0 && payType !== 'part') {
+        if (payType !== 'credit') {
+          const cfId=uid();
+          const cf={id:cfId,type:'out',cat:'Restock',desc:`Purchase: ${item.name} (${orderedQty} units)`,
+            amount:lineTotal,payMode:mode,bankName,date,month,supplier,purchaseInvoiceNum,by:STATE.user?.name};
+          await fsSave(COLS.CASHFLOW, cfId, cf);
+          if(!STATE.cashflow)STATE.cashflow={};
+          STATE.cashflow[cfId]={...cf,_id:cfId,_savedAt:Date.now()};
+        } else {
+          // Credit — add to supplier owed, for the full line, now
+          const sup=Object.values(STATE.suppliers||{}).find(s=>s.name===supplier);
+          if(sup){const updSup={...sup,owedToSupplier:(sup.owedToSupplier||0)+lineTotal};
+            await fsSave(COLS.SUPPLIERS||'v2_suppliers',sup._id||sup.id,updSup);
+            STATE.suppliers[sup._id||sup.id]=updSup;}
+        }
+      }
     }
 
-    // Part Payment settlement for the whole PO — one cashflow entry for what
-    // was actually paid now, and the shortfall added to the supplier's
-    // running owedToSupplier balance (same pattern as a customer part-paying
-    // a sale). Only counted against the received portion — pending items
-    // aren't priced/owed until they're actually received.
-    if (payType==='part' && grandTotalReceived>0) {
-      const amtPaidNow = Math.min(partAmtPaidInput, grandTotalReceived);
-      const owedNow = Math.max(0, grandTotalReceived - amtPaidNow);
-      if (amtPaidNow>0) {
-        const cfId=uid();
-        const cf={id:cfId,type:'out',cat:'Restock',
-          desc:`Purchase (part payment): ${[...new Set(cart.map(i=>i.name))].join(', ')}`,
-          amount:amtPaidNow,payMode,bankName,date,month,supplier,purchaseInvoiceNum,by:STATE.user?.name};
-        await fsSave(COLS.CASHFLOW, cfId, cf);
-        if(!STATE.cashflow)STATE.cashflow={};
-        STATE.cashflow[cfId]={...cf,_id:cfId,_savedAt:Date.now()};
-      }
-      if (owedNow>0) {
-        const sup=Object.values(STATE.suppliers||{}).find(s=>s.name===supplier);
-        if(sup){const updSup={...sup,owedToSupplier:(sup.owedToSupplier||0)+owedNow};
-          await fsSave(COLS.SUPPLIERS||'v2_suppliers',sup._id||sup.id,updSup);
-          STATE.suppliers[sup._id||sup.id]=updSup;}
-      }
-      if (partAmtPaidInput > grandTotalReceived) {
-        showToast(`Note: amount entered (${fmt(partAmtPaidInput)}) was more than the received goods' value (${fmt(grandTotalReceived)}) — only ${fmt(grandTotalReceived)} was recorded as paid.`,'info');
+    // Part Payment settlement — one lump entry across the whole PO (can't
+    // split "amount paid now" across line items), based on the FULL order
+    // total (received + pending combined), same principle as above: the
+    // money side is fully decided here, at creation time.
+    if (payType==='part') {
+      const grandOrderTotal = cart.reduce((a,item)=>a+Math.max(0,(item.ordered||0)*item.cost-(item.discAmt||0)),0);
+      if (grandOrderTotal>0) {
+        const amtPaidNow = Math.min(partAmtPaidInput, grandOrderTotal);
+        const owedNow = Math.max(0, grandOrderTotal - amtPaidNow);
+        if (amtPaidNow>0) {
+          const cfId=uid();
+          const cf={id:cfId,type:'out',cat:'Restock',
+            desc:`Purchase (part payment): ${[...new Set(cart.map(i=>i.name))].join(', ')}`,
+            amount:amtPaidNow,payMode,bankName,date,month,supplier,purchaseInvoiceNum,by:STATE.user?.name};
+          await fsSave(COLS.CASHFLOW, cfId, cf);
+          if(!STATE.cashflow)STATE.cashflow={};
+          STATE.cashflow[cfId]={...cf,_id:cfId,_savedAt:Date.now()};
+        }
+        if (owedNow>0) {
+          const sup=Object.values(STATE.suppliers||{}).find(s=>s.name===supplier);
+          if(sup){const updSup={...sup,owedToSupplier:(sup.owedToSupplier||0)+owedNow};
+            await fsSave(COLS.SUPPLIERS||'v2_suppliers',sup._id||sup.id,updSup);
+            STATE.suppliers[sup._id||sup.id]=updSup;}
+        }
+        if (partAmtPaidInput > grandOrderTotal) {
+          showToast(`Note: amount entered (${fmt(partAmtPaidInput)}) was more than the order total (${fmt(grandOrderTotal)}) — only ${fmt(grandOrderTotal)} was recorded as paid.`,'info');
+        }
       }
     }
     clearPurchaseForm();
@@ -7517,6 +7533,9 @@ function selectInventoryItemForPurchase(id,name) { pickInvForPurch(id,name,0); }
 function togglePendingFields() {}
 
 async function receivePendingItem(pendId) {
+  // Purely an inventory event. The money/credit for this delivery was
+  // already settled in full when the PO was created (savePurchaseRecord) —
+  // this never writes cashflow or touches the supplier's balance.
   const pend = STATE.pendingDeliveries?.[pendId];
   if (!pend) return;
   const remaining = (pend.orderedQty||0) - (pend.receivedQty||0);
@@ -7566,6 +7585,8 @@ async function receivePendingItem(pendId) {
 }
 
 async function receiveAllNow(invoiceNum) {
+  // Purely an inventory event, same as receivePendingItem above — money/
+  // credit was already settled when the PO was created.
   const items = Object.values(STATE.pendingDeliveries||{}).filter(p=>(p.purchaseInvoiceNum||p.id)===invoiceNum);
   if (!items.length) { showToast('Nothing pending for this order.','info'); return; }
   setSyncStatus('saving');
