@@ -5373,7 +5373,7 @@ function _buildInvoiceHTML(invNum, mode='a4', invTypeOverride='sales', showOutst
     <div style="border-top:1px dashed #000;margin:5px 0"></div>
     <div style="font-size:11px"><div><b>Method:</b> ${esc(payModeLabel)}</div><div><b>By:</b> ${esc(sellerName)}</div></div>
     <div style="border-top:1px dashed #000;margin:5px 0"></div>
-    <div style="text-align:center;font-size:10px;margin-bottom:4px"><div style="font-style:italic">No refund after payment. Examine goods well.</div><div style="font-weight:700;margin-top:3px">Thank you! Come again!</div></div>
+    <div style="text-align:center;font-size:10px;margin-bottom:4px"><div style="font-style:italic">Examine well and receive the above goods in good condition. No refund of money or exchange after payment.</div><div style="font-weight:700;margin-top:3px">Thank you! Come again!</div></div>
     ${isPending?`<div style="border:1px dashed #92400e;border-radius:3px;padding:6px 4px;margin:6px 0;text-align:center">
       <div style="font-size:11px;font-weight:900;letter-spacing:1px">⏳ NOT YET SUPPLIED</div>
       <div style="font-size:9.5px;margin-top:2px">Payment received. Goods will be supplied at a later date.</div>
@@ -5548,7 +5548,7 @@ ${totalWithBalance>0&&showOutstanding?`
   </div>`:''}
   ${amountPaidOnInvoice>0?`<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid #f5c6c6">
     <span style="font-size:${fs('10px','11px')};color:#555">Amount paid (this invoice):</span>
-    <span style="font-size:${fs('11px','12px')};font-weight:700;color:#27ae60">₦${gt.toLocaleString()}</span>
+    <span style="font-size:${fs('11px','12px')};font-weight:700;color:#27ae60">₦${amountPaidOnInvoice.toLocaleString()}</span>
   </div>`:''}
   ${totalChangeReduction>0?`<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid #f5c6c6">
     <span style="font-size:${fs('10px','11px')};color:#555">Change applied to balance:</span>
@@ -5564,7 +5564,7 @@ ${totalWithBalance>0&&showOutstanding?`
 <!-- ═══ NOTES ═══ -->
 <div style="border:1px solid #ddd;border-radius:3px;padding:${fs('6px','8px')} ${fs('10px','12px')};margin-bottom:${fs('10px','14px')}">
   <span style="font-size:${fs('9px','10px')};color:#c0392b;font-style:italic;font-weight:600">Notes:</span>
-  <span style="font-size:${fs('9px','10px')};color:#555"> No refunds after payment. Examine goods in good condition. Thanks for your patronage.</span>
+  <span style="font-size:${fs('9px','10px')};color:#555"> Examine well and receive the above goods in good condition. No refund of money or exchange after payment.</span>
   <div style="font-size:${fs('9px','10px')};color:#c0392b;margin-top:2px;font-style:italic">Thank you for patronizing Great Chid Electro (Nig.) | Come again!</div>
 </div>
 
@@ -8110,12 +8110,23 @@ function _renderHtmlToCanvas(htmlString, widthPx=800) {
     const cleanup = () => { try{document.body.removeChild(iframe);}catch(e){} };
     iframe.onload = async () => {
       try {
-        await new Promise(r=>setTimeout(r, 250)); // let fonts/images settle
-        const body = iframe.contentDocument.body;
-        const fullHeight = Math.max(body.scrollHeight, iframe.contentDocument.documentElement.scrollHeight);
+        await new Promise(r=>setTimeout(r, 150)); // let layout settle first
+        const doc = iframe.contentDocument;
+        const body = doc.body;
+        // Wait for every <img> (e.g. the QR code, loaded from an external
+        // URL) to actually finish loading before rasterizing — without
+        // this, html2canvas can run before a remote image has arrived and
+        // silently render that spot blank.
+        const imgs = Array.from(doc.images||[]);
+        await Promise.all(imgs.map(img => img.complete ? Promise.resolve() : new Promise(res => {
+          img.addEventListener('load', res, {once:true});
+          img.addEventListener('error', res, {once:true}); // don't hang forever on a broken image
+          setTimeout(res, 4000); // hard cap per image
+        })));
+        const fullHeight = Math.max(body.scrollHeight, doc.documentElement.scrollHeight);
         iframe.style.height = fullHeight + 'px';
         await new Promise(r=>setTimeout(r, 60));
-        const canvas = await html2canvas(body, {scale:2, backgroundColor:'#ffffff', windowWidth:widthPx, windowHeight:fullHeight, useCORS:true});
+        const canvas = await html2canvas(body, {scale:2, backgroundColor:'#ffffff', windowWidth:widthPx, windowHeight:fullHeight, useCORS:true, allowTaint:true});
         cleanup();
         resolve(canvas);
       } catch(e) { cleanup(); reject(e); }
