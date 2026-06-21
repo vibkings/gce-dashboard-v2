@@ -6754,9 +6754,14 @@ function renderPurchases() {
   const purchases = Object.values(STATE.purchases||{});
   const pending   = Object.values(STATE.pendingDeliveries||{});
 
-  // KPI calculations matching v1
-  const totalPurchases = purchases.reduce((a,p)=>a+(p.totalCost||0),0);
-  const invoiceNums    = [...new Set(purchases.map(p=>p.purchaseInvoiceNum).filter(Boolean))];
+  // Total Purchases — includes the still-pending portion of every PO too
+  // (its value), since that money/credit was already committed in full at
+  // creation time (savePurchaseRecord). Without this, a freshly-created
+  // order with nothing received yet would be invisible here even though
+  // it's already sitting on the supplier's balance / in cashflow.
+  const pendingValueTotal = pending.reduce((a,p)=>a+Math.max(0,(p.orderedQty||0)-(p.receivedQty||0))*(p.costPrice||0),0);
+  const totalPurchases = purchases.reduce((a,p)=>a+(p.totalCost||0),0) + pendingValueTotal;
+  const invoiceNums    = [...new Set([...purchases.map(p=>p.purchaseInvoiceNum), ...pending.map(p=>p.purchaseInvoiceNum)].filter(Boolean))];
   const invoiceCount   = invoiceNums.length;
 
   // Paid = actual cash that left the till for purchases. Using purchase
@@ -6773,13 +6778,21 @@ function renderPurchases() {
   // recomputed from purchase docs by payMode==='credit' — that summation
   // would miss the unpaid remainder of Part Payment purchases entirely,
   // since those carry their full totalCost as 'part', not 'credit'.
+  // Credit Purchases — also includes pending-only credit POs (no value
+  // yet recorded with a regular line item until received), since the
+  // supplier owed that money the moment the PO was created.
   const creditPurchases= purchases.filter(p=>p.payMode==='credit');
-  const creditTotal    = creditPurchases.reduce((a,p)=>a+(p.totalCost||0),0);
-  const creditInvoices = [...new Set(creditPurchases.map(p=>p.purchaseInvoiceNum))];
+  const creditPending  = pending.filter(p=>p.payMode==='credit');
+  const creditPendingVal = creditPending.reduce((a,p)=>a+Math.max(0,(p.orderedQty||0)-(p.receivedQty||0))*(p.costPrice||0),0);
+  const creditTotal    = creditPurchases.reduce((a,p)=>a+(p.totalCost||0),0) + creditPendingVal;
+  const creditInvoices = [...new Set([...creditPurchases.map(p=>p.purchaseInvoiceNum), ...creditPending.map(p=>p.purchaseInvoiceNum)])];
   const creditCount    = creditInvoices.length;
 
-  // Part payment invoices
-  const partInvoices   = [...new Set(purchases.filter(p=>p.payMode==='part').map(p=>p.purchaseInvoiceNum))];
+  // Part payment invoices — same, include pending-only part-pay POs
+  const partInvoices   = [...new Set([
+    ...purchases.filter(p=>p.payMode==='part').map(p=>p.purchaseInvoiceNum),
+    ...pending.filter(p=>p.payMode==='part').map(p=>p.purchaseInvoiceNum)
+  ])];
 
   // Outstanding debt — authoritative running balance across all suppliers
   const outstanding    = Object.values(STATE.suppliers||{}).reduce((a,s)=>a+(s.owedToSupplier||0),0);
@@ -11931,7 +11944,18 @@ function renderSupplierOverview() {
   });
   pending.forEach(p=>{
     const sid=sups.find(s=>s.name===p.supplier)?._id||sups.find(s=>s.name===p.supplier)?.id;
-    if(sid&&supMap[sid])supMap[sid].pendingCount++;
+    if(sid&&supMap[sid]){
+      supMap[sid].pendingCount++;
+      // Pending items still count toward Total Purchased — the money/credit
+      // for them was already committed in full when the PO was created
+      // (savePurchaseRecord), even though they haven't physically arrived.
+      const pendVal=Math.max(0,(p.orderedQty||0)-(p.receivedQty||0))*(p.costPrice||0);
+      supMap[sid].totalPurchased+=pendVal;
+      const d=new Date(p.date);
+      if(!supMap[sid].lastPurchase||d>supMap[sid].lastPurchase)supMap[sid].lastPurchase=d;
+      const m=p.month||(d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'));
+      supMap[sid].monthlySpend[m]=(supMap[sid].monthlySpend[m]||0)+pendVal;
+    }
   });
 
   const supData=Object.values(supMap);
