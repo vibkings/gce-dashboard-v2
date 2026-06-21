@@ -4705,6 +4705,229 @@ async function confirmChangeItem() {
 
 function v2RemoveInvItem(idx) { invoiceItems.splice(idx,1); renderSales(); }
 
+// ── SALES RETURN ─────────────────────────────────────────
+// Entry point from the Sales ledger's Return button. Shows the whole
+// invoice, lets the user pick which line item (and how much of it) to
+// return. Returning never mutates the original sale record — it's frozen,
+// same principle used everywhere else in this app — instead it logs a
+// v2_salesReturns record and tracks "already returned" qty by summing prior
+// return records for that saleId, so the same line can't be over-returned
+// across multiple separate returns.
+function showReturnModal(invoiceNum) {
+  const lines = Object.values(STATE.sales||{}).filter(s=>s.invoiceNum===invoiceNum && !s.voided);
+  if (!lines.length) { showToast('Invoice not found.','error'); return; }
+  const items = lines.map(s=>{
+    const saleId = s._id||s.id;
+    const alreadyReturned = Object.values(STATE.salesReturns||{})
+      .filter(r=>r.invoiceNum===invoiceNum && r.saleId===saleId)
+      .reduce((a,r)=>a+(r.qty||0),0);
+    const returnable = Math.max(0,(s.qty||0)-alreadyReturned);
+    return {saleId, itemId:s.itemId||null, name:s.name,
+      qty:s.qty||0, unitNet: s.qty?Math.round((s.total||0)/s.qty):0,
+      alreadyReturned, returnable};
+  }).filter(i=>i.returnable>0);
+  if (!items.length) { showToast('Everything on this invoice has already been returned.','info'); return; }
+  const sample = lines[0];
+  window._retState = {
+    invoiceNum, custId: sample.custId||null, custName: sample.printName||sample.custName||'Walk-in',
+    items, selectedSaleId: items[0].saleId, qty:1,
+    refundType:'cash', bankName:'', reason:'',
+    exNewItemId:'', exNewPrice:0, exSettleMode:'cash', exBankName:''
+  };
+  renderReturnModal();
+}
+
+function renderReturnModal() {
+  const st = window._retState; if (!st) return;
+  const item = st.items.find(i=>i.saleId===st.selectedSaleId);
+  if (!item) { closeModal(); return; }
+  if (st.qty > item.returnable) st.qty = item.returnable;
+  if (st.qty < 1) st.qty = 1;
+  const refundAmt = Math.round(item.unitNet * st.qty);
+
+  const itemOpts = st.items.map(i=>`<option value="${i.saleId}" ${st.selectedSaleId===i.saleId?'selected':''}>${esc(i.name)} (sold ${i.qty}${i.alreadyReturned?`, ${i.alreadyReturned} already returned`:''} — ${i.returnable} returnable)</option>`).join('');
+
+  const exItems = Object.values(STATE.inventory||{}).filter(i=>(i._id||i.id)!==item.itemId).sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+  const exNewItem = st.exNewItemId ? STATE.inventory?.[st.exNewItemId] : null;
+  if (exNewItem && !st.exNewPrice) st.exNewPrice = exNewItem.sell||exNewItem.sellPrice||0;
+  const exDiff = exNewItem ? Math.round((st.exNewPrice||0)*st.qty) - refundAmt : 0;
+
+  const body = `
+    <div style="font-size:13px;margin-bottom:10px">Invoice #${esc(st.invoiceNum)} &nbsp;·&nbsp; Customer: <b>${esc(st.custName)}</b></div>
+    <div class="form-group" style="margin-bottom:10px">
+      <label>Item to return</label>
+      <select class="form-input" id="ret-item" onchange="window._retState.selectedSaleId=this.value;window._retState.qty=1;renderReturnModal()">${itemOpts}</select>
+    </div>
+    <div class="form-grid c2" style="margin-bottom:10px">
+      <div class="form-group"><label>Qty to return (max ${item.returnable})</label>
+        <input class="form-input" id="ret-qty" type="number" min="1" max="${item.returnable}" value="${st.qty}" onchange="window._retState.qty=parseInt(this.value)||1;renderReturnModal()">
+      </div>
+      <div class="form-group"><label>Refund amount</label>
+        <div style="padding:9px 12px;background:var(--surface);border-radius:8px;font-weight:700">${fmt(refundAmt)}</div>
+      </div>
+    </div>
+    <div class="form-group" style="margin-bottom:10px">
+      <label>Refund type</label>
+      <select class="form-input" id="ret-type" onchange="window._retState.refundType=this.value;renderReturnModal()">
+        <option value="cash" ${st.refundType==='cash'?'selected':''}>Cash refund</option>
+        <option value="transfer" ${st.refundType==='transfer'?'selected':''}>Transfer refund</option>
+        <option value="credit" ${st.refundType==='credit'?'selected':''} ${!st.custId?'disabled':''}>Store Credit${!st.custId?' (no registered customer)':''}</option>
+        <option value="exchange" ${st.refundType==='exchange'?'selected':''}>Exchange for another item</option>
+      </select>
+    </div>
+    ${st.refundType==='transfer'?`<div class="form-group" style="margin-bottom:10px"><label>Bank</label><select class="form-input" id="ret-bank" onchange="window._retState.bankName=this.value">${bankSelectOpts('transfer',st.bankName)}</select></div>`:''}
+    ${st.refundType==='exchange'?`
+      <div class="form-group" style="margin-bottom:10px"><label>Replacement item</label>
+        <select class="form-input" id="ret-ex-item" onchange="window._retState.exNewItemId=this.value;window._retState.exNewPrice=0;renderReturnModal()">
+          <option value="">-- Select replacement item --</option>
+          ${exItems.map(i=>`<option value="${i._id||i.id}" ${st.exNewItemId===(i._id||i.id)?'selected':''}>${esc(i.name)} (stock: ${i.qty||0}, ${fmt(i.sell||i.sellPrice||0)})</option>`).join('')}
+        </select>
+      </div>
+      ${exNewItem?`
+      <div class="form-grid c2" style="margin-bottom:10px">
+        <div class="form-group"><label>Unit price (₦)</label><input class="form-input" id="ret-ex-price" type="number" min="0" value="${st.exNewPrice}" onchange="window._retState.exNewPrice=parseFloat(this.value)||0;renderReturnModal()"></div>
+      </div>
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:10px;font-size:12.5px">
+        <div>Returning ${st.qty} × ${esc(item.name)} = <b>${fmt(refundAmt)}</b></div>
+        <div>New: ${st.qty} × ${esc(exNewItem.name)} = <b>${fmt(Math.round((st.exNewPrice||0)*st.qty))}</b></div>
+        <div style="border-top:1px dashed var(--border);margin-top:6px;padding-top:6px;font-weight:700;color:${exDiff>0?'#dc2626':exDiff<0?'#15803d':'var(--text2)'}">
+          ${exDiff===0?'No price difference':exDiff>0?`Customer owes ${fmt(exDiff)} more`:`Refund/credit due: ${fmt(Math.abs(exDiff))}`}
+        </div>
+        ${(exNewItem.qty||0)<st.qty?`<div style="margin-top:6px;color:#d97706">⚠️ Only ${exNewItem.qty||0} in stock — exchange will be capped to what's available.</div>`:`<div style="margin-top:6px;color:#15803d">✓ ${exNewItem.qty||0} in stock — all ${st.qty} available.</div>`}
+      </div>
+      ${exDiff!==0?`
+      <div class="form-group" style="margin-bottom:10px">
+        <label>Settle the difference via</label>
+        <select class="form-input" id="ret-ex-settle" onchange="window._retState.exSettleMode=this.value;renderReturnModal()">
+          <option value="cash" ${st.exSettleMode==='cash'?'selected':''}>${exDiff>0?'Collect cash today':'Refund cash today'}</option>
+          <option value="transfer" ${st.exSettleMode==='transfer'?'selected':''}>${exDiff>0?'Collect via transfer':'Refund via transfer'}</option>
+          <option value="credit" ${st.exSettleMode==='credit'?'selected':''} ${!st.custId?'disabled':''}>Adjust customer balance${!st.custId?' (no registered customer)':''}</option>
+        </select>
+      </div>
+      ${st.exSettleMode==='transfer'?`<div class="form-group" style="margin-bottom:10px"><label>Bank</label><select class="form-input" id="ret-ex-bank" onchange="window._retState.exBankName=this.value">${bankSelectOpts('transfer',st.exBankName)}</select></div>`:''}
+      `:''}
+      `:`<div style="color:var(--text3);font-size:13px;padding:6px 0">Select a replacement item above.</div>`}
+    `:''}
+    <div class="form-group" style="margin-bottom:6px"><label>Reason (optional)</label><input class="form-input" id="ret-reason" value="${esc(st.reason)}" onchange="window._retState.reason=this.value"></div>
+  `;
+  showModal('↩ Return Item', body, [
+    {label:'Cancel', action:'close', style:''},
+    {label:'✓ Confirm Return', action:'confirmSalesReturn()', style:'btn-primary'}
+  ]);
+}
+
+async function confirmSalesReturn() {
+  const st = window._retState; if (!st) return;
+  const item = st.items.find(i=>i.saleId===st.selectedSaleId);
+  if (!item) { showToast('Select an item to return.','error'); return; }
+  if (!st.qty || st.qty<1 || st.qty>item.returnable) { showToast('Enter a valid quantity (up to what is returnable).','error'); return; }
+  if ((st.refundType==='credit' || (st.refundType==='exchange' && st.exSettleMode==='credit')) && !st.custId) {
+    showToast('No registered customer on this invoice — choose a different settlement.','error'); return;
+  }
+  let exNewItem = null;
+  if (st.refundType==='exchange') {
+    exNewItem = STATE.inventory?.[st.exNewItemId];
+    if (!exNewItem) { showToast('Select a replacement item for the exchange.','error'); return; }
+  }
+
+  const refundAmt = Math.round(item.unitNet * st.qty);
+  const now = new Date();
+  const date = now.toLocaleDateString();
+  const month = now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
+  const reason = (document.getElementById('ret-reason')?.value||st.reason||'').trim();
+
+  setSyncStatus('saving');
+  try {
+    // Returned item always goes back into inventory, regardless of refund type
+    if (item.itemId) {
+      await _safeAdjustInventory(item.itemId, st.qty);
+    }
+
+    if (st.refundType==='cash' || st.refundType==='transfer') {
+      const cfId=uid();
+      const cf={id:cfId,type:'out',cat:'Sales Refund',isReturn:true,
+        desc:`Return — Inv #${st.invoiceNum} — ${st.qty}× ${item.name}`,
+        amount:refundAmt, payMode:st.refundType, bankName:st.refundType==='transfer'?st.bankName:'',
+        custId:st.custId||null, custName:st.custName, date, month, invoiceNum:st.invoiceNum, by:STATE.user?.name};
+      await fsSave(COLS.CASHFLOW, cfId, cf);
+      if(!STATE.cashflow)STATE.cashflow={};
+      STATE.cashflow[cfId]={...cf,_id:cfId,_savedAt:Date.now()};
+
+    } else if (st.refundType==='credit') {
+      // Store credit: pay down what the customer owes first; any leftover
+      // becomes a Customer Deposit they can use on a future purchase — reuses
+      // the same deposit mechanic already trusted elsewhere in the app,
+      // rather than inventing a new "negative balance" concept.
+      const cust = STATE.customers?.[st.custId];
+      if (cust) {
+        const newBal = Math.max(0,(cust.creditBalance||0)-refundAmt);
+        const excess = Math.max(0, refundAmt-(cust.creditBalance||0));
+        const updCust = {...cust, creditBalance:newBal};
+        await fsSave(COLS.CUSTOMERS, st.custId, updCust);
+        STATE.customers[st.custId] = {...updCust,_id:st.custId,_savedAt:Date.now()};
+        if (excess>0) {
+          const depId=uid();
+          const dep={id:depId,type:'in',cat:'Customer Deposit',
+            desc:`Store credit from return — Inv #${st.invoiceNum} — ${st.qty}× ${item.name}`,
+            amount:excess, custId:st.custId, custName:st.custName, date, month, invoiceNum:st.invoiceNum, by:STATE.user?.name};
+          await fsSave(COLS.CASHFLOW, depId, dep);
+          STATE.cashflow[depId]={...dep,_id:depId,_savedAt:Date.now()};
+        }
+      }
+
+    } else if (st.refundType==='exchange') {
+      await _safeAdjustInventory(st.exNewItemId, -st.qty);
+      const newAmount = Math.round((st.exNewPrice||0)*st.qty);
+      const exDiff = newAmount - refundAmt;
+      if (exDiff!==0) {
+        if (st.exSettleMode==='credit') {
+          const cust = STATE.customers?.[st.custId];
+          if (cust) {
+            const updCust={...cust, creditBalance:(cust.creditBalance||0)+exDiff};
+            await fsSave(COLS.CUSTOMERS, st.custId, updCust);
+            STATE.customers[st.custId]={...updCust,_id:st.custId,_savedAt:Date.now()};
+          }
+        } else {
+          const cfId=uid();
+          const cf={id:cfId, type: exDiff>0?'in':'out',
+            cat: exDiff>0?'Sales (Item Exchange)':'Sales Refund (Item Exchange)',
+            isReturn: exDiff<0,
+            desc:`Item exchange — Inv #${st.invoiceNum} — ${item.name} → ${exNewItem.name} (${st.qty} units)`,
+            amount: Math.abs(exDiff), payMode:st.exSettleMode, bankName:st.exSettleMode==='transfer'?st.exBankName:'',
+            custId:st.custId||null, custName:st.custName, date, month, invoiceNum:st.invoiceNum, by:STATE.user?.name};
+          await fsSave(COLS.CASHFLOW, cfId, cf);
+          STATE.cashflow[cfId]={...cf,_id:cfId,_savedAt:Date.now()};
+        }
+      }
+    }
+
+    // Logged for Returns Tracker regardless of type, and used to cap future
+    // "already returned" qty for this same line.
+    const retId=uid();
+    const ret={id:retId, invoiceNum:st.invoiceNum, saleId:item.saleId, itemId:item.itemId||null,
+      itemName:item.name, qty:st.qty, refundAmt, refundType:st.refundType,
+      custId:st.custId||null, custName:st.custName, reason,
+      exchangedForItemId: st.refundType==='exchange'?st.exNewItemId:null,
+      exchangedForItemName: st.refundType==='exchange'?(exNewItem?.name||''):null,
+      date, month, by:STATE.user?.name};
+    await fsSave('v2_salesReturns', retId, ret);
+    if (!STATE.salesReturns) STATE.salesReturns={};
+    STATE.salesReturns[retId] = {...ret,_id:retId,_savedAt:Date.now()};
+
+    closeModal();
+    setSyncStatus('synced');
+    showToast(`✅ Returned ${st.qty}× ${item.name}${st.refundType==='exchange'?` for ${exNewItem.name}`:''}.`,'success');
+    logActivity('Sales return', `Inv #${st.invoiceNum}: ${st.qty}× ${item.name} (${st.refundType})`, '');
+    window._retState = null;
+    renderSales(); updateInventoryBadge?.();
+    if (document.getElementById('page-returns')?.classList.contains('active')) renderReturnsTracker();
+    renderOverviewIfActive();
+  } catch(e) {
+    setSyncStatus('error');
+    showToast('Failed to process return: '+e.message,'error');
+  }
+}
+
 function v2OnPayTypeChange() {
   const pt = document.getElementById('s-payment')?.value;
   const show = (id,vis) => { const el=document.getElementById(id); if(el) el.style.display=vis?'block':'none'; };
@@ -12703,11 +12926,13 @@ function renderReturnsTracker() {
 
   // Returns breakdown by type
   const cashRefunds=allRet.filter(r=>r.refundType==='cash').reduce((a,r)=>a+(r.refundAmt||0),0);
+  const transferRefunds=allRet.filter(r=>r.refundType==='transfer').reduce((a,r)=>a+(r.refundAmt||0),0);
   const creditRefunds=allRet.filter(r=>r.refundType==='credit').reduce((a,r)=>a+(r.refundAmt||0),0);
   const exchanges=allRet.filter(r=>r.refundType==='exchange').reduce((a,r)=>a+(r.refundAmt||0),0);
-  const breakdownTotal=cashRefunds+creditRefunds+exchanges||1;
+  const breakdownTotal=cashRefunds+transferRefunds+creditRefunds+exchanges||1;
   const breakdownBars=[
     {label:'Cash Refunds',val:cashRefunds,color:'#22c55e',pct:Math.round(cashRefunds/breakdownTotal*100)},
+    {label:'Transfer Refunds',val:transferRefunds,color:'#0891b2',pct:Math.round(transferRefunds/breakdownTotal*100)},
     {label:'Store Credit',val:creditRefunds,color:'#6366f1',pct:Math.round(creditRefunds/breakdownTotal*100)},
     {label:'Exchanges',val:exchanges,color:'#f59e0b',pct:Math.round(exchanges/breakdownTotal*100)},
   ];
@@ -12732,6 +12957,7 @@ function renderReturnsTracker() {
   // Table rows
   const refundBadges={
     cash:'<span style="background:#d1fae5;color:#065f46;padding:3px 8px;border-radius:20px;font-size:10px;font-weight:700">CASH</span>',
+    transfer:'<span style="background:#e0f2fe;color:#0369a1;padding:3px 8px;border-radius:20px;font-size:10px;font-weight:700">TRANSFER</span>',
     credit:'<span style="background:#eff6ff;color:#1d4ed8;padding:3px 8px;border-radius:20px;font-size:10px;font-weight:700">CREDIT</span>',
     exchange:'<span style="background:#fef3c7;color:#92400e;padding:3px 8px;border-radius:20px;font-size:10px;font-weight:700">EXCHANGE</span>'
   };
@@ -12817,7 +13043,7 @@ function renderReturnsTracker() {
         </div>
         <!-- Filters: type buttons + date range + search + clear -->
         <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-          ${['all','cash','credit','exchange'].map(t=>`<button class="btn btn-sm ${typeFilter===t?'btn-primary':''}" onclick="window._retTypeFilter='${t}';renderReturnsTracker()">${t==='all'?'All':t==='cash'?'Cash':t==='credit'?'Credit':'Exchange'}</button>`).join('')}
+          ${['all','cash','transfer','credit','exchange'].map(t=>`<button class="btn btn-sm ${typeFilter===t?'btn-primary':''}" onclick="window._retTypeFilter='${t}';renderReturnsTracker()">${t==='all'?'All':t==='cash'?'Cash':t==='transfer'?'Transfer':t==='credit'?'Credit':'Exchange'}</button>`).join('')}
         </div>
       </div>
       <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;align-items:center">
@@ -12860,7 +13086,7 @@ function editReturn(id) {
       <div class="form-group"><label>Item Name</label><input class="form-input" id="er-item" value="${esc(r.itemName||'')}"></div>
       <div class="form-group"><label>Qty</label><input class="form-input" id="er-qty" type="number" min="1" value="${r.qty||1}"></div>
       <div class="form-group"><label>Refund Amount (₦)</label><input class="form-input" id="er-amt" type="number" min="0" value="${r.refundAmt||0}"></div>
-      <div class="form-group"><label>Refund Type</label><select class="form-input" id="er-type"><option value="cash" ${r.refundType==='cash'?'selected':''}>Cash</option><option value="credit" ${r.refundType==='credit'?'selected':''}>Store Credit</option><option value="exchange" ${r.refundType==='exchange'?'selected':''}>Exchange</option></select></div>
+      <div class="form-group"><label>Refund Type</label><select class="form-input" id="er-type"><option value="cash" ${r.refundType==='cash'?'selected':''}>Cash</option><option value="transfer" ${r.refundType==='transfer'?'selected':''}>Transfer</option><option value="credit" ${r.refundType==='credit'?'selected':''}>Store Credit</option><option value="exchange" ${r.refundType==='exchange'?'selected':''}>Exchange</option></select></div>
       <div class="form-group" style="grid-column:1/-1"><label>Reason</label><input class="form-input" id="er-reason" value="${esc(r.reason||'')}"></div>
     </div>
   `,[{label:'Cancel',action:'close',style:''},{label:'💾 Save',action:`saveEditReturn('${id}')`,style:'btn-primary'}]);
