@@ -14619,8 +14619,9 @@ function renderSettingsFull(){
   const transferRows=transferBanks.length?transferBanks.map(b=>`<tr>
     <td><b>${esc(b.name)}</b></td>
     <td style="font-size:12px;color:var(--text3)">${esc(b.acct||'—')}</td>
+    <td style="font-size:12px;color:var(--text3)">${esc(b.accountName||'—')}</td>
     <td>${STATE.user?.role==='admin'?`<button class="btn btn-sm" onclick="removeBank('${b._id||b.id}')" style="color:var(--danger)">Remove</button>`:''}</td>
-  </tr>`).join(''):'<tr><td colspan="3" style="text-align:center;color:var(--text3);padding:10px">No bank accounts added yet.</td></tr>';
+  </tr>`).join(''):'<tr><td colspan="4" style="text-align:center;color:var(--text3);padding:10px">No bank accounts added yet.</td></tr>';
 
   const posRows=posBanks.length?posBanks.map(b=>`<tr>
     <td><b>${esc(b.name)}</b></td>
@@ -14714,7 +14715,7 @@ function renderSettingsFull(){
     <div class="form-card" style="margin-bottom:1.25rem">
       ${secTitle('🏦','Bank Accounts')}
       <p style="font-size:12px;color:var(--text3);margin-bottom:12px">Banks shown when "Bank transfer" is selected as payment mode.</p>
-      <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:flex-end;margin-bottom:12px;max-width:560px">
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:8px;align-items:flex-end;margin-bottom:12px;max-width:720px">
         <div>
           <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);margin-bottom:3px">BANK NAME <span style="color:var(--danger)">*</span></div>
           <input class="form-input" id="set-transfer-name" placeholder="e.g. Zenith Bank" style="width:100%">
@@ -14723,10 +14724,14 @@ function renderSettingsFull(){
           <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);margin-bottom:3px">ACCOUNT NUMBER (OPTIONAL)</div>
           <input class="form-input" id="set-transfer-acct" placeholder="e.g. 0123456789" style="width:100%">
         </div>
+        <div>
+          <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);margin-bottom:3px">ACCOUNT NAME (OPTIONAL)</div>
+          <input class="form-input" id="set-transfer-accname" placeholder="e.g. Great Chid Electro Nig Ltd" style="width:100%">
+        </div>
         <button class="btn btn-primary" onclick="addBankByType('transfer')" style="white-space:nowrap">Add bank</button>
       </div>
       <div class="tbl-wrap" style="border-radius:var(--radius);border:1px solid var(--border)">
-        <table><thead><tr><th>BANK NAME</th><th>ACCOUNT NUMBER</th><th></th></tr></thead>
+        <table><thead><tr><th>BANK NAME</th><th>ACCOUNT NUMBER</th><th>ACCOUNT NAME</th><th></th></tr></thead>
         <tbody>${transferRows}</tbody></table>
       </div>
     </div>
@@ -14814,13 +14819,16 @@ function renderSettingsFull(){
 async function addBankByType(type){
   const nameId=type==='pos'?'set-pos-name':'set-transfer-name';
   const acctId=type==='pos'?'set-pos-acct':'set-transfer-acct';
+  const accNameId='set-transfer-accname';
   const name=document.getElementById(nameId)?.value.trim();
   if(!name){showToast(`Enter ${type==='pos'?'terminal':'bank'} name.`,'error');return;}
   const acct=document.getElementById(acctId)?.value.trim()||'';
-  const id=uid();const bank={id,name,type,acct};
+  const accountName=type==='transfer'?(document.getElementById(accNameId)?.value.trim()||''):'';
+  const id=uid();const bank={id,name,type,acct,accountName};
   setSyncStatus('saving');
   try{await fsSave('v2_banks',id,bank);if(!STATE.banks)STATE.banks={};STATE.banks[id]={...bank,_id:id,_savedAt:Date.now()};
     document.getElementById(nameId).value='';document.getElementById(acctId).value='';
+    const accNameEl=document.getElementById(accNameId); if(accNameEl) accNameEl.value='';
     setSyncStatus('synced');showToast(`${type==='pos'?'POS terminal':'Bank'} "${name}" added.`,'success');renderSettings();}
   catch(e){setSyncStatus('error');showToast('Failed.','error');}
 }
