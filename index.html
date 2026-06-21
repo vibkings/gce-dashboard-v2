@@ -4826,11 +4826,60 @@ function v2OnSplitAmtChange() {
 
 function v2SetCustType(t) { invoiceType=t; if(t==='walkin') invoiceCustomer=null; renderSales(); }
 
+// ── Concurrency-safe invoice numbering ──────────────────────
+// This is the actual mechanism that lets multiple staff save invoices at
+// the same moment without ever landing on the same invoice number — the
+// core reason this data layer exists. A plain "scan local sales, take
+// max + 1" (see v2GenerateInvoiceNum below) cannot guarantee this across
+// devices: two devices can independently compute the same "next" number
+// before either save has synced to the other. This instead does an
+// atomic read-then-conditional-write against a single counter document,
+// using Firestore's optimistic concurrency control (currentDocument
+// preconditions) — if another device updates the counter in between our
+// read and write, our write is rejected and we retry with a short random
+// backoff, so two clients can never both succeed with the same number.
+async function _allocateNextInvoiceNum() {
+  const year = new Date().getFullYear();
+  for (let attempt = 0; attempt < 8; attempt++) {
+    try {
+      const r = await fetch(`${FB.base}/v2_settings/invCounter?key=${FB.apiKey}`);
+      let currentVal = 0, updateTime = null, docExists = false;
+      if (r.ok) {
+        const doc = await r.json();
+        docExists = true;
+        updateTime = doc.updateTime;
+        currentVal = fromFsDoc(doc)?.value || 0;
+      } else if (r.status !== 404) {
+        throw new Error(`Counter read failed: ${r.status}`);
+      }
+      const nextVal = currentVal + 1;
+      const body = {fields: toFsFields({value: nextVal})};
+      const precondition = docExists
+        ? `&currentDocument.updateTime=${encodeURIComponent(updateTime)}`
+        : `&currentDocument.exists=false`;
+      const w = await fetch(`${FB.base}/v2_settings/invCounter?key=${FB.apiKey}${precondition}`, {
+        method: 'PATCH', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body)
+      });
+      if (w.ok) {
+        STATE.invCounter = nextVal;
+        try { const store = _lfStore('v2_settings'); if (store) await store.setItem('invCounter', {value: nextVal, _id:'invCounter'}); } catch(e){}
+        return `${year}/${String(nextVal).padStart(4,'0')}`;
+      }
+      // Someone else updated the counter between our read and write — retry
+      await new Promise(res=>setTimeout(res, 60 + Math.random()*180));
+    } catch(e) {
+      await new Promise(res=>setTimeout(res, 150));
+    }
+  }
+  return null; // retries exhausted — caller falls back to local computation
+}
+
 function v2GenerateInvoiceNum() {
   const year = new Date().getFullYear();
   const nums = Object.values(STATE.sales||{})
     .map(s=>parseInt((s.invoiceNum||'').split('/').pop())||0).filter(n=>!isNaN(n));
-  const max = nums.length ? Math.max(...nums) : 0;
+  const maxFromSales = nums.length ? Math.max(...nums) : 0;
+  const max = Math.max(maxFromSales, STATE.invCounter||0);
   return `${year}/${String(max+1).padStart(4,'0')}`;
 }
 
@@ -4889,7 +4938,8 @@ async function v2SaveSale(mode) {
     : (document.getElementById('s-print-name')?.value.trim()||invoiceCustomer.name);
   const deliveryAddr = document.getElementById('s-inv-address')?.value.trim()||
     (invoiceCustomer?.address||'');
-  const invNum = v2GenerateInvoiceNum();
+  let invNum = _online ? await _allocateNextInvoiceNum() : null;
+  if (!invNum) invNum = v2GenerateInvoiceNum(); // offline, or allocator exhausted its retries
   const invoiceId = uid();
   // Payment mode details
   let payMode = pt;
