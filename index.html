@@ -4022,7 +4022,7 @@ function renderSales() {
       <button class="btn btn-primary" onclick="v2SaveSale('print')" style="font-size:14px;padding:10px 24px">✓ Save &amp; complete invoice</button>
       <button class="btn" onclick="v2SaveSale('proforma')" style="color:#7c3aed;border-color:#c4b5fd;font-size:13px;padding:10px 16px">📄 Save as Proforma</button>
       <button class="btn" onclick="v2SaveSale('draft')" style="color:var(--primary);border-color:#b6d4fe;font-size:13px;padding:10px 16px">📝 Save as draft</button>
-      <button class="btn" onclick="invoiceItems=[];invoiceCustomer=null;renderSales()" style="color:var(--danger);border-color:#fca5a5">✕ Clear</button>
+      <button class="btn" onclick="invoiceItems=[];invoiceCustomer=null;window._convertingProformaId=null;renderSales()" style="color:var(--danger);border-color:#fca5a5">✕ Clear</button>
     </div>
     <div style="border-radius:var(--radius-sm);padding:10px 14px;margin-bottom:1.25rem;display:flex;align-items:flex-start;gap:10px;background:var(--surface);border:1px solid var(--border)">
       <input type="checkbox" id="s-pending-supply" style="width:16px;height:16px;margin-top:2px;cursor:pointer;flex-shrink:0">
@@ -5201,6 +5201,18 @@ async function v2SaveSale(mode) {
     logActivity('Invoice saved',`Invoice #${invNum} — ${printName||''} — ${fmt(grandTotalCalc)}`,payMode||'');
     if (mode==='print') printSaleInvoice(invNum);
   else if (mode==='draft') { showToast('Draft saved.','info'); }
+    if (window._convertingProformaId) {
+      const pid = window._convertingProformaId;
+      const prf = STATE.proformas?.[pid];
+      if (prf) {
+        const updPrf = {...prf, status:'converted', convertedInvoiceNum:invNum, convertedAt:new Date().toISOString()};
+        fsSave(COLS.PROFORMAS, pid, updPrf).then(()=>{
+          STATE.proformas[pid] = {...updPrf, _id:pid, _savedAt:Date.now()};
+        }).catch(()=>{});
+        logActivity('Proforma converted', `${prf.prfNum} → Invoice #${invNum}`, '');
+      }
+      window._convertingProformaId = null;
+    }
     invoiceItems=[]; invoiceCustomer=null;
     window._salesFilter='today';
     renderSales(); renderOverviewIfActive(); updateInventoryBadge();
@@ -10966,7 +10978,7 @@ function renderProformas(){
     const items2=(p.items||[]).slice(0,2).map(i=>esc(i.name)+' x'+i.qty).join(', ')+(p.items?.length>2?` +${p.items.length-2} more`:'');
     const validUntil=p.validDays?new Date(new Date(p.date).getTime()+86400000*p.validDays).toLocaleDateString():'—';
     const isExpired=validUntil!=='—'&&new Date()>new Date(validUntil);
-    const statusBadge=p.status==='converted'?'<span style="background:#d1fae5;color:#065f46;padding:2px 8px;border-radius:20px;font-size:10px;font-weight:700">CONVERTED</span>':p.status==='cancelled'?'<span style="background:#f3f4f6;color:#6b7280;padding:2px 8px;border-radius:20px;font-size:10px;font-weight:700">CANCELLED</span>':isExpired?'<span style="background:#fee2e2;color:#dc2626;padding:2px 8px;border-radius:20px;font-size:10px;font-weight:700">EXPIRED</span>':'<span style="background:#fef3c7;color:#92400e;padding:2px 8px;border-radius:20px;font-size:10px;font-weight:700">PENDING</span>';
+    const statusBadge=p.status==='converted'?`<span style="background:#d1fae5;color:#065f46;padding:2px 8px;border-radius:20px;font-size:10px;font-weight:700">CONVERTED${p.convertedInvoiceNum?' → #'+esc(p.convertedInvoiceNum):''}</span>`:p.status==='cancelled'?'<span style="background:#f3f4f6;color:#6b7280;padding:2px 8px;border-radius:20px;font-size:10px;font-weight:700">CANCELLED</span>':isExpired?'<span style="background:#fee2e2;color:#dc2626;padding:2px 8px;border-radius:20px;font-size:10px;font-weight:700">EXPIRED</span>':'<span style="background:#fef3c7;color:#92400e;padding:2px 8px;border-radius:20px;font-size:10px;font-weight:700">PENDING</span>';
     const btns=`<button onclick="printProformaInvoice('${p._id||p.id}')" style="padding:4px 10px;background:#eff6ff;color:#0369a1;border:1px solid #bae6fd;border-radius:6px;font-size:11px;cursor:pointer">Print</button> <button onclick="showShareProformaModal('${p._id||p.id}')" style="padding:4px 10px;background:#f0fdf4;color:#15803d;border:1px solid #bbf7d0;border-radius:6px;font-size:11px;cursor:pointer">📤 Share</button> `+(p.status==='pending'?`<button onclick="convertProforma('${p._id||p.id}')" style="padding:4px 10px;background:#7c3aed;color:#fff;border:none;border-radius:6px;font-size:11px;cursor:pointer">Convert</button> `+(STATE.user?.role==='admin'?`<button onclick="cancelProforma('${p._id||p.id}')" style="padding:4px 10px;background:#fef2f2;color:#dc2626;border:1px solid #fca5a5;border-radius:6px;font-size:11px;cursor:pointer">Cancel</button>`:''):'');
     return `<tr><td><b>${esc(p.prfNum||p.id)}</b></td><td style="font-size:12px">${p.date||''}</td><td>${esc(p.custName||'Walk-in')}</td><td style="font-size:11px;color:var(--text3)">${items2}</td><td style="text-align:center">${(p.items||[]).length}</td><td class="td-right">${fmt(p.grandTotal||0)}</td><td style="font-size:11px;color:var(--text3)">${validUntil}</td><td>${statusBadge}</td><td style="font-size:11px;color:var(--text3)">${esc(p.by||'')}</td><td style="white-space:nowrap">${btns}</td></tr>`;
   }).join('');
@@ -10974,7 +10986,40 @@ function renderProformas(){
 }
 
 async function cancelProforma(id){if(!confirm('Cancel this proforma?'))return;const p=STATE.proformas?.[id];if(!p)return;const upd={...p,status:'cancelled'};setSyncStatus('saving');try{await fsSave('v2_proformas',id,upd);STATE.proformas[id]={...upd,_id:id,_savedAt:Date.now()};setSyncStatus('synced');showToast('Proforma cancelled.','info');renderProformas();}catch(e){setSyncStatus('error');showToast('Failed.','error');}}
-async function convertProforma(id){showToast('Load this proforma in the Sales tab to convert it.','info');}
+async function convertProforma(id){
+  const p = STATE.proformas?.[id];
+  if (!p) { showToast('Proforma not found.','error'); return; }
+  if (p.status==='converted') { showToast(`This proforma was already converted${p.convertedInvoiceNum?' to Inv #'+p.convertedInvoiceNum:''}.`,'info'); return; }
+  if (invoiceItems.length && !confirm(`Your current cart has items in it. Loading "${p.prfNum}" will replace them. Continue?`)) return;
+  if (!invoiceItems.length && !confirm(`Load "${p.prfNum}" into the Sales cart to convert it into a real invoice?`)) return;
+
+  invoiceItems = (p.items||[]).map(i=>{
+    const inv = Object.values(STATE.inventory||{}).find(x=>(x.name||'').toLowerCase()===(i.name||'').toLowerCase());
+    return {
+      itemId: inv ? (inv._id||inv.id) : '',
+      name: i.name, cost: i.cost!=null ? i.cost : (inv?.costPrice||inv?.cost||0),
+      qty: i.qty||1, price: i.price||0, discPct: i.discPct||0,
+      supplyMode: 'supply'
+    };
+  });
+
+  if (p.custId && STATE.customers?.[p.custId]) {
+    invoiceType = 'registered';
+    invoiceCustomer = STATE.customers[p.custId];
+  } else {
+    invoiceType = 'walkin';
+    invoiceCustomer = null;
+  }
+
+  window._convertingProformaId = id;
+  navigateTo('sales');
+  setTimeout(()=>{
+    renderSales();
+    const pn = document.getElementById('s-print-name');
+    if (pn && !p.custId) pn.value = p.custName||'';
+    showToast(`📄 Loaded ${p.prfNum} into the cart — review pricing/qty, then save as a normal invoice to complete it.`,'info');
+  }, 250);
+}
 function _buildProformaHTML(id, includeButtons){
   const p=STATE.proformas?.[id];if(!p){return null;}
   const banks=Object.values(STATE.banks||{}).filter(b=>!b._deleted);
