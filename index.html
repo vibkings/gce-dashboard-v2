@@ -13421,14 +13421,33 @@ function renderProductReport() {
   const sell=item.sellPrice||item.sell||0;
   const supplier=Object.values(STATE.suppliers||{}).find(s=>s._id===item.supId||s.id===item.supId)||{};
 
-  // Sales — group by invoice
+  // Sales below read STATE.sales directly, but only current+previous month
+  // are guaranteed loaded by default — same concern as Customer Overview/
+  // P&L. Load full history in the background and re-render once done.
+  const historyLoading = !window._allSalesHistoryLoaded;
+  if (historyLoading) {
+    _ensureFullSalesHistory().then(()=>{
+      if (document.getElementById('page-productreport')?.classList.contains('active')) {
+        renderProductReport();
+      }
+    });
+  }
+
+  // Sales — group by invoice. Supplied/Pending use the actual fulfillment
+  // fields (suppliedQty/pendingQty) — a line's "qty" is the ORDERED amount,
+  // which previously got treated as fully supplied regardless of how much
+  // had actually been delivered.
   const salesOfItem=Object.values(STATE.sales||{}).filter(s=>s.itemId===itemId||s.name===item.name);
   const saleInvs={};
   salesOfItem.forEach(s=>{
     const k=s.invoiceNum;
     if(!saleInvs[k])saleInvs[k]={invoiceNum:k,date:s.date,custName:s.custName||'Walk-in',ordered:0,supplied:0,pending:0,sellPrice:s.salePrice||sell,total:0,profit:0,payment:s.payment,seller:s.seller||''};
-    saleInvs[k].ordered+=s.qty||0;
-    saleInvs[k].supplied+=s.qty||0;
+    const qty=s.qty||0;
+    const pendingQty=s.pendingQty!=null?s.pendingQty:0;
+    const suppliedQty=s.suppliedQty!=null?s.suppliedQty:Math.max(0,qty-pendingQty);
+    saleInvs[k].ordered+=qty;
+    saleInvs[k].supplied+=suppliedQty;
+    saleInvs[k].pending+=pendingQty;
     saleInvs[k].total+=s.total||0;
     saleInvs[k].profit+=s.profit||0;
   });
@@ -13438,8 +13457,11 @@ function renderProductReport() {
   const purchasesOfItem=Object.values(STATE.purchases||{}).filter(p=>p.itemId===itemId||p.itemName===item.name);
   const purchaseList=purchasesOfItem.sort((a,b)=>(b.date||'').localeCompare(a.date||''));
 
-  // Returns
+  // Returns — both directions: this item coming BACK (a return), and this
+  // item going OUT as the replacement in someone else's exchange (real
+  // stock consumption that's easy to miss if you only look at "returns").
   const returnsOfItem=Object.values(STATE.salesReturns||{}).filter(r=>r.itemId===itemId||r.itemName===item.name);
+  const givenInExchange=Object.values(STATE.salesReturns||{}).filter(r=>r.exchangedForItemId===itemId).reduce((a,r)=>a+(r.qty||0),0);
 
   // Stock adjustments
   const adjOfItem=Object.values(STATE.adjLog||{}).filter(a=>a.itemId===itemId||a.itemName===item.name).sort((a,b)=>(b.date||'').localeCompare(a.date||''));
@@ -13447,6 +13469,7 @@ function renderProductReport() {
   // KPI calcs
   const totalPurchased=purchaseList.reduce((a,p)=>a+(p.qty||0),0);
   const totalSupplied=saleList.reduce((a,s)=>a+s.supplied,0);
+  const totalPending=saleList.reduce((a,s)=>a+s.pending,0);
   const totalReturned=returnsOfItem.reduce((a,r)=>a+(r.qty||1),0);
   const totalRevenue=saleList.reduce((a,s)=>a+s.total,0);
   const totalCostSpent=purchaseList.reduce((a,p)=>a+(p.totalCost||0),0);
@@ -13456,11 +13479,8 @@ function renderProductReport() {
   const netAdjChange=adjOfItem.reduce((a,adj)=>a+(adj.change||0),0);
   const avgSellPrice=totalSupplied>0?Math.round(totalRevenue/totalSupplied):sell;
 
-  // Stock movement summary
-  const openingStock=0; // estimated
-  const currentStockCalc=openingStock+totalPurchased-totalSupplied+totalReturned+netAdjChange;
-
   el.innerHTML=`${searchCard}
+    ${historyLoading?`<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:var(--radius);padding:10px 14px;margin-bottom:1rem;font-size:12px;color:#1d4ed8;display:flex;align-items:center;gap:8px">⏳ Loading full sales history — totals below will update automatically once this finishes.</div>`:''}
     <!-- Product header card -->
     <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--radius-lg);padding:16px 20px;margin-bottom:1.25rem;display:flex;justify-content:space-between;align-items:flex-start">
       <div>
@@ -13572,7 +13592,7 @@ function renderProductReport() {
           <td colspan="3" style="padding:8px 12px;text-transform:uppercase">TOTAL</td>
           <td style="text-align:center;padding:8px 12px">${saleList.reduce((a,s)=>a+s.ordered,0)}</td>
           <td style="text-align:center;padding:8px 12px;color:var(--success)">${totalSupplied}</td>
-          <td style="text-align:center;padding:8px 12px;color:var(--danger)">0</td>
+          <td style="text-align:center;padding:8px 12px;color:var(--danger)">${totalPending}</td>
           <td></td>
           <td class="td-right" style="padding:8px 12px;color:var(--brand)">${fmt(totalRevenue)}</td>
           <td class="td-right" style="padding:8px 12px;color:var(--success)">${fmt(totalProfit)}</td>
@@ -13640,6 +13660,7 @@ function renderProductReport() {
         {label:'+ Total Received (purchases)',val:'+ '+totalPurchased,bold:false,bg:'',color:'var(--success)'},
         {label:'− Total Supplied (goods delivered)',val:'− '+totalSupplied,bold:false,bg:'',color:'var(--info)'},
         {label:'+ Total Returned by customers',val:'+ '+totalReturned,bold:false,bg:'',color:'var(--success)'},
+        ...(givenInExchange>0?[{label:'− Given out as exchange replacement',val:'− '+givenInExchange,bold:false,bg:'',color:'var(--danger)'}]:[]),
         {label:'+Net stock adjustments',val:(netAdjChange>=0?'+':'')+netAdjChange,bold:false,bg:'',color:'var(--text2)'},
       ].map(r=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:9px 14px;background:${r.bg||'var(--white)'};border-bottom:1px solid var(--border)">
         <span style="font-size:13px;color:${r.color||'var(--text2)'}${r.bold?';font-weight:700':''}">${r.label}</span>
