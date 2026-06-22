@@ -16480,14 +16480,14 @@ function renderSettingsFull(){
     <td style="font-size:12px;color:var(--text3)">${esc(b.acct||'—')}</td>
     <td style="font-size:12px;color:var(--text3)">${esc(b.accountName||'—')}</td>
     <td style="font-size:12px;color:var(--text3)">${esc(b.category||'—')}</td>
-    <td>${STATE.user?.role==='admin'?`<button class="btn btn-sm" onclick="removeBank('${b._id||b.id}')" style="color:var(--danger)">Remove</button>`:''}</td>
+    <td style="display:flex;gap:4px"><button class="btn btn-sm" onclick="editBank('${b._id||b.id}')" style="color:var(--primary);border-color:#b6d4fe">Edit</button>${STATE.user?.role==='admin'?`<button class="btn btn-sm" onclick="removeBank('${b._id||b.id}')" style="color:var(--danger)">Remove</button>`:''}</td>
   </tr>`).join(''):'<tr><td colspan="5" style="text-align:center;color:var(--text3);padding:10px">No bank accounts added yet.</td></tr>';
 
   const posRows=posBanks.length?posBanks.map(b=>`<tr>
     <td><b>${esc(b.name)}</b></td>
     <td style="font-size:12px;color:var(--text3)">${esc(b.acct||'—')}</td>
     <td style="font-size:12px;color:var(--text3)">${esc(b.category||'—')}</td>
-    <td>${STATE.user?.role==='admin'?`<button class="btn btn-sm" onclick="removeBank('${b._id||b.id}')" style="color:var(--danger)">Remove</button>`:''}</td>
+    <td style="display:flex;gap:4px"><button class="btn btn-sm" onclick="editBank('${b._id||b.id}')" style="color:var(--primary);border-color:#b6d4fe">Edit</button>${STATE.user?.role==='admin'?`<button class="btn btn-sm" onclick="removeBank('${b._id||b.id}')" style="color:var(--danger)">Remove</button>`:''}</td>
   </tr>`).join(''):'<tr><td colspan="4" style="text-align:center;color:var(--text3);padding:10px">No POS terminals added yet.</td></tr>';
 
   const secTitle=(icon,title)=>`<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--brand);margin-bottom:12px;display:flex;align-items:center;gap:6px">
@@ -16847,6 +16847,44 @@ async function removeBank(id){
   setSyncStatus('saving');
   try{await fsDelete('v2_banks',id);delete STATE.banks?.[id];setSyncStatus('synced');showToast('Bank removed.','info');renderSettings();}
   catch(e){setSyncStatus('error');showToast('Failed.','error');}
+}
+
+function editBank(id){
+  const b = STATE.banks?.[id]; if(!b) return;
+  const isPos = b.type==='pos';
+  showModal(`✏ Edit ${isPos?'POS Terminal':'Bank'}`, `
+    <div class="form-grid c2">
+      <div class="form-group"><label>${isPos?'Terminal Name':'Bank Name'} <span class="req">*</span></label>
+        <input class="form-input" id="eb-name" value="${esc(b.name||'')}"></div>
+      <div class="form-group"><label>${isPos?'Terminal ID':'Account Number'}</label>
+        <input class="form-input" id="eb-acct" value="${esc(b.acct||'')}"></div>
+      ${!isPos?`<div class="form-group" style="grid-column:1/-1"><label>Account Name</label>
+        <input class="form-input" id="eb-accname" value="${esc(b.accountName||'')}"></div>`:''}
+      <div class="form-group" style="grid-column:1/-1"><label>Category / Label</label>
+        <input class="form-input" id="eb-category" placeholder="e.g. Electrical Goods Only" value="${esc(b.category||'')}"></div>
+    </div>
+  `, [
+    {label:'Cancel', action:'close', style:''},
+    {label:'💾 Save', action:`saveEditBank('${id}')`, style:'btn-primary'}
+  ]);
+}
+
+async function saveEditBank(id){
+  const b = STATE.banks?.[id]; if(!b) return;
+  const name = document.getElementById('eb-name')?.value.trim();
+  if(!name){showToast(`Enter ${b.type==='pos'?'terminal':'bank'} name.`,'error');return;}
+  const acct = document.getElementById('eb-acct')?.value.trim()||'';
+  const accountName = b.type!=='pos' ? (document.getElementById('eb-accname')?.value.trim()||'') : '';
+  const category = document.getElementById('eb-category')?.value.trim()||'';
+  const updated = {...b, name, acct, accountName, category};
+  setSyncStatus('saving');
+  try{
+    await fsSave('v2_banks', id, updated);
+    STATE.banks[id] = {...updated, _id:id, _savedAt:Date.now()};
+    closeModal(); setSyncStatus('synced');
+    showToast(`${b.type==='pos'?'POS terminal':'Bank'} updated.`,'success');
+    renderSettings();
+  } catch(e){setSyncStatus('error');showToast('Failed.','error');}
 }
 
 async function fixInvoiceCounter(){
