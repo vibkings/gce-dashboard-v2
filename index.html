@@ -7966,9 +7966,12 @@ function renderPurchases() {
           <span style="width:3px;height:14px;background:var(--brand);border-radius:2px;display:inline-block"></span>
           PURCHASE HISTORY
         </div>
-        <div class="search-wrap" style="width:240px">
-          <span class="search-icon">🔍</span>
-          <input type="text" class="form-input" id="purch-history-search" placeholder="Search purchases..." value="${esc(searchValRaw)}" oninput="debouncedSearchRerender(this, renderPurchases)">
+        <div class="search-wrap" style="width:240px;display:flex;align-items:center;gap:6px">
+          <div style="position:relative;flex:1">
+            <span class="search-icon">🔍</span>
+            <input type="text" class="form-input" id="purch-history-search" placeholder="Search purchases..." value="${esc(searchValRaw)}" oninput="debouncedSearchRerender(this, renderPurchases)">
+          </div>
+          ${searchValRaw?`<button class="btn btn-sm" onclick="document.getElementById('purch-history-search').value='';renderPurchases()" style="color:var(--danger);border-color:#f5c2c7">✕</button>`:''}
         </div>
       </div>
 
@@ -13237,6 +13240,7 @@ function renderSupplierOverview() {
       <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--brand);margin-bottom:12px;display:flex;align-items:center;gap:6px"><span style="width:3px;height:14px;background:var(--brand);border-radius:2px;display:inline-block"></span>📋 SUPPLIER PERFORMANCE</div>
       <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
         <div class="search-wrap" style="flex:1;max-width:280px"><span class="search-icon">🔍</span><input class="form-input" id="supov-search" placeholder="Search suppliers..." value="${esc(window._supOvSearch||'')}" oninput="window._supOvSearch=this.value;debouncedSearchRerender(this, renderSupplierOverview)"></div>
+        ${window._supOvSearch?`<button class="btn btn-sm" onclick="window._supOvSearch='';renderSupplierOverview()" style="color:var(--danger);border-color:#f5c2c7">✕ Clear</button>`:''}
         ${['all','balance','cleared','active'].map(f=>`<button class="btn btn-sm ${filter===f?'btn-primary':''}" onclick="window._supOvFilter='${f}';renderSupplierOverview()">${f==='all'?'All':f==='balance'?'Has Balance':f==='cleared'?'Cleared':'Active'}</button>`).join('')}
       </div>
       ${rows?`<div class="tbl-wrap" style="border-radius:var(--radius);border:1px solid var(--border)"><table><thead><tr><th>SUPPLIER</th><th>PHONE</th><th class="td-right">TOTAL PURCHASES</th><th class="td-right">TOTAL PAID</th><th class="td-right">OUTSTANDING</th><th>LAST PURCHASE</th><th style="text-align:center">INVOICES</th><th style="text-align:center">PENDING</th><th>STATUS</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`:'<div class="empty-state"><div class="empty-state-icon">🚛</div><div>No suppliers match filter.</div></div>'}
@@ -15001,9 +15005,12 @@ function renderCustomersFull(){
   el.innerHTML=`<div class="subtabs">${tabs}</div>
     <div style="display:flex;justify-content:space-between;align-items:center;margin:12px 0 10px;flex-wrap:wrap;gap:8px">
       <button class="btn btn-primary" onclick="window._custTab='add';renderCustomers()">+ Add customer</button>
-      <div class="search-wrap" style="max-width:340px;flex:1">
-        <span class="search-icon">🔍</span>
-        <input class="form-input" placeholder="Search by name, phone, business..." value="${window._custSearch||''}" oninput="window._custSearch=this.value;renderCustomers()">
+      <div class="search-wrap" style="max-width:340px;flex:1;display:flex;align-items:center;gap:6px">
+        <div style="position:relative;flex:1">
+          <span class="search-icon">🔍</span>
+          <input class="form-input" id="cust-list-search" placeholder="Search by name, phone, business..." value="${esc(window._custSearch||'')}" oninput="window._custSearch=this.value;debouncedSearchRerender(this, renderCustomers)">
+        </div>
+        ${window._custSearch?`<button class="btn btn-sm" onclick="window._custSearch='';renderCustomers()" style="color:var(--danger);border-color:#f5c2c7">✕ Clear</button>`:''}
       </div>
     </div>
     <!-- 4 KPI cards -->
@@ -16195,9 +16202,12 @@ function renderSuppliersFull(){
           <span style="width:3px;height:14px;background:var(--brand);border-radius:2px;display:inline-block"></span>
           SUPPLIER LIST
         </div>
-        <div class="search-wrap" style="max-width:280px">
-          <span class="search-icon">🔍</span>
-          <input class="form-input" id="sup-search" placeholder="Search suppliers..." value="${esc(window._supSearch||'')}" oninput="window._supSearch=this.value;debouncedSearchRerender(this, renderSuppliersFull)">
+        <div class="search-wrap" style="max-width:280px;display:flex;align-items:center;gap:6px">
+          <div style="position:relative;flex:1">
+            <span class="search-icon">🔍</span>
+            <input class="form-input" id="sup-search" placeholder="Search suppliers..." value="${esc(window._supSearch||'')}" oninput="window._supSearch=this.value;debouncedSearchRerender(this, renderSuppliersFull)">
+          </div>
+          ${window._supSearch?`<button class="btn btn-sm" onclick="window._supSearch='';renderSuppliersFull()" style="color:var(--danger);border-color:#f5c2c7">✕</button>`:''}
         </div>
       </div>
       ${rows?`<div class="tbl-wrap" style="border-radius:var(--radius);border:1px solid var(--border)">
