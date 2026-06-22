@@ -13700,6 +13700,19 @@ function prodReportLiveSearch(term,force) {
 // ── MONTHLY SUMMARY ──────────────────────────────────────
 function renderMonthlySummary() {
   const el=document.getElementById('monthly-content'); if(!el)return;
+
+  // Same concern as Customer Overview/P&L/Product Report — sales are only
+  // guaranteed loaded for the current+previous month by default, but this
+  // page explicitly invites picking any of the last 24 months.
+  const historyLoading = !window._allSalesHistoryLoaded;
+  if (historyLoading) {
+    _ensureFullSalesHistory().then(()=>{
+      if (document.getElementById('page-monthly')?.classList.contains('active')) {
+        renderMonthlySummary();
+      }
+    });
+  }
+
   const now=new Date();
   const pad=n=>String(n).padStart(2,'0');
   const selectedMonth=window._monthSumMonth||(now.getFullYear()+'-'+pad(now.getMonth()+1));
@@ -13718,6 +13731,7 @@ function renderMonthlySummary() {
     const k=s.invoiceNum;
     if(!invs[k])invs[k]={total:0,profit:0,payment:s.payment,payMode:s.payMode||'cash',
       splitPayment:s.splitPayment||null,bankName:s.bankName||'',partPayment:s.partPayment||0,
+      depositShortfallMode:s.depositShortfallMode||'cash',
       seller:s.seller||''};
     invs[k].total+=s.total||0; invs[k].profit+=s.profit||0;
   });
@@ -13729,14 +13743,18 @@ function renderMonthlySummary() {
   const grossProfit=invList.reduce((a,i)=>a+i.profit,0);
   const grossMargin=revenue>0?Math.round(grossProfit/revenue*100):0;
 
-  // Credit
+  // Credit — includes Part Payment AND Deposit shortfall (deposit sales
+  // leave a balance too, tracked the same way as part-payment), matching
+  // the pattern already established/fixed on the Financial Dashboard.
   const creditThisMonth=invList.filter(i=>i.payment==='credit').reduce((a,i)=>a+i.total,0);
-  const partOwed=invList.filter(i=>i.payment==='part').reduce((a,i)=>a+Math.max(0,i.total-(i.partPayment||0)),0);
+  const partOwed=invList.filter(i=>i.payment==='part'||i.payment==='deposit').reduce((a,i)=>a+Math.max(0,i.total-(i.partPayment||0)),0);
   const owedThisMonth=creditThisMonth+partOwed;
   const totalCreditAllTime=Object.values(STATE.customers||{}).reduce((a,c)=>a+(c.creditBalance||0),0);
 
-  // Cash received (from this month's invoices, non-credit)
-  const cashReceived=invList.filter(i=>i.payment!=='credit').reduce((a,i)=>i.payment==='part'?a+(i.partPayment||0):a+i.total,0);
+  // Cash received (from this month's invoices, non-credit). Deposit sales
+  // only had their partPayment (the deposit) actually paid up front —
+  // treating them as fully paid like the old code did overstated this.
+  const cashReceived=invList.filter(i=>i.payment!=='credit').reduce((a,i)=>(i.payment==='part'||i.payment==='deposit')?a+(i.partPayment||0):a+i.total,0);
 
   // Credit collected this month (old debts paid)
   const creditCollected=Object.values(STATE.cashflow||{}).filter(c=>c.type==='in'&&c.cat==='Credit Payment'&&((c.month||'')===selectedMonth||inMonth(c.date))).reduce((a,c)=>a+(c.amount||0),0);
@@ -13745,25 +13763,49 @@ function renderMonthlySummary() {
   const expCFs=Object.values(STATE.cashflow||{}).filter(c=>c.type==='out'&&!c.isReturn&&!EXC.includes(c.cat)&&((c.month||'')===selectedMonth||inMonth(c.date)));
   const expenses=expCFs.reduce((a,c)=>a+(c.amount||0),0);
 
-  // Restocking
-  const restock=Object.values(STATE.purchases||{}).filter(p=>(p.month||'')===selectedMonth||inMonth(p.date)).reduce((a,p)=>a+(p.totalCost||0),0);
+  // Restocking — actual cash that left the till for purchases this month
+  // (matches P&L's definition). Using purchases.totalCost instead would
+  // miss the value of any PO created this month with items still pending
+  // delivery, since that line item only gets a purchase doc once received.
+  const restock=Object.values(STATE.cashflow||{}).filter(c=>c.type==='out'&&c.cat==='Restock'&&((c.month||'')===selectedMonth||inMonth(c.date))).reduce((a,c)=>a+(c.amount||0),0);
 
   // Net profit & net cash
   const netProfit=grossProfit-expenses;
   const netMargin=revenue>0?Math.round(netProfit/revenue*100):0;
   const netCash=cashReceived+creditCollected-expenses;
 
-  // Payment breakdown (split distributed)
+  // Payment breakdown (split distributed). Deposit sales need special
+  // handling: the deposit portion (partPayment) was already banked into
+  // the till whenever the customer's deposit was first funded — counting
+  // the full invoice total here again would double-count it. Only the
+  // shortfall actually collected today (if any) belongs here, attributed
+  // by depositShortfallMode. Mirrors the Financial Dashboard's established
+  // pattern for the same reason.
   let cashPay=0,posPay=0,transferPay=0;
   invList.forEach(g=>{
     if(g.payment==='credit')return;
+    if(g.payment==='deposit'){
+      const shortfall=Math.max(0,(g.total||0)-(g.partPayment||0));
+      if(shortfall<=0)return;
+      if(g.depositShortfallMode==='split'&&g.splitPayment){
+        cashPay+=g.splitPayment.amt1||0; transferPay+=g.splitPayment.amt2||0;
+      } else if(g.depositShortfallMode==='pos'){
+        posPay+=shortfall;
+      } else if(g.depositShortfallMode==='transfer'){
+        transferPay+=shortfall;
+      } else if(g.depositShortfallMode!=='credit'){
+        cashPay+=shortfall; // default mode is cash
+      }
+      return;
+    }
+    const amtReceived = g.payment==='part' ? (g.partPayment||0) : g.total;
     if(g.payMode==='split'&&g.splitPayment){
       const sp=g.splitPayment;
       const add=(m,v)=>{if(m==='cash')cashPay+=v;else if(m==='pos')posPay+=v;else if(m==='transfer')transferPay+=v;};
       add(sp.mode1,sp.amt1||0);add(sp.mode2,sp.amt2||0);
-    } else if(g.payMode==='pos')posPay+=g.total;
-    else if(g.payMode==='transfer')transferPay+=g.total;
-    else cashPay+=g.total;
+    } else if(g.payMode==='pos')posPay+=amtReceived;
+    else if(g.payMode==='transfer')transferPay+=amtReceived;
+    else cashPay+=amtReceived;
   });
 
   // Expense breakdown by category
@@ -13930,7 +13972,14 @@ function printMonthlySummary(){
   w.document.close();
 }
 
-function shareMonthlySummaryWhatsApp(){
+async function shareMonthlySummaryWhatsApp(){
+  // One-shot action (opens wa.me immediately) — unlike the page render,
+  // there's no "re-render once loaded" fallback here, so the message must
+  // be correct before it's built, not just eventually-correct.
+  if (!window._allSalesHistoryLoaded) {
+    showToast('Preparing summary…','info');
+    await _ensureFullSalesHistory();
+  }
   const selectedMonth=window._monthSumMonth||'';
   const monthName=selectedMonth?new Date(selectedMonth+'-02').toLocaleString('en',{month:'long',year:'numeric'}):'';
   const now=new Date();
