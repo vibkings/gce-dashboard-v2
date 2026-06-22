@@ -3604,7 +3604,7 @@ function confirmDelItem(id) {
   const i = STATE.inventory[id];
   if (!i) return;
   showModal(`🗑️ Delete "${esc(i.name)}"?`,
-    `<p>This will permanently delete <b>${esc(i.name)}</b> from inventory. This cannot be undone.</p>`,
+    `<p>Removes <b>${esc(i.name)}</b> from inventory. It goes to the Recycle Bin and can be restored within ${BIN_RETENTION_DAYS} days.</p>`,
     [{label:'Cancel',action:'close',style:''},
      {label:'🗑️ Delete',action:`delItem('${id}')`,style:'btn-danger'}]);
 }
@@ -3613,12 +3613,14 @@ async function delItem(id) {
   if (!i) return;
   setSyncStatus('saving');
   try {
+    await sendToRecycleBin('inventory', i, i.name);
     await fsDelete(COLS.INVENTORY, id);
     delete STATE.inventory[id];
     closeModal();
     renderInventory(); renderOverviewIfActive(); updateInventoryBadge();
     setSyncStatus('synced');
-    showToast(`🗑️ "${i.name}" deleted.`,'success');
+    showToast(`🗑️ "${i.name}" deleted — moved to Recycle Bin.`,'success');
+    logActivity('Item deleted',`${i.name}`,'');
   } catch(e) {
     setSyncStatus('error');
     showToast('Failed to delete.','error');
@@ -15374,16 +15376,36 @@ function editSupplier(id) {
 
 function deleteCustomerConfirm(id){
   const c=STATE.customers?.[id];if(!c)return;
-  showModal(`🗑️ Delete "${esc(c.name)}"?`,`<p>This will permanently delete this customer. Cannot be undone.</p>`,[
+  showModal(`🗑️ Delete "${esc(c.name)}"?`,`<p>Removes this customer. It goes to the Recycle Bin and can be restored within ${BIN_RETENTION_DAYS} days.</p>`,[
     {label:'Cancel',action:'close',style:''},
     {label:'🗑️ Delete',action:`deleteCustomer('${id}')`,style:'btn-danger'}]);
 }
 async function deleteCustomer(id){
+  const c=STATE.customers?.[id];if(!c)return;
   setSyncStatus('saving');
-  try{await fsDelete(COLS.CUSTOMERS,id);delete STATE.customers?.[id];closeModal();setSyncStatus('synced');showToast('Customer deleted.','info');renderCustomers();}
+  try{
+    await sendToRecycleBin('customer', c, c.name);
+    await fsDelete(COLS.CUSTOMERS,id);delete STATE.customers?.[id];closeModal();setSyncStatus('synced');
+    showToast('Customer deleted — moved to Recycle Bin.','info');
+    logActivity('Customer deleted',`${c.name}`,'');
+    renderCustomers();
+  }
   catch(e){setSyncStatus('error');showToast('Failed.','error');}
 }
-// ── SUPPLIERS FULL ────────────────────────────────────────
+async function removeSupplier(id){
+  const s=STATE.suppliers?.[id];if(!s)return;
+  if((s.owedToSupplier||0)>0){showToast(`Cannot delete — ${fmt(s.owedToSupplier)} still owed to this supplier. Settle it first.`,'error');return;}
+  if(!confirm(`Delete "${s.name}"? It goes to the Recycle Bin and can be restored within ${BIN_RETENTION_DAYS} days.`))return;
+  setSyncStatus('saving');
+  try{
+    await sendToRecycleBin('supplier', s, s.name);
+    await fsDelete(COLS.SUPPLIERS,id);delete STATE.suppliers?.[id];setSyncStatus('synced');
+    showToast('Supplier deleted — moved to Recycle Bin.','info');
+    logActivity('Supplier deleted',`${s.name}`,'');
+    renderSuppliersFull();
+  }
+  catch(e){setSyncStatus('error');showToast('Failed.','error');}
+}
 function renderSuppliersFull(){
   const el=document.getElementById('suppliers-content');if(!el)return;
 
