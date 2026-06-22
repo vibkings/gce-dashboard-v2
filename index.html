@@ -10966,8 +10966,8 @@ function renderWarehouse() {
       <div style="display:flex;gap:8px;align-items:center">
         <div style="position:relative;max-width:300px">
           <span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--text3)">🔍</span>
-          <input type="text" placeholder="Search warehouse items..." value="${window._whSearch||''}"
-            oninput="window._whSearch=this.value;renderWarehouse()"
+          <input type="text" id="wh-search" placeholder="Search warehouse items..." value="${window._whSearch||''}"
+            oninput="window._whSearch=this.value;debouncedSearchRerender(this, renderWarehouse)"
             style="padding:8px 12px 8px 32px;border:1px solid var(--border);border-radius:var(--radius);font-size:13px;width:260px">
         </div>
         ${search?`<button class="btn btn-sm" onclick="window._whSearch='';renderWarehouse()" style="color:var(--danger);border-color:#f5c2c7">✕ Clear</button>`:''}
@@ -11161,9 +11161,14 @@ function renderTransferCartModal() {
       <input class="form-input" id="tr-waybill" placeholder="e.g. WB-2026-0451" value="${esc(window._trWaybill||'')}" onchange="window._trWaybill=this.value">
     </div>
     <div class="form-grid c2" style="margin-bottom:14px">
-      <div class="form-group" style="grid-column:1/-1">
+      <div class="form-group" style="grid-column:1/-1;position:relative">
         <label>Item</label>
-        <select class="form-input" id="tr-add-item">${opts||'<option value="">No items available</option>'}</select>
+        <input class="form-input" id="tr-item-search" placeholder="Type to search items..." autocomplete="off"
+          value="${esc(window._trItemSearchVal||'')}"
+          oninput="window._trItemSearchVal=this.value;trFilterItemDd(this.value)"
+          onfocus="trFilterItemDd(this.value)">
+        <input type="hidden" id="tr-add-item">
+        <div id="tr-item-dd" style="display:none;position:absolute;top:100%;left:0;right:0;background:var(--white);border:1px solid var(--border);border-radius:var(--radius-sm);box-shadow:var(--shadow-lg);max-height:220px;overflow-y:auto;z-index:9999;margin-top:2px"></div>
       </div>
       <div class="form-group"><label>Qty</label><input class="form-input" id="tr-add-qty" type="number" min="1" placeholder="0"></div>
       <div class="form-group" style="display:flex;align-items:flex-end"><button class="btn btn-primary" onclick="addToTransferCart()" style="width:100%">+ Add to cart</button></div>
@@ -11197,6 +11202,37 @@ function renderTransferCartModal() {
   }
 }
 
+function trFilterItemDd(val) {
+  const dd = document.getElementById('tr-item-dd'); if (!dd) return;
+  const term = (val||'').toLowerCase().trim();
+  const dir = window._trDirection; const isToShop = dir==='to_shop';
+  const cart = window._trCart||[];
+  const cartQtyById = {}; cart.forEach(c=>{cartQtyById[c.id]=(cartQtyById[c.id]||0)+c.qty;});
+  const sourceItems = isToShop ? Object.values(STATE.warehouse||{}) : Object.values(STATE.inventory||{});
+  if (!term) { dd.style.display='none'; return; }
+  const matches = sourceItems.filter(i=>(i.name||'').toLowerCase().includes(term)||(i.cat||'').toLowerCase().includes(term)).slice(0,30);
+  if (!matches.length) { dd.innerHTML='<div style="padding:10px 12px;color:var(--text3);font-size:12px">No matching items.</div>'; dd.style.display='block'; return; }
+  dd.innerHTML = matches.map(i=>{
+    const id=i._id||i.id; const avail=(i.qty||0)-(cartQtyById[id]||0);
+    return `<div data-id="${id}" data-name="${esc(i.name)}"
+      style="padding:9px 12px;cursor:${avail>0?'pointer':'not-allowed'};border-bottom:1px solid var(--border);display:flex;justify-content:space-between;font-size:13px;${avail<=0?'opacity:.5':''}"
+      ${avail>0?`onmouseover="this.style.background='var(--surface)'" onmouseout="this.style.background=''" onmousedown="trSelectItem(this)"`:''}>
+      <span><b>${esc(i.name)}</b> <span style="color:var(--text3);font-size:11px">${esc(i.cat||'')}</span></span>
+      <span style="color:${avail>0?'var(--success)':'#c0392b'};font-size:12px">${isToShop?'wh':'shop'}: ${avail}</span>
+    </div>`;
+  }).join('');
+  dd.style.display = 'block';
+}
+
+function trSelectItem(el) {
+  const name = el.dataset.name;
+  window._trItemSearchVal = name;
+  document.getElementById('tr-item-search').value = name;
+  document.getElementById('tr-add-item').value = el.dataset.id;
+  document.getElementById('tr-item-dd').style.display = 'none';
+  document.getElementById('tr-add-qty')?.focus();
+}
+
 function addToTransferCart() {
   const dir = window._trDirection;
   const isToShop = dir==='to_shop';
@@ -11214,6 +11250,7 @@ function addToTransferCart() {
   if (existing) existing.qty += qty;
   else cart.push({id, name:source.name, qty});
   showToast(`Added ${qty} × ${source.name} to cart.`,'success');
+  window._trItemSearchVal = '';
   renderTransferCartModal();
 }
 
@@ -12327,7 +12364,7 @@ function renderStockMgmt() {
     const invOpts=items.sort((a,b)=>(a.name||'').localeCompare(b.name||'')).map(i=>`<option value="${i._id||i.id}">${esc(i.name)} (${i.qty||0})</option>`).join('');
     const adjLog=Object.values(STATE.adjLog||{}).sort((a,b)=>(b.date||'').localeCompare(a.date||'')).slice(0,50);
     const adjRows=adjLog.map(l=>`<tr><td style="font-size:12px">${l.date||''}</td><td><b>${esc(l.itemName||'')}</b></td><td><span class="badge ${l.type==='add'?'badge-success':l.type==='remove'?'badge-danger':'badge-info'}">${l.type||''}</span></td><td style="text-align:center;font-weight:700">${l.qty||0}</td><td style="text-align:center">${l.newQty??'—'}</td><td style="font-size:12px;color:var(--text3)">${esc(l.reason||'')}</td><td style="font-size:11px;color:var(--text3)">${esc(l.by||'')}</td></tr>`).join('');
-    body=`<div class="form-card" style="max-width:520px;margin-bottom:1.5rem"><div class="form-title">Stock Adjustment</div><div class="form-grid c2"><div class="form-group" style="grid-column:1/-1"><label>Item *</label><select class="form-input" id="adj-item"><option value="">Select item...</option>${invOpts}</select></div><div class="form-group"><label>Type *</label><select class="form-input" id="adj-type"><option value="add">+ Add Stock</option><option value="remove">- Remove Stock</option><option value="count">Set Count</option></select></div><div class="form-group"><label>Quantity *</label><input class="form-input" id="adj-qty" type="number" min="0" placeholder="0"></div><div class="form-group" style="grid-column:1/-1"><label>Reason *</label><input class="form-input" id="adj-reason" placeholder="e.g. Stock count correction"></div></div><button class="btn btn-primary" onclick="saveStockAdjFromForm()">Save Adjustment</button></div><div class="sec-title" style="margin-bottom:.75rem">Adjustment Log</div><div class="tbl-wrap"><table><thead><tr><th>Date</th><th>Item</th><th>Type</th><th style="text-align:center">Qty</th><th style="text-align:center">New Qty</th><th>Reason</th><th>By</th></tr></thead><tbody>${adjRows||'<tr><td colspan="7"><div class="empty-state"><div class="empty-state-icon">📋</div><div>No adjustments yet</div></div></td></tr>'}</tbody></table></div>`;
+    body=`<div class="form-card" style="max-width:520px;margin-bottom:1.5rem"><div class="form-title">Stock Adjustment</div><div class="form-grid c2"><div class="form-group" style="grid-column:1/-1;position:relative"><label>Item *</label><input class="form-input" id="adj-item-search" placeholder="Type to search items..." autocomplete="off" value="${esc(window._adjItemSearchVal||'')}" oninput="window._adjItemSearchVal=this.value;adjFilterItemDd(this.value)" onfocus="adjFilterItemDd(this.value)"><input type="hidden" id="adj-item"><div id="adj-item-dd" style="display:none;position:absolute;top:100%;left:0;right:0;background:var(--white);border:1px solid var(--border);border-radius:var(--radius-sm);box-shadow:var(--shadow-lg);max-height:220px;overflow-y:auto;z-index:9999;margin-top:2px"></div></div><div class="form-group"><label>Type *</label><select class="form-input" id="adj-type"><option value="add">+ Add Stock</option><option value="remove">- Remove Stock</option><option value="count">Set Count</option></select></div><div class="form-group"><label>Quantity *</label><input class="form-input" id="adj-qty" type="number" min="0" placeholder="0"></div><div class="form-group" style="grid-column:1/-1"><label>Reason *</label><input class="form-input" id="adj-reason" placeholder="e.g. Stock count correction"></div></div><button class="btn btn-primary" onclick="saveStockAdjFromForm()">Save Adjustment</button></div><div class="sec-title" style="margin-bottom:.75rem">Adjustment Log</div><div class="tbl-wrap"><table><thead><tr><th>Date</th><th>Item</th><th>Type</th><th style="text-align:center">Qty</th><th style="text-align:center">New Qty</th><th>Reason</th><th>By</th></tr></thead><tbody>${adjRows||'<tr><td colspan="7"><div class="empty-state"><div class="empty-state-icon">📋</div><div>No adjustments yet</div></div></td></tr>'}</tbody></table></div>`;
   } else if(tab==='edit'){
     const rows=items.sort((a,b)=>(a.name||'').localeCompare(b.name||'')).map(i=>`<tr><td><b>${esc(i.name)}</b></td><td style="font-size:12px;color:var(--text3)">${esc(i.cat||'—')}</td><td class="td-right">${fmt(i.costPrice||i.cost||0)}</td><td class="td-right">${fmt(i.sellPrice||i.sell||0)}</td><td style="text-align:center">${i.minQty||5}</td><td><button class="btn btn-sm" onclick="showEditItemModal('${i._id||i.id}')" style="color:var(--primary);border-color:#b6d4fe">Edit</button></td></tr>`).join('');
     body=`<div class="tbl-wrap"><table><thead><tr><th>Name</th><th>Category</th><th class="td-right">Cost (N)</th><th class="td-right">Sell (N)</th><th style="text-align:center">Min Qty</th><th></th></tr></thead><tbody>${rows||'<tr><td colspan="6"><div class="empty-state"><div class="empty-state-icon">📦</div><div>No inventory items</div></div></td></tr>'}</tbody></table></div>`;
@@ -12338,12 +12375,40 @@ function renderStockMgmt() {
   </div>${body}`;
 }
 
+function adjFilterItemDd(val) {
+  const dd = document.getElementById('adj-item-dd'); if (!dd) return;
+  const term = (val||'').toLowerCase().trim();
+  if (!term) { dd.style.display='none'; return; }
+  const matches = Object.values(STATE.inventory||{}).filter(i=>(i.name||'').toLowerCase().includes(term)||(i.cat||'').toLowerCase().includes(term)).slice(0,30);
+  if (!matches.length) { dd.innerHTML='<div style="padding:10px 12px;color:var(--text3);font-size:12px">No matching items.</div>'; dd.style.display='block'; return; }
+  dd.innerHTML = matches.map(i=>{
+    const id=i._id||i.id;
+    return `<div data-id="${id}" data-name="${esc(i.name)}"
+      style="padding:9px 12px;cursor:pointer;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;font-size:13px"
+      onmouseover="this.style.background='var(--surface)'" onmouseout="this.style.background=''" onmousedown="adjSelectItem(this)">
+      <span><b>${esc(i.name)}</b> <span style="color:var(--text3);font-size:11px">${esc(i.cat||'')}</span></span>
+      <span style="color:var(--text3);font-size:12px">Qty: ${i.qty||0}</span>
+    </div>`;
+  }).join('');
+  dd.style.display = 'block';
+}
+
+function adjSelectItem(el) {
+  const name = el.dataset.name;
+  window._adjItemSearchVal = name;
+  document.getElementById('adj-item-search').value = name;
+  document.getElementById('adj-item').value = el.dataset.id;
+  document.getElementById('adj-item-dd').style.display = 'none';
+  document.getElementById('adj-qty')?.focus();
+}
+
 async function saveStockAdjFromForm(){
   const id=document.getElementById('adj-item')?.value;
   const type=document.getElementById('adj-type')?.value||'add';
   const qty=parseInt(document.getElementById('adj-qty')?.value)||0;
   const reason=document.getElementById('adj-reason')?.value.trim();
   if(!id||qty<1||!reason){showToast('Fill all fields.','error');return;}
+  window._adjItemSearchVal = '';
   await saveStockAdjById(id,type,qty,reason);
 }
 
