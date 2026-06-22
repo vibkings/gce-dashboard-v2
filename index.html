@@ -7673,7 +7673,8 @@ function renderPurchases() {
   // Includes pending (not-yet-received) items too, so a PO shows up here in
   // full the moment it's created — not just once everything has arrived.
   // Pending Deliveries above remains the place to actually receive items.
-  const searchVal = document.getElementById('purch-history-search')?.value?.toLowerCase()||'';
+  const searchValRaw = document.getElementById('purch-history-search')?.value||'';
+  const searchVal = searchValRaw.toLowerCase();
   const histGroupsMap = {};
   purchases.forEach(p=>{
     if (p.fromReturn) return; // a received return-replacement — keeps the original PO frozen, doesn't merge back in
@@ -7967,7 +7968,7 @@ function renderPurchases() {
         </div>
         <div class="search-wrap" style="width:240px">
           <span class="search-icon">🔍</span>
-          <input type="text" class="form-input" id="purch-history-search" placeholder="Search purchases..." oninput="renderPurchases()">
+          <input type="text" class="form-input" id="purch-history-search" placeholder="Search purchases..." value="${esc(searchValRaw)}" oninput="debouncedSearchRerender(this, renderPurchases)">
         </div>
       </div>
 
@@ -9332,7 +9333,7 @@ function renderCustomers(){
     </div>
     <div style="display:flex;gap:8px;margin-bottom:1rem">
       <div class="search-wrap" style="flex:1"><span class="search-icon">🔍</span>
-        <input class="form-input" id="cust-search" placeholder="Search customers..." oninput="renderCustomers()" value="${searchTerm}">
+        <input class="form-input" id="cust-search" placeholder="Search customers..." oninput="debouncedSearchRerender(this, renderCustomers)" value="${searchTerm}">
       </div>
       <button class="btn btn-primary" onclick="showAddCustModal()">+ Add Customer</button>
     </div>
@@ -9749,6 +9750,42 @@ function closeModal() {
 // ════════════════════════════════════════════════════════════
 // TOAST NOTIFICATIONS
 // ════════════════════════════════════════════════════════════
+
+// Search inputs across this app live inside functions that replace the
+// WHOLE page's innerHTML on every keystroke — destroying and recreating the
+// <input> each time, which throws focus/cursor to the end (feels like the
+// page "reloads" while typing) and, if the rebuilt input has no value=
+// binding, can wipe what was just typed entirely. This debounces the
+// re-render and restores focus + cursor position afterward.
+function debouncedSearchRerender(inputEl, renderFn, delay=300) {
+  if (!inputEl) { renderFn(); return; }
+  const id = inputEl.id;
+  const selStart = inputEl.selectionStart;
+  const selEnd = inputEl.selectionEnd;
+  clearTimeout(window._searchDebounceTimers?.[id||'_anon']);
+  if (!window._searchDebounceTimers) window._searchDebounceTimers = {};
+  window._searchDebounceTimers[id||'_anon'] = setTimeout(()=>{
+    renderFn();
+    const restore = () => {
+      const el = id ? document.getElementById(id) : null;
+      if (el) { el.focus(); try { el.setSelectionRange(selStart, selEnd); } catch(e) {} }
+    };
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(restore); else setTimeout(restore, 0);
+  }, delay);
+}
+
+// Re-rendering a whole tab/page after a quick in-place action (like saving
+// one stock adjustment) replaces content the user is currently scrolled
+// past, which shifts everything below and visibly "jumps" the page even
+// though scrollTop itself didn't change. This restores the exact scroll
+// position of the main scrollable container after such a re-render.
+function preserveScrollAndRerender(renderFn) {
+  const main = document.querySelector('.main');
+  const y = main ? main.scrollTop : (window.scrollY||0);
+  renderFn();
+  const restore = () => { if (main) main.scrollTop = y; else window.scrollTo(0, y); };
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(restore); else setTimeout(restore, 0);
+}
 
 function showToast(msg, type='info') {
   const container = document.getElementById('toast');
@@ -11137,10 +11174,27 @@ function renderTransferCartModal() {
     `:`<div style="color:var(--text3);font-size:13px;padding:10px 0">Cart is empty — add items above.</div>`}
     <div class="form-group"><label>Note</label><input class="form-input" id="tr-cart-note" placeholder="Optional" value="${esc(window._trNote||'')}" onchange="window._trNote=this.value"></div>
   `;
-  showModal(title, body, [
+  const buttons = [
     {label:'Cancel', action:'close', style:''},
     {label:`${isToShop?'🏭→📦':'📦→🏭'} Transfer${cart.length?` (${cart.length})`:''}`, action:'commitTransferCart()', style:'btn-primary'}
-  ]);
+  ];
+
+  // Cart add/remove/qty-change re-renders happen a LOT in quick succession.
+  // showModal() tears down and rebuilds the entire overlay every time, which
+  // resets scroll position and visibly "jumps" — if the modal is already
+  // open, just refresh its body/footer content in place instead.
+  const existingBody = document.querySelector('#modal-root .modal-body');
+  const existingFooter = document.querySelector('#modal-root .modal-footer');
+  if (existingBody) {
+    existingBody.innerHTML = body;
+    if (existingFooter) {
+      existingFooter.innerHTML = buttons.map(b => b.action==='close'
+        ? `<button class="btn" onclick="closeModal()">${b.label}</button>`
+        : `<button class="btn ${b.style||''}" onclick="${b.action}">${b.label}</button>`).join('');
+    }
+  } else {
+    showModal(title, body, buttons);
+  }
 }
 
 function addToTransferCart() {
@@ -12314,7 +12368,7 @@ async function saveStockAdjById(id,type,qty,reason){
     }
     const logId=uid();const logEntry={id:logId,itemId:id,itemName:item.name,type,qty,newQty,reason,date,month,by:STATE.user?.name};
     await fsSave('v2_adjLog',logId,logEntry);if(!STATE.adjLog)STATE.adjLog={};STATE.adjLog[logId]={...logEntry,_id:logId,_savedAt:Date.now()};
-    setSyncStatus('synced');showToast(`Stock adjusted: ${item.name} → ${newQty}`,'success');renderStockMgmt();updateInventoryBadge();
+    setSyncStatus('synced');showToast(`Stock adjusted: ${item.name} → ${newQty}`,'success');preserveScrollAndRerender(renderStockMgmt);updateInventoryBadge();
     logActivity('Stock adjustment',`${item.name}: ${type} ${qty} → ${newQty} (${reason})`,'');
   }catch(e){setSyncStatus('error');showToast('Failed.','error');}
 }
@@ -13117,7 +13171,7 @@ function renderSupplierOverview() {
     <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px 16px">
       <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--brand);margin-bottom:12px;display:flex;align-items:center;gap:6px"><span style="width:3px;height:14px;background:var(--brand);border-radius:2px;display:inline-block"></span>📋 SUPPLIER PERFORMANCE</div>
       <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
-        <div class="search-wrap" style="flex:1;max-width:280px"><span class="search-icon">🔍</span><input class="form-input" placeholder="Search suppliers..." value="${window._supOvSearch||''}" oninput="window._supOvSearch=this.value;renderSupplierOverview()"></div>
+        <div class="search-wrap" style="flex:1;max-width:280px"><span class="search-icon">🔍</span><input class="form-input" id="supov-search" placeholder="Search suppliers..." value="${esc(window._supOvSearch||'')}" oninput="window._supOvSearch=this.value;debouncedSearchRerender(this, renderSupplierOverview)"></div>
         ${['all','balance','cleared','active'].map(f=>`<button class="btn btn-sm ${filter===f?'btn-primary':''}" onclick="window._supOvFilter='${f}';renderSupplierOverview()">${f==='all'?'All':f==='balance'?'Has Balance':f==='cleared'?'Cleared':'Active'}</button>`).join('')}
       </div>
       ${rows?`<div class="tbl-wrap" style="border-radius:var(--radius);border:1px solid var(--border)"><table><thead><tr><th>SUPPLIER</th><th>PHONE</th><th class="td-right">TOTAL PURCHASES</th><th class="td-right">TOTAL PAID</th><th class="td-right">OUTSTANDING</th><th>LAST PURCHASE</th><th style="text-align:center">INVOICES</th><th style="text-align:center">PENDING</th><th>STATUS</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`:'<div class="empty-state"><div class="empty-state-icon">🚛</div><div>No suppliers match filter.</div></div>'}
@@ -13348,8 +13402,8 @@ function renderInvValuation() {
     <td><b>${esc(i.name)}</b></td>
     <td style="font-size:12px;color:var(--text3)">${esc(i.cat||'—')}</td>
     <td style="text-align:center;font-weight:700">${i.qty}</td>
-    <td class="td-right" style="text-decoration:line-through;color:var(--text3)">${fmt(i.cost)}</td>
-    <td class="td-right" style="text-decoration:line-through;color:var(--text3)">${fmt(i.sell)}</td>
+    <td class="td-right" style="font-family:var(--font-mono);font-weight:600;color:var(--text2)">${fmt(i.cost)}</td>
+    <td class="td-right" style="font-family:var(--font-mono);font-weight:600;color:var(--text2)">${fmt(i.sell)}</td>
     <td class="td-right" style="color:#0ea5e9;font-weight:600">${fmt(i.costVal)}</td>
     <td class="td-right" style="color:#6366f1;font-weight:600">${fmt(i.sellVal)}</td>
     <td class="td-right" style="color:var(--success);font-weight:700">${fmt(i.potProfit)}</td>
@@ -16078,7 +16132,7 @@ function renderSuppliersFull(){
         </div>
         <div class="search-wrap" style="max-width:280px">
           <span class="search-icon">🔍</span>
-          <input class="form-input" placeholder="Search suppliers..." value="${window._supSearch||''}" oninput="window._supSearch=this.value;renderSuppliersFull()">
+          <input class="form-input" id="sup-search" placeholder="Search suppliers..." value="${esc(window._supSearch||'')}" oninput="window._supSearch=this.value;debouncedSearchRerender(this, renderSuppliersFull)">
         </div>
       </div>
       ${rows?`<div class="tbl-wrap" style="border-radius:var(--radius);border:1px solid var(--border)">
