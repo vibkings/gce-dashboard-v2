@@ -14318,32 +14318,24 @@ function renderCustomersFull(){
     </div>`:'<div class="empty-state"><div class="empty-state-icon">👥</div><div>No customers yet. Click + Add customer.</div></div>'}`;
 }
 
-async function renderCustomerProfile(id){
+function renderCustomerProfile(id){
   const el=document.getElementById('customers-content');if(!el)return;
   const c=STATE.customers?.[id];
   if(!c){window._custProfileId=null;renderCustomersFull();return;}
 
-  // Ensure we have all monthly sales loaded for this customer
-  // Load last 12 months (covers most cases) if we haven't already
-  const _profNow=new Date();
-  const monthsToCheck=[];
-  for(let i=0;i<12;i++){
-    const d=new Date(_profNow.getFullYear(),_profNow.getMonth()-i,1);
-    monthsToCheck.push({y:d.getFullYear(),m:d.getMonth()+1});
-  }
-  // Load any months not yet in STATE (non-blocking for first render, then re-render)
-  const missingMonths=monthsToCheck.filter(({y,m})=>{
-    const key=`v2_sales_${y}_${String(m).padStart(2,'0')}`;
-    return !window._loadedSalesMonths?.has(key);
-  });
-  if(missingMonths.length){
-    if(!window._loadedSalesMonths)window._loadedSalesMonths=new Set();
-    // Load all missing months then re-render
-    await Promise.all(missingMonths.map(async({y,m})=>{
-      const key=`v2_sales_${y}_${String(m).padStart(2,'0')}`;
-      window._loadedSalesMonths.add(key);
-      try{await loadMonthlySales(y,m);}catch(e){}
-    }));
+  // Same concern as Customer Overview/P&L/Product Report/Monthly Summary —
+  // sales are only guaranteed loaded for the current+previous month by
+  // default. This used to load just the last 12 months and block the
+  // render until done; now it uses the same shared full-history loader
+  // (covers any customer's entire history, not just 12 months) and renders
+  // immediately with whatever's available, re-rendering once loaded.
+  const historyLoading = !window._allSalesHistoryLoaded;
+  if (historyLoading) {
+    _ensureFullSalesHistory().then(()=>{
+      if (window._custProfileId===id && document.getElementById('page-customers')?.classList.contains('active')) {
+        renderCustomerProfile(id);
+      }
+    });
   }
 
   const tabs=`<div class="subtabs">
@@ -14505,6 +14497,7 @@ async function renderCustomerProfile(id){
   }).join('');
 
   el.innerHTML=`${tabs}
+    ${historyLoading?`<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:var(--radius);padding:10px 14px;margin-bottom:1rem;font-size:12px;color:#1d4ed8;display:flex;align-items:center;gap:8px">⏳ Loading full purchase history — totals below will update automatically once this finishes.</div>`:''}
     <!-- Profile header -->
     <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--radius-lg);padding:16px 20px;margin-top:12px;margin-bottom:1.25rem">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:14px">
@@ -15401,9 +15394,15 @@ function renderSuppliersFull(){
   const sups=Object.values(STATE.suppliers||{}).filter(s=>!s._deleted&&(!search||(s.name||'').toLowerCase().includes(search)||(s.contact||'').toLowerCase().includes(search)||(s.phone||'').toLowerCase().includes(search))).sort((a,b)=>(a.name||'').localeCompare(b.name||''));
 
   const rows=sups.map(s=>{
-    const orders=Object.values(STATE.purchases||{}).filter(p=>p.supplier===s.name).length;
-    const totalBought=Object.values(STATE.purchases||{}).filter(p=>p.supplier===s.name).reduce((a,p)=>a+(p.totalCost||0),0);
-    const owed=s.owedToSupplier||0;
+    const supPurchases=Object.values(STATE.purchases||{}).filter(p=>p.supplier===s.name);
+    const supPending=Object.values(STATE.pendingDeliveries||{}).filter(p=>p.supplier===s.name);
+    // Includes pending POs' value/count too — the money was already
+    // committed at PO creation regardless of physical delivery status
+    // (same principle as the already-fixed Supplier Overview/Purchases page).
+    const pendingVal=supPending.reduce((a,p)=>a+Math.max(0,(p.orderedQty||0)-(p.receivedQty||0))*(p.costPrice||0),0);
+    const totalBought=supPurchases.reduce((a,p)=>a+(p.totalCost||0),0)+pendingVal;
+    const orders=new Set([...supPurchases.map(p=>p.purchaseInvoiceNum),...supPending.map(p=>p.purchaseInvoiceNum)].filter(Boolean)).size;
+    const owed = s.owedToSupplier||0;
     return`<tr>
       <td><b style="cursor:pointer;color:var(--brand)" onclick="window._supProfileId='${s._id||s.id}';renderSuppliersFull()">${esc(s.name)}</b></td>
       <td style="font-size:12px;color:var(--text3)">${esc(s.contact||'—')}</td>
@@ -15489,14 +15488,24 @@ function renderSupplierProfile(id){
   const el=document.getElementById('suppliers-content');if(!el)return;
   const s=STATE.suppliers?.[id];if(!s){window._supProfileId=null;renderSuppliersFull();return;}
   const purchases=Object.values(STATE.purchases||{}).filter(p=>p.supplier===s.name).sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+  const pendingForSup=Object.values(STATE.pendingDeliveries||{}).filter(p=>p.supplier===s.name);
   const payments=Object.values(STATE.cashflow||{}).filter(c=>c.supplierId===id&&c.cat==='Supplier Payment').sort((a,b)=>(b.date||'').localeCompare(a.date||''));
   const deposits=Object.values(STATE.cashflow||{}).filter(c=>c.supplierId===id&&c.cat==='Supplier Deposit').sort((a,b)=>(b.date||'').localeCompare(a.date||''));
-  const totalPurchased=purchases.reduce((a,p)=>a+(p.totalCost||0),0);
-  const totalPaid=payments.reduce((a,p)=>a+(p.amount||0),0);
+  // Includes pending POs' value — money already committed at creation,
+  // same principle as Supplier Overview/Purchases page/Suppliers list above.
+  const pendingVal=pendingForSup.reduce((a,p)=>a+Math.max(0,(p.orderedQty||0)-(p.receivedQty||0))*(p.costPrice||0),0);
+  const totalPurchased=purchases.reduce((a,p)=>a+(p.totalCost||0),0)+pendingVal;
+  const totalOrders=new Set([...purchases.map(p=>p.purchaseInvoiceNum),...pendingForSup.map(p=>p.purchaseInvoiceNum)].filter(Boolean)).size;
+  // Total Paid — previously only summed the dedicated "Supplier Payment"
+  // category, missing Restock cashflow entirely (the cash/transfer/pos
+  // paid directly at PO creation, which is most of what actually gets paid
+  // for a typical purchase). Matched by supplier name since Restock entries
+  // don't carry supplierId.
+  const restockPaid=Object.values(STATE.cashflow||{}).filter(c=>c.type==='out'&&c.cat==='Restock'&&c.supplier===s.name).reduce((a,c)=>a+(c.amount||0),0);
+  const totalPaid=payments.reduce((a,p)=>a+(p.amount||0),0)+restockPaid;
   const totalDeposited=deposits.reduce((a,d)=>a+(d.amount||0),0);
   const depositBalance=totalDeposited-0; // deposits available as credit
   const amountOwed=s.owedToSupplier||0;
-  const netPayable=Math.max(0,amountOwed-depositBalance);
   const lastPurchase=purchases[0]?.date||'—';
   const initials=(s.name||'?').split(' ').map(w=>w[0]).slice(0,2).join('').toUpperCase();
 
@@ -15528,7 +15537,7 @@ function renderSupplierProfile(id){
         <div><div style="color:var(--text3);text-transform:uppercase;font-size:10px;letter-spacing:.05em;margin-bottom:3px">CONTACT PERSON</div><b>${esc(s.contact||'—')}</b></div>
         <div><div style="color:var(--text3);text-transform:uppercase;font-size:10px;letter-spacing:.05em;margin-bottom:3px">ADDRESS</div><b>${esc(s.address||'—')}</b></div>
         <div><div style="color:var(--text3);text-transform:uppercase;font-size:10px;letter-spacing:.05em;margin-bottom:3px">LAST PURCHASE</div><b>${lastPurchase}</b></div>
-        <div><div style="color:var(--text3);text-transform:uppercase;font-size:10px;letter-spacing:.05em;margin-bottom:3px">TOTAL ORDERS</div><b>${purchases.length}</b></div>
+        <div><div style="color:var(--text3);text-transform:uppercase;font-size:10px;letter-spacing:.05em;margin-bottom:3px">TOTAL ORDERS</div><b>${totalOrders}</b></div>
         <div><div style="color:var(--text3);text-transform:uppercase;font-size:10px;letter-spacing:.05em;margin-bottom:3px">OPENING BALANCE</div><b style="color:${(s.openingBalance||0)>0?'var(--warning)':'inherit'}">${(s.openingBalance||0)>0?fmt(s.openingBalance):'—'}</b></div>
       </div>
     </div>
@@ -15564,7 +15573,7 @@ function renderSupplierProfile(id){
       </div>
       <div class="kpi-card" style="border-left:3px solid var(--warning)">
         <div class="kpi-label" style="color:var(--warning)">ORDERS</div>
-        <div class="kpi-value" style="font-size:26px;font-weight:800;color:var(--warning)">${purchases.length}</div>
+        <div class="kpi-value" style="font-size:26px;font-weight:800;color:var(--warning)">${totalOrders}</div>
         <div class="kpi-sub">Purchase invoices</div>
       </div>
     </div>
@@ -16428,6 +16437,99 @@ document.addEventListener('click', e => {
 // ════════════════════════════════════════════════════════════
 // #2 — SUPPLIER DEPOSITS
 // ════════════════════════════════════════════════════════════
+// Pay down what's owed to a supplier directly — separate from "Add deposit"
+// above (which is an advance, and happens to auto-reduce owed if any exists
+// at the time). This is referenced from both Supplier Overview and Supplier
+// Profile's "Pay supplier" button, tagged 'Supplier Payment' so it's
+// distinguishable from a deposit/advance in reports.
+function showSupplierPayModal(supId) {
+  const s = STATE.suppliers?.[supId];
+  if (!s) { showToast('Supplier not found.', 'error'); return; }
+  const owed = s.owedToSupplier||0;
+  const banks = Object.values(STATE.banks || {}).filter(b => !b._deleted);
+  const bankOpts = banks.map(b => `<option value="${esc(b.name)}">${esc(b.name)}${b.acct?' · '+b.acct:''}</option>`).join('');
+
+  showModal(`💳 Pay Supplier — ${esc(s.name)}`,
+    `<div style="background:var(--surface);border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:13px">
+      <div style="color:var(--text3);margin-bottom:2px">Amount currently owed</div>
+      <div style="font-weight:800;font-size:18px;color:var(--danger)">${fmt(owed)}</div>
+    </div>
+    <div class="form-grid c2">
+      <div class="form-group">
+        <label>Amount (₦) <span class="req">*</span></label>
+        <input class="form-input" id="spay-amount" type="number" min="1" max="${owed}" placeholder="0" value="${owed}">
+      </div>
+      <div class="form-group">
+        <label>Date</label>
+        <input class="form-input" id="spay-date" type="date" value="${_todayLocalISO()}">
+      </div>
+      <div class="form-group">
+        <label>Payment mode</label>
+        <select class="form-input" id="spay-mode" onchange="document.getElementById('spay-bank-row').style.display=this.value==='transfer'?'block':'none'">
+          <option value="cash">Cash</option>
+          <option value="transfer">Bank Transfer</option>
+          <option value="pos">POS</option>
+        </select>
+      </div>
+      <div class="form-group" id="spay-bank-row" style="display:none">
+        <label>Bank</label>
+        <select class="form-input" id="spay-bank">${bankOpts||'<option value="">No banks added</option>'}</select>
+      </div>
+      <div class="form-group" style="grid-column:1/-1">
+        <label>Note (optional)</label>
+        <input class="form-input" id="spay-note" placeholder="e.g. Settling June balance">
+      </div>
+    </div>`,
+    [
+      {label:'Cancel', action:'close', style:''},
+      {label:'💳 Record Payment', action:`saveSupplierPay('${supId}')`, style:'btn-primary'}
+    ]
+  );
+}
+
+async function saveSupplierPay(supId) {
+  const s = STATE.suppliers?.[supId];
+  if (!s) return;
+  const owed = s.owedToSupplier||0;
+  const amount = parseFloat(document.getElementById('spay-amount')?.value) || 0;
+  if (!amount || amount <= 0) { showToast('Enter a valid amount.', 'error'); return; }
+  if (amount > owed) { showToast(`Cannot pay more than what's owed (${fmt(owed)}).`,'error'); return; }
+  const date = document.getElementById('spay-date')?.value || _todayLocalISO();
+  const mode = document.getElementById('spay-mode')?.value || 'cash';
+  const bankName = document.getElementById('spay-bank')?.value || '';
+  const note = document.getElementById('spay-note')?.value?.trim() || '';
+  const month = date.slice(0,7);
+
+  setSyncStatus('saving');
+  try {
+    const cfId = uid();
+    const cf = {
+      id: cfId, type: 'out', cat: 'Supplier Payment',
+      desc: `Payment to ${s.name}${note?' — '+note:''}`,
+      amount, payMode: mode, bankName, supplierId: supId,
+      supplierName: s.name, date, month, by: STATE.user?.name || ''
+    };
+    await fsSave(COLS.CASHFLOW, cfId, cf);
+    if (!STATE.cashflow) STATE.cashflow = {};
+    STATE.cashflow[cfId] = {...cf, _id: cfId, _savedAt:Date.now()};
+
+    const newOwed = Math.max(0, owed - amount);
+    const updatedSup = {...s, owedToSupplier: newOwed, _id: supId};
+    await fsSave(COLS.SUPPLIERS, supId, updatedSup);
+    STATE.suppliers[supId] = updatedSup;
+
+    closeModal();
+    setSyncStatus('synced');
+    showToast(`✅ Payment of ${fmt(amount)} recorded for ${s.name}.`, 'success');
+    logActivity('Supplier Payment', `${s.name} — ${fmt(amount)} (${mode})`, note.slice(0,40));
+    if (typeof renderSuppliersFull === 'function') renderSuppliersFull();
+    renderOverviewIfActive();
+  } catch(e) {
+    setSyncStatus('error');
+    showToast('Failed: ' + e.message, 'error');
+  }
+}
+
 function showSupplierDepositModal(supId) {
   const s = STATE.suppliers?.[supId];
   if (!s) { showToast('Supplier not found.', 'error'); return; }
