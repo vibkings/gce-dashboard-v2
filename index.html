@@ -4766,7 +4766,7 @@ function showReturnModal(invoiceNum) {
     invoiceNum, custId: sample.custId||null, custName: sample.printName||sample.custName||'Walk-in',
     items, selectedSaleId: items[0].saleId, qty:1,
     refundType:'cash', bankName:'', reason:'',
-    exNewItemId:'', exNewPrice:0, exSettleMode:'cash', exBankName:''
+    exNewItemId:'', exNewPrice:0, exSettleMode:'cash', exBankName:'', editingReturnId:null
   };
   renderReturnModal();
 }
@@ -4892,10 +4892,44 @@ function renderReturnModal() {
     `:''}
     <div class="form-group" style="margin-bottom:6px"><label>Reason (optional)</label><input class="form-input" id="ret-reason" value="${esc(st.reason)}" onchange="window._retState.reason=this.value"></div>
   `;
-  showModal('↩ Return Item', body, [
+  showModal(st.editingReturnId?'✏ Edit Return':'↩ Return Item', body, [
     {label:'Cancel', action:'close', style:''},
-    {label:'✓ Confirm Return', action:'confirmSalesReturn()', style:'btn-primary'}
+    {label:st.editingReturnId?'💾 Save Changes':'✓ Confirm Return', action:'confirmSalesReturn()', style:'btn-primary'}
   ]);
+}
+
+// Undoes whatever inventory/cashflow/customer-balance changes a return
+// record made, using the linkage metadata stored on it at creation time.
+// Used by editReturn's save path so an edit never leaves the OLD version's
+// side effects sitting alongside the new ones — same "frozen originals,
+// side-effects must follow" principle used for purchases/pending deliveries.
+async function _reverseSalesReturnEffects(r) {
+  if (r.itemId && r.invReturnQty) {
+    await _safeAdjustInventory(r.itemId, -r.invReturnQty);
+  }
+  if (r.exchangedForItemId && r.exNewQtyDeducted) {
+    await _safeAdjustInventory(r.exchangedForItemId, r.exNewQtyDeducted);
+  }
+  if (Array.isArray(r.cashflowIds)) {
+    for (const cfId of r.cashflowIds) {
+      if (STATE.cashflow?.[cfId]) {
+        await fsDelete('v2_cashflow', cfId);
+        delete STATE.cashflow[cfId];
+      }
+    }
+  }
+  if (r.depositCfId && STATE.cashflow?.[r.depositCfId]) {
+    await fsDelete('v2_cashflow', r.depositCfId);
+    delete STATE.cashflow[r.depositCfId];
+  }
+  if (r.creditDelta && r.custId) {
+    const cust = STATE.customers?.[r.custId];
+    if (cust) {
+      const updCust = {...cust, creditBalance:(cust.creditBalance||0)-r.creditDelta};
+      await fsSave(COLS.CUSTOMERS, r.custId, updCust);
+      STATE.customers[r.custId] = {...updCust,_id:r.custId,_savedAt:Date.now()};
+    }
+  }
 }
 
 async function confirmSalesReturn() {
@@ -4960,6 +4994,20 @@ async function confirmSalesReturn() {
 
   setSyncStatus('saving');
   try {
+    // Editing an existing return: undo everything the OLD version did
+    // before applying the new values below, so nothing from the previous
+    // version lingers (old inventory restock, old cashflow entry, old
+    // balance change).
+    if (st.editingReturnId) {
+      const oldRecord = STATE.salesReturns?.[st.editingReturnId];
+      if (oldRecord) await _reverseSalesReturnEffects(oldRecord);
+    }
+
+    let cashflowIds = [];
+    let creditDelta = 0;
+    let depositCfId = null;
+    let exNewQtyDeducted = 0;
+
     // Returned item always goes back into inventory, regardless of refund type
     if (item.itemId) {
       await _safeAdjustInventory(item.itemId, st.qty);
@@ -4974,6 +5022,7 @@ async function confirmSalesReturn() {
       await fsSave(COLS.CASHFLOW, cfId, cf);
       if(!STATE.cashflow)STATE.cashflow={};
       STATE.cashflow[cfId]={...cf,_id:cfId,_savedAt:Date.now()};
+      cashflowIds.push(cfId);
 
     } else if (st.refundType==='credit') {
       // Store credit: pay down what the customer owes first; any leftover
@@ -4984,6 +5033,7 @@ async function confirmSalesReturn() {
       if (cust) {
         const newBal = Math.max(0,(cust.creditBalance||0)-refundAmt);
         const excess = Math.max(0, refundAmt-(cust.creditBalance||0));
+        creditDelta = newBal-(cust.creditBalance||0);
         const updCust = {...cust, creditBalance:newBal};
         await fsSave(COLS.CUSTOMERS, st.custId, updCust);
         STATE.customers[st.custId] = {...updCust,_id:st.custId,_savedAt:Date.now()};
@@ -4994,11 +5044,13 @@ async function confirmSalesReturn() {
             amount:excess, custId:st.custId, custName:st.custName, date, month, invoiceNum:st.invoiceNum, by:STATE.user?.name};
           await fsSave(COLS.CASHFLOW, depId, dep);
           STATE.cashflow[depId]={...dep,_id:depId,_savedAt:Date.now()};
+          depositCfId = depId;
         }
       }
 
     } else if (st.refundType==='exchange') {
-      await _safeAdjustInventory(st.exNewItemId, -st.qty);
+      const deductResult = await _safeAdjustInventory(st.exNewItemId, -st.qty);
+      exNewQtyDeducted = Math.abs(deductResult.applied||0);
       const newAmount = Math.round((st.exNewPrice||0)*st.qty);
       const exDiff = newAmount - refundAmt;
       if (exDiff!==0) {
@@ -5006,6 +5058,7 @@ async function confirmSalesReturn() {
           const cust = STATE.customers?.[st.custId];
           const newBal = (cust?.creditBalance||0)+exDiff;
           if (cust) {
+            creditDelta = exDiff;
             const updCust={...cust, creditBalance:newBal};
             await fsSave(COLS.CUSTOMERS, st.custId, updCust);
             STATE.customers[st.custId]={...updCust,_id:st.custId,_savedAt:Date.now()};
@@ -5023,6 +5076,7 @@ async function confirmSalesReturn() {
           STATE.cashflow[cf1.id]={...cf1,_id:cf1.id,_savedAt:Date.now()};
           await fsSave(COLS.CASHFLOW, cf2.id, cf2);
           STATE.cashflow[cf2.id]={...cf2,_id:cf2.id,_savedAt:Date.now()};
+          cashflowIds.push(cf1.id, cf2.id);
         } else {
           const cfId=uid();
           const cf={id:cfId, type: exDiff>0?'in':'out',
@@ -5035,27 +5089,41 @@ async function confirmSalesReturn() {
             custId:st.custId||null, custName:st.custName, date, month, invoiceNum:st.invoiceNum, by:STATE.user?.name};
           await fsSave(COLS.CASHFLOW, cfId, cf);
           STATE.cashflow[cfId]={...cf,_id:cfId,_savedAt:Date.now()};
+          cashflowIds.push(cfId);
         }
       }
     }
 
     // Logged for Returns Tracker regardless of type, and used to cap future
-    // "already returned" qty for this same line.
-    const retId=uid();
+    // "already returned" qty for this same line. The linkage fields below
+    // (invReturnQty/cashflowIds/creditDelta/depositCfId/exNewQtyDeducted)
+    // let a future edit precisely reverse this exact version before
+    // applying whatever the edit changes to.
+    const retId=st.editingReturnId||uid();
     const ret={id:retId, invoiceNum:st.invoiceNum, saleId:item.saleId, itemId:item.itemId||null,
       itemName:item.name, qty:st.qty, refundAmt, refundType:st.refundType,
       custId:st.custId||null, custName:st.custName, reason,
       exchangedForItemId: st.refundType==='exchange'?st.exNewItemId:null,
       exchangedForItemName: st.refundType==='exchange'?(exNewItem?.name||''):null,
-      date, month, by:STATE.user?.name};
+      exNewPrice: st.refundType==='exchange'?(st.exNewPrice||0):null,
+      exSettleMode: st.refundType==='exchange'?st.exSettleMode:null,
+      exBankName: st.refundType==='exchange'?(st.exBankName||''):'',
+      exPosName: st.refundType==='exchange'?(st.exPosName||''):'',
+      exSplitMode1: st.exSplitMode1||null, exSplitAmt1: st.exSplitAmt1||null, exSplitBank1: st.exSplitBank1||'',
+      exSplitMode2: st.exSplitMode2||null, exSplitAmt2: st.exSplitAmt2||null, exSplitBank2: st.exSplitBank2||'',
+      bankName: st.refundType==='transfer'?(st.bankName||''):'',
+      invReturnQty: item.itemId?st.qty:0, cashflowIds, creditDelta, depositCfId, exNewQtyDeducted,
+      date, month, by:STATE.user?.name,
+      editedBy: st.editingReturnId?STATE.user?.name:undefined,
+      editedAt: st.editingReturnId?new Date().toISOString():undefined};
     await fsSave('v2_salesReturns', retId, ret);
     if (!STATE.salesReturns) STATE.salesReturns={};
     STATE.salesReturns[retId] = {...ret,_id:retId,_savedAt:Date.now()};
 
     closeModal();
     setSyncStatus('synced');
-    showToast(`✅ Returned ${st.qty}× ${item.name}${st.refundType==='exchange'?` for ${exNewItem.name}`:''}.`,'success');
-    logActivity('Sales return', `Inv #${st.invoiceNum}: ${st.qty}× ${item.name} (${st.refundType})`, '');
+    showToast(st.editingReturnId?'✅ Return updated.':`✅ Returned ${st.qty}× ${item.name}${st.refundType==='exchange'?` for ${exNewItem.name}`:''}.`,'success');
+    logActivity('Sales return', `${st.editingReturnId?'Updated':'New'} — Inv #${st.invoiceNum}: ${st.qty}× ${item.name} (${st.refundType})`, '');
     window._retState = null;
     renderSales(); updateInventoryBadge?.();
     if (document.getElementById('page-returns')?.classList.contains('active')) renderReturnsTracker();
@@ -13289,34 +13357,32 @@ function renderReturnsTracker() {
 
 function editReturn(id) {
   const r=STATE.salesReturns?.[id]; if(!r) return;
-  showModal(`✏ Edit Return — ${esc(r.itemName)}`,`
-    <div class="form-grid c2">
-      <div class="form-group"><label>Item Name</label><input class="form-input" id="er-item" value="${esc(r.itemName||'')}"></div>
-      <div class="form-group"><label>Qty</label><input class="form-input" id="er-qty" type="number" min="1" value="${r.qty||1}"></div>
-      <div class="form-group"><label>Refund Amount (₦)</label><input class="form-input" id="er-amt" type="number" min="0" value="${r.refundAmt||0}"></div>
-      <div class="form-group"><label>Refund Type</label><select class="form-input" id="er-type"><option value="cash" ${r.refundType==='cash'?'selected':''}>Cash</option><option value="transfer" ${r.refundType==='transfer'?'selected':''}>Transfer</option><option value="credit" ${r.refundType==='credit'?'selected':''}>Store Credit</option><option value="exchange" ${r.refundType==='exchange'?'selected':''}>Exchange</option></select></div>
-      <div class="form-group" style="grid-column:1/-1"><label>Reason</label><input class="form-input" id="er-reason" value="${esc(r.reason||'')}"></div>
-    </div>
-  `,[{label:'Cancel',action:'close',style:''},{label:'💾 Save',action:`saveEditReturn('${id}')`,style:'btn-primary'}]);
-}
-async function saveEditReturn(id) {
-  const r=STATE.salesReturns?.[id]; if(!r) return;
-  const updated={...r,
-    itemName:document.getElementById('er-item')?.value.trim()||r.itemName,
-    qty:parseInt(document.getElementById('er-qty')?.value)||r.qty,
-    refundAmt:parseFloat(document.getElementById('er-amt')?.value)||r.refundAmt,
-    refundType:document.getElementById('er-type')?.value||r.refundType,
-    reason:document.getElementById('er-reason')?.value.trim()||r.reason,
-    editedBy:STATE.user?.name,editedAt:new Date().toISOString()
+  const sale = Object.values(STATE.sales||{}).find(s=>(s._id||s.id)===r.saleId);
+  if (!sale) { showToast('Original sale line not found — cannot safely edit this return.','error'); return; }
+
+  // How much room is left on this line, EXCLUDING this return itself (since
+  // we're replacing it, not adding to it).
+  const alreadyReturnedExcl = Object.values(STATE.salesReturns||{})
+    .filter(x=>x.invoiceNum===r.invoiceNum && x.saleId===r.saleId && (x._id||x.id)!==id)
+    .reduce((a,x)=>a+(x.qty||0),0);
+  const returnable = Math.max(0,(sale.qty||0)-alreadyReturnedExcl);
+  if (returnable<=0) { showToast('No room left on this line to edit into — other returns already account for all of it.','error'); return; }
+
+  const item = {saleId:r.saleId, itemId:r.itemId||null, name:r.itemName,
+    qty:sale.qty||0, unitNet: sale.qty?Math.round((sale.total||0)/sale.qty):0,
+    alreadyReturned:alreadyReturnedExcl, returnable};
+
+  window._retState = {
+    invoiceNum:r.invoiceNum, custId:r.custId||null, custName:r.custName||'Walk-in',
+    items:[item], selectedSaleId:r.saleId, qty:Math.min(r.qty||1, returnable),
+    refundType:r.refundType||'cash', bankName:r.bankName||'', reason:r.reason||'',
+    exNewItemId:r.exchangedForItemId||'', exNewPrice:r.exNewPrice||0,
+    exSettleMode:r.exSettleMode||'cash', exBankName:r.exBankName||'', exPosName:r.exPosName||'',
+    exSplitMode1:r.exSplitMode1||'cash', exSplitAmt1:r.exSplitAmt1||0, exSplitBank1:r.exSplitBank1||'',
+    exSplitMode2:r.exSplitMode2||'transfer', exSplitAmt2:r.exSplitAmt2||0, exSplitBank2:r.exSplitBank2||'',
+    editingReturnId:id
   };
-  setSyncStatus('saving');
-  try{
-    await fsSave('v2_salesReturns',id,updated);
-    STATE.salesReturns[id]={...updated,_id:id,_savedAt:Date.now()};
-    closeModal();renderReturnsTracker();setSyncStatus('synced');
-    showToast('Return updated.','success');
-    logActivity('Sales return',`Return updated`,updated?.refundType||'');
-  }catch(e){setSyncStatus('error');showToast('Failed to save.','error');}
+  renderReturnModal();
 }
 // ── PRODUCT REPORT ───────────────────────────────────────
 function renderProductReport() {
