@@ -4307,7 +4307,41 @@ function renderSales() {
 
     <!-- Returns -->
     <p class="sec-title" style="margin-top:1.5rem">↩️ Sales Returns — ${filterLabel}</p>
-    <div style="text-align:center;padding:1.25rem;color:#888;font-size:13px">No returns for this period.</div>
+    ${(()=>{
+      const allReturns = Object.values(STATE.salesReturns||{});
+      const periodReturns = allReturns.filter(r=>{
+        if (filter==='today') return r.date===today;
+        if (filter==='date'&&filterDate) {
+          const dp=filterDate.split('-');
+          return r.date===new Date(+dp[0],+dp[1]-1,+dp[2]).toLocaleDateString();
+        }
+        return true;
+      }).sort((a,b)=>(b._savedAt||0)-(a._savedAt||0));
+      if (!periodReturns.length) return `<div style="text-align:center;padding:1.25rem;color:#888;font-size:13px">No returns for this period.</div>`;
+      const retBadges={
+        cash:'<span style="background:#d1fae5;color:#065f46;padding:3px 8px;border-radius:20px;font-size:10px;font-weight:700">CASH</span>',
+        transfer:'<span style="background:#e0f2fe;color:#0369a1;padding:3px 8px;border-radius:20px;font-size:10px;font-weight:700">TRANSFER</span>',
+        credit:'<span style="background:#eff6ff;color:#1d4ed8;padding:3px 8px;border-radius:20px;font-size:10px;font-weight:700">CREDIT</span>',
+        exchange:'<span style="background:#fef3c7;color:#92400e;padding:3px 8px;border-radius:20px;font-size:10px;font-weight:700">EXCHANGE</span>'
+      };
+      const retRows=periodReturns.map(r=>`<tr>
+        <td style="font-size:12px;white-space:nowrap;color:var(--text3)">${r.date||'—'}</td>
+        <td><b style="font-family:var(--font-mono)">#${esc(r.invoiceNum||'—')}</b></td>
+        <td style="font-size:12px">${esc(r.custName||'Walk-in')}</td>
+        <td><b>${esc(r.itemName||'—')}</b></td>
+        <td style="text-align:center;font-weight:700">${r.qty||1}</td>
+        <td class="td-right" style="color:var(--danger);font-weight:700">${fmt(r.refundAmt||0)}</td>
+        <td>${retBadges[r.refundType]||retBadges.cash}</td>
+        <td style="display:flex;gap:4px;flex-wrap:wrap">
+          <button class="btn btn-sm" onclick="viewSalesReturn('${r._id||r.id}')" style="color:var(--primary);border-color:#b6d4fe;font-size:11px;padding:3px 8px">👁 View</button>
+          <button class="btn btn-sm" onclick="printSalesReturn('${r._id||r.id}')" style="color:#1a237e;border-color:#93c5fd;font-size:11px;padding:3px 8px">🖨 Print</button>
+        </td>
+      </tr>`).join('');
+      return `<div class="tbl-wrap"><table>
+        <thead><tr><th>Date</th><th>Invoice #</th><th>Customer</th><th>Item</th><th style="text-align:center">Qty</th><th style="text-align:right">Refund</th><th>Type</th><th></th></tr></thead>
+        <tbody>${retRows}</tbody>
+      </table></div>`;
+    })()}
   `;
   // The payment-type select defaults to "Cash" via the browser's normal
   // first-option behavior, but its onchange handler (which reveals the
@@ -4799,12 +4833,60 @@ function renderReturnModal() {
       <div class="form-group" style="margin-bottom:10px">
         <label>Settle the difference via</label>
         <select class="form-input" id="ret-ex-settle" onchange="window._retState.exSettleMode=this.value;renderReturnModal()">
-          <option value="cash" ${st.exSettleMode==='cash'?'selected':''}>${exDiff>0?'Collect cash today':'Refund cash today'}</option>
-          <option value="transfer" ${st.exSettleMode==='transfer'?'selected':''}>${exDiff>0?'Collect via transfer':'Refund via transfer'}</option>
+          ${exDiff>0?`
+          <option value="cash" ${st.exSettleMode==='cash'?'selected':''}>Cash</option>
+          <option value="pos" ${st.exSettleMode==='pos'?'selected':''}>POS</option>
+          <option value="transfer" ${st.exSettleMode==='transfer'?'selected':''}>Bank Transfer</option>
+          <option value="split" ${st.exSettleMode==='split'?'selected':''}>Split (2 modes)</option>
+          <option value="credit" ${st.exSettleMode==='credit'?'selected':''} ${!st.custId?'disabled':''}>Credit${!st.custId?' (no registered customer)':''}</option>
+          `:`
+          <option value="cash" ${st.exSettleMode==='cash'?'selected':''}>Refund cash today</option>
+          <option value="transfer" ${st.exSettleMode==='transfer'?'selected':''}>Refund via transfer</option>
           <option value="credit" ${st.exSettleMode==='credit'?'selected':''} ${!st.custId?'disabled':''}>Adjust customer balance${!st.custId?' (no registered customer)':''}</option>
+          `}
         </select>
       </div>
+      ${st.exSettleMode==='credit'&&st.custId?(()=>{
+        const cust=STATE.customers?.[st.custId]; if(!cust) return '';
+        const lim=cust.creditLimit||0; const bal=cust.creditBalance||0;
+        if (exDiff>0 && lim>0) {
+          const avail=Math.max(0,lim-bal);
+          return `<div style="font-size:11.5px;color:${exDiff>avail?'var(--danger)':'var(--text3)'};margin-bottom:10px">${exDiff>avail?'⚠️ ':''}Credit limit ${fmt(lim)} · Currently used ${fmt(bal)} · Available ${fmt(avail)}</div>`;
+        }
+        return '';
+      })():''}
+      ${st.exSettleMode==='pos'?`<div class="form-group" style="margin-bottom:10px"><label>POS Terminal</label><select class="form-input" id="ret-ex-pos" onchange="window._retState.exPosName=this.value">${bankSelectOpts('pos',st.exPosName)}</select></div>`:''}
       ${st.exSettleMode==='transfer'?`<div class="form-group" style="margin-bottom:10px"><label>Bank</label><select class="form-input" id="ret-ex-bank" onchange="window._retState.exBankName=this.value">${bankSelectOpts('transfer',st.exBankName)}</select></div>`:''}
+      ${st.exSettleMode==='split'?`
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:10px;margin-bottom:10px">
+        <div class="form-grid c2" style="margin-bottom:8px">
+          <div class="form-group" style="margin:0"><label>Mode 1</label>
+            <select class="form-input" id="ret-ex-split-mode1" onchange="window._retState.exSplitMode1=this.value;renderReturnModal()">
+              <option value="cash" ${st.exSplitMode1==='cash'?'selected':''}>Cash</option>
+              <option value="transfer" ${st.exSplitMode1==='transfer'?'selected':''}>Bank transfer</option>
+              <option value="pos" ${st.exSplitMode1==='pos'?'selected':''}>POS</option>
+            </select>
+          </div>
+          <div class="form-group" style="margin:0"><label>Amount 1 (₦)</label>
+            <input class="form-input" id="ret-ex-split-amt1" type="number" min="0" value="${st.exSplitAmt1||0}" onchange="window._retState.exSplitAmt1=parseFloat(this.value)||0;renderReturnModal()"></div>
+          <div class="form-group" style="margin:0"><label>Mode 2</label>
+            <select class="form-input" id="ret-ex-split-mode2" onchange="window._retState.exSplitMode2=this.value;renderReturnModal()">
+              <option value="transfer" ${st.exSplitMode2==='transfer'?'selected':''}>Bank transfer</option>
+              <option value="cash" ${st.exSplitMode2==='cash'?'selected':''}>Cash</option>
+              <option value="pos" ${st.exSplitMode2==='pos'?'selected':''}>POS</option>
+            </select>
+          </div>
+          <div class="form-group" style="margin:0"><label>Amount 2 (₦)</label>
+            <input class="form-input" id="ret-ex-split-amt2" type="number" min="0" value="${st.exSplitAmt2||0}" onchange="window._retState.exSplitAmt2=parseFloat(this.value)||0;renderReturnModal()"></div>
+        </div>
+        ${st.exSplitMode1==='transfer'?`<div class="form-group" style="margin-bottom:6px"><label>Bank (Mode 1)</label><select class="form-input" id="ret-ex-split-bank1" onchange="window._retState.exSplitBank1=this.value">${bankSelectOpts('transfer',st.exSplitBank1)}</select></div>`:''}
+        ${st.exSplitMode1==='pos'||st.exSplitMode2==='pos'?`<div class="form-group" style="margin-bottom:6px"><label>POS Terminal</label><select class="form-input" id="ret-ex-split-posid" onchange="window._retState.exSplitPosId=this.value">${bankSelectOpts('pos',st.exSplitPosId)}</select></div>`:''}
+        ${st.exSplitMode2==='transfer'?`<div class="form-group" style="margin-bottom:6px"><label>Bank (Mode 2)</label><select class="form-input" id="ret-ex-split-bank2" onchange="window._retState.exSplitBank2=this.value">${bankSelectOpts('transfer',st.exSplitBank2)}</select></div>`:''}
+        <div style="font-size:12px;font-weight:600;color:${((st.exSplitAmt1||0)+(st.exSplitAmt2||0))===exDiff?'var(--success)':'var(--danger)'}">
+          ${fmt((st.exSplitAmt1||0)+(st.exSplitAmt2||0))} of ${fmt(exDiff)} entered${((st.exSplitAmt1||0)+(st.exSplitAmt2||0))!==exDiff?' — must add up exactly':''}
+        </div>
+      </div>
+      `:''}
       `:''}
       `:`<div style="color:var(--text3);font-size:13px;padding:6px 0">Select a replacement item above.</div>`}
     `:''}
@@ -4831,6 +4913,46 @@ async function confirmSalesReturn() {
   }
 
   const refundAmt = Math.round(item.unitNet * st.qty);
+
+  // ── CREDIT LIMIT ENFORCEMENT (exchange shortfall settled to balance) ──
+  // Mirrors the same blocking logic used in v2SaveSale for regular credit
+  // sales — a shortfall going onto a customer's balance is, financially,
+  // exactly that: new credit being extended to them.
+  if (st.refundType==='exchange' && st.exSettleMode==='credit') {
+    const newAmount = Math.round((st.exNewPrice||0)*st.qty);
+    const exDiff = newAmount - refundAmt;
+    if (exDiff>0) {
+      const cust = STATE.customers?.[st.custId];
+      const creditLimit = cust?.creditLimit||0;
+      const currentBalance = cust?.creditBalance||0;
+      if (creditLimit>0 && currentBalance+exDiff>creditLimit) {
+        const available = Math.max(0, creditLimit-currentBalance);
+        showBlockingError(
+          'Credit Limit Exceeded',
+          `<b>${esc(cust.name)}</b> cannot take more credit.<br><br>
+          <div style="background:#fef2f2;border-radius:8px;padding:12px 14px;text-align:left;font-size:13px">
+            <div style="display:flex;justify-content:space-between;margin-bottom:6px"><span>Credit limit:</span><b>${fmt(creditLimit)}</b></div>
+            <div style="display:flex;justify-content:space-between;margin-bottom:6px"><span>Currently used:</span><b style="color:#dc2626">${fmt(currentBalance)}</b></div>
+            <div style="display:flex;justify-content:space-between;margin-bottom:6px"><span>Available credit:</span><b style="color:${available>0?'#15803d':'#dc2626'}">${fmt(available)}</b></div>
+            <div style="display:flex;justify-content:space-between;border-top:1px solid #fca5a5;padding-top:6px;margin-top:4px"><span>This exchange needs:</span><b style="color:#dc2626">${fmt(exDiff)}</b></div>
+          </div><br>
+          Choose a different settlement instead.`
+        );
+        return;
+      }
+    }
+  }
+
+  // Split settlement must add up exactly, or the till reconciliation breaks
+  if (st.refundType==='exchange' && st.exSettleMode==='split') {
+    const newAmount = Math.round((st.exNewPrice||0)*st.qty);
+    const exDiff = Math.abs(newAmount - refundAmt);
+    const splitTotal = (st.exSplitAmt1||0)+(st.exSplitAmt2||0);
+    if (splitTotal !== exDiff) {
+      showToast(`Split amounts (${fmt(splitTotal)}) must add up to ${fmt(exDiff)}.`,'error'); return;
+    }
+  }
+
   const now = new Date();
   const date = now.toLocaleDateString();
   const month = now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
@@ -4882,18 +5004,34 @@ async function confirmSalesReturn() {
       if (exDiff!==0) {
         if (st.exSettleMode==='credit') {
           const cust = STATE.customers?.[st.custId];
+          const newBal = (cust?.creditBalance||0)+exDiff;
           if (cust) {
-            const updCust={...cust, creditBalance:(cust.creditBalance||0)+exDiff};
+            const updCust={...cust, creditBalance:newBal};
             await fsSave(COLS.CUSTOMERS, st.custId, updCust);
             STATE.customers[st.custId]={...updCust,_id:st.custId,_savedAt:Date.now()};
           }
+        } else if (st.exSettleMode==='split') {
+          const mk=(amt,mode,bank)=>({id:uid(), type: exDiff>0?'in':'out',
+            cat: exDiff>0?'Sales (Item Exchange)':'Sales Refund (Item Exchange)',
+            isReturn: exDiff<0,
+            desc:`Item exchange (split) — Inv #${st.invoiceNum} — ${item.name} → ${exNewItem.name} (${st.qty} units)`,
+            amount: amt, payMode:mode, bankName:mode==='transfer'?bank:'',
+            custId:st.custId||null, custName:st.custName, date, month, invoiceNum:st.invoiceNum, by:STATE.user?.name});
+          const cf1=mk(st.exSplitAmt1||0, st.exSplitMode1, st.exSplitBank1);
+          const cf2=mk(st.exSplitAmt2||0, st.exSplitMode2, st.exSplitBank2);
+          await fsSave(COLS.CASHFLOW, cf1.id, cf1);
+          STATE.cashflow[cf1.id]={...cf1,_id:cf1.id,_savedAt:Date.now()};
+          await fsSave(COLS.CASHFLOW, cf2.id, cf2);
+          STATE.cashflow[cf2.id]={...cf2,_id:cf2.id,_savedAt:Date.now()};
         } else {
           const cfId=uid();
           const cf={id:cfId, type: exDiff>0?'in':'out',
             cat: exDiff>0?'Sales (Item Exchange)':'Sales Refund (Item Exchange)',
             isReturn: exDiff<0,
             desc:`Item exchange — Inv #${st.invoiceNum} — ${item.name} → ${exNewItem.name} (${st.qty} units)`,
-            amount: Math.abs(exDiff), payMode:st.exSettleMode, bankName:st.exSettleMode==='transfer'?st.exBankName:'',
+            amount: Math.abs(exDiff), payMode:st.exSettleMode,
+            bankName:st.exSettleMode==='transfer'?st.exBankName:'',
+            posName:st.exSettleMode==='pos'?st.exPosName:'',
             custId:st.custId||null, custName:st.custName, date, month, invoiceNum:st.invoiceNum, by:STATE.user?.name};
           await fsSave(COLS.CASHFLOW, cfId, cf);
           STATE.cashflow[cfId]={...cf,_id:cfId,_savedAt:Date.now()};
@@ -4926,6 +5064,74 @@ async function confirmSalesReturn() {
     setSyncStatus('error');
     showToast('Failed to process return: '+e.message,'error');
   }
+}
+
+function viewSalesReturn(id) {
+  const r = STATE.salesReturns?.[id];
+  if (!r) { showToast('Return not found.','error'); return; }
+  const badge = {
+    cash:'<span style="background:#d1fae5;color:#065f46;padding:4px 10px;border-radius:20px;font-size:11px;font-weight:700">CASH REFUND</span>',
+    transfer:'<span style="background:#e0f2fe;color:#0369a1;padding:4px 10px;border-radius:20px;font-size:11px;font-weight:700">TRANSFER REFUND</span>',
+    credit:'<span style="background:#eff6ff;color:#1d4ed8;padding:4px 10px;border-radius:20px;font-size:11px;font-weight:700">STORE CREDIT</span>',
+    exchange:'<span style="background:#fef3c7;color:#92400e;padding:4px 10px;border-radius:20px;font-size:11px;font-weight:700">EXCHANGE</span>'
+  }[r.refundType] || '';
+  const body = `
+    <div style="text-align:center;margin-bottom:14px">${badge}</div>
+    <div style="background:var(--surface);border-radius:10px;padding:14px 16px;font-size:13px;line-height:1.8">
+      <div style="display:flex;justify-content:space-between"><span>Invoice #</span><b>#${esc(r.invoiceNum||'—')}</b></div>
+      <div style="display:flex;justify-content:space-between"><span>Date</span><b>${esc(r.date||'—')}</b></div>
+      <div style="display:flex;justify-content:space-between"><span>Customer</span><b>${esc(r.custName||'Walk-in')}</b></div>
+      <div style="display:flex;justify-content:space-between"><span>Item returned</span><b>${esc(r.itemName||'—')}</b></div>
+      <div style="display:flex;justify-content:space-between"><span>Qty</span><b>${r.qty||1}</b></div>
+      ${r.refundType==='exchange'&&r.exchangedForItemName?`<div style="display:flex;justify-content:space-between"><span>Exchanged for</span><b>${esc(r.exchangedForItemName)}</b></div>`:''}
+      <div style="display:flex;justify-content:space-between;border-top:1px dashed var(--border);margin-top:6px;padding-top:6px"><span>Refund amount</span><b style="color:var(--danger)">${fmt(r.refundAmt||0)}</b></div>
+      ${r.reason?`<div style="margin-top:6px"><span style="color:var(--text3)">Reason:</span> ${esc(r.reason)}</div>`:''}
+      <div style="margin-top:6px;font-size:11.5px;color:var(--text3)">Processed by ${esc(r.by||'—')}</div>
+    </div>
+  `;
+  showModal('↩ Return Details', body, [
+    {label:'🖨 Print', action:`printSalesReturn('${id}')`, style:''},
+    {label:'Close', action:'close', style:'btn-primary'}
+  ]);
+}
+
+function printSalesReturn(id) {
+  const r = STATE.salesReturns?.[id];
+  if (!r) { showToast('Return not found.','error'); return; }
+  const typeLabel = {cash:'Cash Refund',transfer:'Transfer Refund',credit:'Store Credit',exchange:'Exchange'}[r.refundType] || 'Refund';
+  const html = `<!DOCTYPE html><html><head><title>Return Receipt — ${esc(r.invoiceNum||'')}</title>
+  <style>
+    body{font-family:Arial,Helvetica,sans-serif;margin:0;padding:20px;color:#222}
+    .hdr{text-align:center;margin-bottom:14px}
+    .hdr h1{font-size:18px;margin:0 0 2px}
+    .hdr p{font-size:11px;color:#666;margin:0}
+    .badge{display:inline-block;background:#fef3c7;color:#92400e;font-size:13px;font-weight:800;padding:5px 22px;border-radius:4px;letter-spacing:2px;margin:10px 0}
+    table{width:100%;border-collapse:collapse;margin:10px 0;font-size:12.5px}
+    td{padding:6px 4px;border-bottom:1px solid #eee}
+    .lbl{color:#666}
+    .tot{font-size:16px;font-weight:800;color:#c0392b;text-align:right;margin-top:8px}
+    .ftr{text-align:center;font-size:10px;color:#888;margin-top:20px;border-top:1px solid #eee;padding-top:8px}
+    .no-print{text-align:center;margin-top:16px}
+    @media print{.no-print{display:none}}
+  </style></head><body>
+    <div class="hdr"><h1>Great Chid Electro (Nig.)</h1><p>Return / Refund Receipt</p></div>
+    <div style="text-align:center"><div class="badge">${esc(typeLabel.toUpperCase())}</div></div>
+    <table>
+      <tr><td class="lbl">Invoice #</td><td style="text-align:right"><b>#${esc(r.invoiceNum||'—')}</b></td></tr>
+      <tr><td class="lbl">Date</td><td style="text-align:right">${esc(r.date||'—')}</td></tr>
+      <tr><td class="lbl">Customer</td><td style="text-align:right">${esc(r.custName||'Walk-in')}</td></tr>
+      <tr><td class="lbl">Item returned</td><td style="text-align:right">${esc(r.itemName||'—')}</td></tr>
+      <tr><td class="lbl">Qty</td><td style="text-align:right">${r.qty||1}</td></tr>
+      ${r.refundType==='exchange'&&r.exchangedForItemName?`<tr><td class="lbl">Exchanged for</td><td style="text-align:right">${esc(r.exchangedForItemName)}</td></tr>`:''}
+      ${r.reason?`<tr><td class="lbl">Reason</td><td style="text-align:right">${esc(r.reason)}</td></tr>`:''}
+      <tr><td class="lbl">Processed by</td><td style="text-align:right">${esc(r.by||'—')}</td></tr>
+    </table>
+    <div class="tot">Refund amount: ${fmt(r.refundAmt||0)}</div>
+    <div class="ftr">Thank you for choosing Great Chid Electro (Nig.)</div>
+    <div class="no-print"><button onclick="window.print()" style="padding:8px 16px;background:#1a237e;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600">🖨️ Print</button></div>
+  </body></html>`;
+  const w=window.open('','_blank','width=480,height=700');
+  if (w) { w.document.write(html); w.document.close(); }
 }
 
 function v2OnPayTypeChange() {
@@ -12972,7 +13178,9 @@ function renderReturnsTracker() {
     <td style="font-size:12px;color:var(--text3)">${esc(r.reason||'—')}</td>
     <td>${refundBadges[r.refundType]||refundBadges.cash}</td>
     <td style="font-size:11px;color:var(--text3)">${esc(r.by||'—')}</td>
-    <td>
+    <td style="display:flex;gap:4px;flex-wrap:wrap">
+      <button class="btn btn-sm" onclick="viewSalesReturn('${r._id||r.id}')" style="color:var(--primary);border-color:#b6d4fe;font-size:11px;padding:3px 8px">👁 View</button>
+      <button class="btn btn-sm" onclick="printSalesReturn('${r._id||r.id}')" style="color:#1a237e;border-color:#93c5fd;font-size:11px;padding:3px 8px">🖨 Print</button>
       ${STATE.user?.role==='admin'?`<button class="btn btn-sm" onclick="editReturn('${r._id||r.id}')" style="color:var(--brand);border-color:var(--brand);font-size:11px;padding:3px 8px">✏ Edit</button>`:''}
     </td>
   </tr>`).join('');
