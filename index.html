@@ -4176,6 +4176,7 @@ function renderSales() {
       <td><div style="display:flex;gap:4px;flex-wrap:wrap">
         <button class="btn btn-sm" onclick="showInvoiceViewModal('${k}')" style="color:var(--primary);border-color:#b6d4fe;font-size:11px">View</button>
         <button class="btn btn-sm" onclick="_showPrintModeModal('${k}')" style="color:#1a237e;border-color:#93c5fd;font-size:11px">Print</button>
+        <button class="btn btn-sm" onclick="showCustSigModal('${k}')" style="color:#0369a1;border-color:#bae6fd;font-size:11px">✍️ Sign</button>
         ${hasPending?`<button class="btn btn-sm" onclick="supplyAllNow('${k}')" style="background:#16a34a;color:#fff;border-color:#16a34a;font-size:11px">✓ Mark supplied</button>`:''}
         ${!hasPending?`<button class="btn btn-sm" onclick="showReturnModal('${k}')" style="color:#dc3545;border-color:#f5c2c7;font-size:11px">↩ Return</button>`:''}
         ${STATE.user?.role==='admin'?`<button class="btn btn-sm btn-danger" onclick="voidInvoice('${k}')" style="font-size:11px">🗑️ Void</button>`:''}
@@ -4915,7 +4916,12 @@ function renderReturnModal() {
   const exItems = Object.values(STATE.inventory||{}).filter(i=>(i._id||i.id)!==item.itemId).sort((a,b)=>(a.name||'').localeCompare(b.name||''));
   const exNewItem = st.exNewItemId ? STATE.inventory?.[st.exNewItemId] : null;
   if (exNewItem && !st.exNewPrice) st.exNewPrice = exNewItem.sell||exNewItem.sellPrice||0;
-  const exDiff = exNewItem ? Math.round((st.exNewPrice||0)*st.qty) - refundAmt : 0;
+  // Exchange qty is independent of the returned qty — you can return 2 of
+  // one item for 3 (or 1) of another. Defaults to match the returned qty
+  // the first time a replacement is picked, but stays adjustable from there.
+  if (exNewItem && !st.exQty) st.exQty = st.qty;
+  if (st.exQty < 1) st.exQty = 1;
+  const exDiff = exNewItem ? Math.round((st.exNewPrice||0)*st.exQty) - refundAmt : 0;
 
   const body = `
     <div style="font-size:13px;margin-bottom:10px">Invoice #${esc(st.invoiceNum)} &nbsp;·&nbsp; Customer: <b>${esc(st.custName)}</b></div>
@@ -4950,15 +4956,16 @@ function renderReturnModal() {
       </div>
       ${exNewItem?`
       <div class="form-grid c2" style="margin-bottom:10px">
+        <div class="form-group"><label>Exchange qty</label><input class="form-input" id="ret-ex-qty" type="number" min="1" value="${st.exQty}" onchange="window._retState.exQty=parseInt(this.value)||1;renderReturnModal()"></div>
         <div class="form-group"><label>Unit price (₦)</label><input class="form-input" id="ret-ex-price" type="number" min="0" value="${st.exNewPrice}" onchange="window._retState.exNewPrice=parseFloat(this.value)||0;renderReturnModal()"></div>
       </div>
       <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:10px;font-size:12.5px">
         <div>Returning ${st.qty} × ${esc(item.name)} = <b>${fmt(refundAmt)}</b></div>
-        <div>New: ${st.qty} × ${esc(exNewItem.name)} = <b>${fmt(Math.round((st.exNewPrice||0)*st.qty))}</b></div>
+        <div>New: ${st.exQty} × ${esc(exNewItem.name)} = <b>${fmt(Math.round((st.exNewPrice||0)*st.exQty))}</b></div>
         <div style="border-top:1px dashed var(--border);margin-top:6px;padding-top:6px;font-weight:700;color:${exDiff>0?'#dc2626':exDiff<0?'#15803d':'var(--text2)'}">
           ${exDiff===0?'No price difference':exDiff>0?`Customer owes ${fmt(exDiff)} more`:`Refund/credit due: ${fmt(Math.abs(exDiff))}`}
         </div>
-        ${(exNewItem.qty||0)<st.qty?`<div style="margin-top:6px;color:#d97706">⚠️ Only ${exNewItem.qty||0} in stock — exchange will be capped to what's available.</div>`:`<div style="margin-top:6px;color:#15803d">✓ ${exNewItem.qty||0} in stock — all ${st.qty} available.</div>`}
+        ${(exNewItem.qty||0)<st.exQty?`<div style="margin-top:6px;color:#d97706">⚠️ Only ${exNewItem.qty||0} in stock — exchange will be capped to what's available.</div>`:`<div style="margin-top:6px;color:#15803d">✓ ${exNewItem.qty||0} in stock — all ${st.exQty} available.</div>`}
       </div>
       ${exDiff!==0?`
       <div class="form-group" style="margin-bottom:10px">
@@ -5084,7 +5091,7 @@ async function confirmSalesReturn() {
   // sales — a shortfall going onto a customer's balance is, financially,
   // exactly that: new credit being extended to them.
   if (st.refundType==='exchange' && st.exSettleMode==='credit') {
-    const newAmount = Math.round((st.exNewPrice||0)*st.qty);
+    const newAmount = Math.round((st.exNewPrice||0)*st.exQty);
     const exDiff = newAmount - refundAmt;
     if (exDiff>0) {
       const cust = STATE.customers?.[st.custId];
@@ -5110,7 +5117,7 @@ async function confirmSalesReturn() {
 
   // Split settlement must add up exactly, or the till reconciliation breaks
   if (st.refundType==='exchange' && st.exSettleMode==='split') {
-    const newAmount = Math.round((st.exNewPrice||0)*st.qty);
+    const newAmount = Math.round((st.exNewPrice||0)*st.exQty);
     const exDiff = Math.abs(newAmount - refundAmt);
     const splitTotal = (st.exSplitAmt1||0)+(st.exSplitAmt2||0);
     if (splitTotal !== exDiff) {
@@ -5180,9 +5187,9 @@ async function confirmSalesReturn() {
       }
 
     } else if (st.refundType==='exchange') {
-      const deductResult = await _safeAdjustInventory(st.exNewItemId, -st.qty);
+      const deductResult = await _safeAdjustInventory(st.exNewItemId, -st.exQty);
       exNewQtyDeducted = Math.abs(deductResult.applied||0);
-      const newAmount = Math.round((st.exNewPrice||0)*st.qty);
+      const newAmount = Math.round((st.exNewPrice||0)*st.exQty);
       const exDiff = newAmount - refundAmt;
       if (exDiff!==0) {
         if (st.exSettleMode==='credit') {
@@ -5198,7 +5205,7 @@ async function confirmSalesReturn() {
           const mk=(amt,mode,bank)=>({id:uid(), type: exDiff>0?'in':'out',
             cat: exDiff>0?'Sales (Item Exchange)':'Sales Refund (Item Exchange)',
             isReturn: exDiff<0,
-            desc:`Item exchange (split) — Inv #${st.invoiceNum} — ${item.name} → ${exNewItem.name} (${st.qty} units)`,
+            desc:`Item exchange (split) — Inv #${st.invoiceNum} — ${st.qty}× ${item.name} → ${st.exQty}× ${exNewItem.name}`,
             amount: amt, payMode:mode, bankName:mode==='transfer'?bank:'',
             custId:st.custId||null, custName:st.custName, date, month, invoiceNum:st.invoiceNum, by:STATE.user?.name});
           const cf1=mk(st.exSplitAmt1||0, st.exSplitMode1, st.exSplitBank1);
@@ -5213,7 +5220,7 @@ async function confirmSalesReturn() {
           const cf={id:cfId, type: exDiff>0?'in':'out',
             cat: exDiff>0?'Sales (Item Exchange)':'Sales Refund (Item Exchange)',
             isReturn: exDiff<0,
-            desc:`Item exchange — Inv #${st.invoiceNum} — ${item.name} → ${exNewItem.name} (${st.qty} units)`,
+            desc:`Item exchange — Inv #${st.invoiceNum} — ${st.qty}× ${item.name} → ${st.exQty}× ${exNewItem.name}`,
             amount: Math.abs(exDiff), payMode:st.exSettleMode,
             bankName:st.exSettleMode==='transfer'?st.exBankName:'',
             posName:st.exSettleMode==='pos'?st.exPosName:'',
@@ -5237,6 +5244,7 @@ async function confirmSalesReturn() {
       exchangedForItemId: st.refundType==='exchange'?st.exNewItemId:null,
       exchangedForItemName: st.refundType==='exchange'?(exNewItem?.name||''):null,
       exNewPrice: st.refundType==='exchange'?(st.exNewPrice||0):null,
+      exQty: st.refundType==='exchange'?(st.exQty||st.qty):null,
       exSettleMode: st.refundType==='exchange'?st.exSettleMode:null,
       exBankName: st.refundType==='exchange'?(st.exBankName||''):'',
       exPosName: st.refundType==='exchange'?(st.exPosName||''):'',
@@ -5277,13 +5285,13 @@ function viewSalesReturn(id) {
 
   const isExchange = r.refundType==='exchange';
   const returnedValue = r.refundAmt||0; // value of the item(s) returned
-  const exchangedValue = isExchange ? Math.round((r.exNewPrice||0)*(r.qty||1)) : 0;
+  const exchangedValue = isExchange ? Math.round((r.exNewPrice||0)*(r.exQty||r.qty||1)) : 0;
   const diff = exchangedValue - returnedValue; // >0 = customer owed more (shortfall), <0 = refund/credit due
   const settleLabelMap = {cash:'Cash',pos:'POS',transfer:'Bank Transfer',credit:'Adjusted on customer balance',split:'Split (cash + transfer)'};
 
   const exchangeSection = isExchange ? `
     <div style="display:flex;justify-content:space-between"><span>Item returned — value</span><b>${fmt(returnedValue)}</b></div>
-    <div style="display:flex;justify-content:space-between"><span>Exchanged for</span><b>${esc(r.exchangedForItemName||'—')}</b></div>
+    <div style="display:flex;justify-content:space-between"><span>Exchanged for</span><b>${r.exQty||1}× ${esc(r.exchangedForItemName||'—')}</b></div>
     <div style="display:flex;justify-content:space-between"><span>Exchanged item — value</span><b>${fmt(exchangedValue)}</b></div>
     <div style="display:flex;justify-content:space-between;border-top:1px dashed var(--border);margin-top:6px;padding-top:6px">
       <span>${diff>0?'Shortfall paid by customer':diff<0?'Refunded / credited to customer':'Difference'}</span>
@@ -5324,13 +5332,13 @@ function printSalesReturn(id) {
 
   const isExchange = r.refundType==='exchange';
   const returnedValue = r.refundAmt||0;
-  const exchangedValue = isExchange ? Math.round((r.exNewPrice||0)*(r.qty||1)) : 0;
+  const exchangedValue = isExchange ? Math.round((r.exNewPrice||0)*(r.exQty||r.qty||1)) : 0;
   const diff = exchangedValue - returnedValue;
   const settleLabelMap = {cash:'Cash',pos:'POS',transfer:'Bank Transfer',credit:'Adjusted on customer balance',split:'Split (cash + transfer)'};
 
   const exchangeRows = isExchange ? `
     <tr><td class="lbl">Item returned — value</td><td style="text-align:right">${fmt(returnedValue)}</td></tr>
-    <tr><td class="lbl">Exchanged for</td><td style="text-align:right">${esc(r.exchangedForItemName||'—')}</td></tr>
+    <tr><td class="lbl">Exchanged for</td><td style="text-align:right">${r.exQty||1}× ${esc(r.exchangedForItemName||'—')}</td></tr>
     <tr><td class="lbl">Exchanged item — value</td><td style="text-align:right">${fmt(exchangedValue)}</td></tr>
     ${diff!==0?`<tr><td class="lbl">${diff>0?'Shortfall paid by customer':'Refunded / credited to customer'}</td><td style="text-align:right;font-weight:800;color:${diff>0?'#c0392b':'#15803d'}">${fmt(Math.abs(diff))}</td></tr>
     <tr><td class="lbl">Settled via</td><td style="text-align:right">${esc(settleLabelMap[r.exSettleMode]||r.exSettleMode||'Cash')}${(r.exSettleMode==='transfer'&&r.exBankName)?' → '+esc(r.exBankName):''}${(r.exSettleMode==='pos'&&r.exPosName)?' ('+esc(r.exPosName)+')':''}</td></tr>
@@ -6396,7 +6404,18 @@ function _buildInvoiceHTML(invNum, mode='a4', invTypeOverride='sales', showOutst
 
   const custName=s0.printName||s0.custName||'Walk-in customer';
   const address=s0.deliveryAddr||s0.address||'';
-  const isPending=items.some(s=>s.pendingSupply||s.supplyStatus==='pending');
+  // 3-state supply status — "any item pending" used to mean the WHOLE
+  // invoice got stamped "NOT YET SUPPLIED", even when most of it had
+  // already gone out the door. totalQty/pendingQty let the stamp reflect
+  // what actually happened: nothing yet, everything, or some of each.
+  const totalSupplyQty = items.reduce((a,s)=>a+(s.qty||0),0);
+  const pendingSupplyQty = items.reduce((a,s)=>{
+    if (s.pendingQty!=null) return a+(s.pendingQty||0);
+    return a + ((s.pendingSupply||s.supplyStatus==='pending') ? (s.qty||0) : 0);
+  },0);
+  const suppliedSupplyQty = Math.max(0, totalSupplyQty-pendingSupplyQty);
+  const supplyState = pendingSupplyQty<=0 ? 'full' : suppliedSupplyQty<=0 ? 'none' : 'partial';
+  const isPending = supplyState!=='full';
   const suppliedDate=s0.suppliedDate||s0.date||'';
 
   // Outstanding balance (only if showOutstanding=true and customer has balance)
@@ -6485,9 +6504,9 @@ function _buildInvoiceHTML(invNum, mode='a4', invTypeOverride='sales', showOutst
     <div style="font-size:11px"><div><b>Method:</b> ${esc(payModeLabel)}</div><div><b>By:</b> ${esc(sellerName)}</div></div>
     <div style="border-top:1px dashed #000;margin:5px 0"></div>
     <div style="text-align:center;font-size:10px;margin-bottom:4px"><div style="font-style:italic">Examine well and receive the above goods in good condition. No refund of money or exchange after payment.</div><div style="font-weight:700;margin-top:3px">Thank you! Come again!</div></div>
-    ${isPending?`<div style="border:1px dashed #92400e;border-radius:3px;padding:6px 4px;margin:6px 0;text-align:center">
-      <div style="font-size:11px;font-weight:900;letter-spacing:1px">⏳ NOT YET SUPPLIED</div>
-      <div style="font-size:9.5px;margin-top:2px">Payment received. Goods will be supplied at a later date.</div>
+    ${supplyState!=='full'?`<div style="border:1px dashed ${supplyState==='partial'?'#1e3a8a':'#92400e'};border-radius:3px;padding:6px 4px;margin:6px 0;text-align:center">
+      <div style="font-size:11px;font-weight:900;letter-spacing:1px">${supplyState==='partial'?'◐ PARTIALLY SUPPLIED':'⏳ NOT YET SUPPLIED'}</div>
+      <div style="font-size:9.5px;margin-top:2px">${supplyState==='partial'?`${suppliedSupplyQty} of ${totalSupplyQty} units supplied — ${pendingSupplyQty} pending.`:'Payment received. Goods will be supplied at a later date.'}</div>
     </div>`:''}
     <div style="text-align:center;margin-top:5px"><img src="${qrUrl}" width="70" height="70"><div style="font-size:9px">scan me</div></div>
     <script>const img=document.querySelector('img');function go(){window.print();}if(img.complete)setTimeout(go,400);else{img.onload=()=>setTimeout(go,400);img.onerror=()=>setTimeout(go,400);}<\/sc`+`ript>
@@ -6703,13 +6722,13 @@ ${totalWithBalance>0&&showOutstanding?`
     <img id="qrimg" src="${qrUrl}" width="${fs('58','70')}" height="${fs('58','70')}" alt="QR" style="display:block;margin-bottom:3px">
     <div style="font-size:${fs('7px','8px')};color:#999;text-align:center">scan me</div>
   </div>
-  <div style="border:2px solid ${isPending?'#f59e0b':'#16a34a'};border-radius:4px;padding:${fs('6px','8px')} ${fs('8px','12px')};background:${isPending?'#fffbeb':'#f0fdf4'};display:flex;flex-direction:column;align-items:center;justify-content:center">
+  <div style="border:2px solid ${supplyState==='full'?'#16a34a':supplyState==='partial'?'#2563eb':'#f59e0b'};border-radius:4px;padding:${fs('6px','8px')} ${fs('8px','12px')};background:${supplyState==='full'?'#f0fdf4':supplyState==='partial'?'#eff6ff':'#fffbeb'};display:flex;flex-direction:column;align-items:center;justify-content:center">
     <div style="display:flex;align-items:center;gap:6px;margin-bottom:2px">
-      <div style="width:${fs('16px','18px')};height:${fs('16px','18px')};border-radius:3px;background:${isPending?'#f59e0b':'#16a34a'};display:flex;align-items:center;justify-content:center;color:#fff;font-size:${fs('10px','12px')};font-weight:900;flex-shrink:0">${isPending?'⏳':'✓'}</div>
-      <div style="font-size:${fs('11px','13px')};font-weight:900;color:${isPending?'#92400e':'#14532d'};letter-spacing:1px">${isPending?'NOT YET SUPPLIED':'SUPPLIED'}</div>
+      <div style="width:${fs('16px','18px')};height:${fs('16px','18px')};border-radius:3px;background:${supplyState==='full'?'#16a34a':supplyState==='partial'?'#2563eb':'#f59e0b'};display:flex;align-items:center;justify-content:center;color:#fff;font-size:${fs('10px','12px')};font-weight:900;flex-shrink:0">${supplyState==='full'?'✓':supplyState==='partial'?'◐':'⏳'}</div>
+      <div style="font-size:${fs('11px','13px')};font-weight:900;color:${supplyState==='full'?'#14532d':supplyState==='partial'?'#1e3a8a':'#92400e'};letter-spacing:1px">${supplyState==='full'?'SUPPLIED':supplyState==='partial'?'PARTIALLY SUPPLIED':'NOT YET SUPPLIED'}</div>
     </div>
-    <div style="font-size:${fs('8px','9px')};color:${isPending?'#92400e':'#166534'};font-style:italic;text-align:center">
-      ${isPending?'Payment received. Goods will be supplied at a later date.':'Goods collected by customer.'}
+    <div style="font-size:${fs('8px','9px')};color:${supplyState==='full'?'#166534':supplyState==='partial'?'#1e40af':'#92400e'};font-style:italic;text-align:center">
+      ${supplyState==='full'?'Goods collected by customer.':supplyState==='partial'?`${suppliedSupplyQty} of ${totalSupplyQty} units supplied — ${pendingSupplyQty} still pending.`:'Payment received. Goods will be supplied at a later date.'}
     </div>
     ${!isPending&&suppliedDate?`<div style="font-size:${fs('7.5px','8.5px')};color:#166534;margin-top:2px">Supplied Date: ${suppliedDate}</div>`:''}
   </div>
@@ -13861,7 +13880,7 @@ function editReturn(id) {
     invoiceNum:r.invoiceNum, custId:r.custId||null, custName:r.custName||'Walk-in',
     items:[item], selectedSaleId:r.saleId, qty:Math.min(r.qty||1, returnable),
     refundType:r.refundType||'cash', bankName:r.bankName||'', reason:r.reason||'',
-    exNewItemId:r.exchangedForItemId||'', exNewPrice:r.exNewPrice||0,
+    exNewItemId:r.exchangedForItemId||'', exNewPrice:r.exNewPrice||0, exQty:r.exQty||r.qty||1,
     exSettleMode:r.exSettleMode||'cash', exBankName:r.exBankName||'', exPosName:r.exPosName||'',
     exSplitMode1:r.exSplitMode1||'cash', exSplitAmt1:r.exSplitAmt1||0, exSplitBank1:r.exSplitBank1||'',
     exSplitMode2:r.exSplitMode2||'transfer', exSplitAmt2:r.exSplitAmt2||0, exSplitBank2:r.exSplitBank2||'',
