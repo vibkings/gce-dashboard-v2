@@ -7342,7 +7342,14 @@ function renderPurchases() {
     (g.supplier||'').toLowerCase().includes(searchVal) ||
     g.itemNames.some(n=>(n||'').toLowerCase().includes(searchVal))
   );
-  histGroupList.sort((a,b)=>(new Date(b.date||0).getTime()||0) - (new Date(a.date||0).getTime()||0));
+  // Break same-day ties by actual save time (max across the PO's line
+  // items), so a freshly-created PO doesn't land below an older same-day
+  // one just by chance of insertion order.
+  histGroupList.sort((a,b)=>{
+    const aTs=Math.max(0,...a.items.map(p=>p._savedAt||0))||new Date(a.date||0).getTime()||0;
+    const bTs=Math.max(0,...b.items.map(p=>p._savedAt||0))||new Date(b.date||0).getTime()||0;
+    return bTs-aTs;
+  });
   histGroupList = histGroupList.slice(0,150);
 
   const histRows = histGroupList.map(g=>{
@@ -7636,7 +7643,11 @@ function renderPurchases() {
         <table>
           <thead><tr><th>DATE</th><th>PO #</th><th>SUPPLIER</th><th>ITEM</th><th style="text-align:center">QTY SUPPLIED</th></tr></thead>
           <tbody>${(()=>{
-            const log = purchases.slice().sort((a,b)=>(new Date(b.date||0).getTime()||0)-(new Date(a.date||0).getTime()||0)).slice(0,150);
+            // Sort by actual save time first, falling back to the date string —
+            // same-day deliveries previously only compared by calendar date (no
+            // time component), so the most recently logged one didn't reliably
+            // land at the top.
+            const log = purchases.slice().sort((a,b)=>(b._savedAt||new Date(b.date||0).getTime()||0)-(a._savedAt||new Date(a.date||0).getTime()||0)).slice(0,150);
             if (!log.length) return '<tr><td colspan="5"><div class="empty-state"><div class="empty-state-icon">📦</div><div>No deliveries recorded yet.</div></div></td></tr>';
             return log.map(p=>`<tr>
               <td style="font-size:12px;color:var(--text3)">${p.date||''}</td>
