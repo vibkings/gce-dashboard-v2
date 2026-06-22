@@ -12595,16 +12595,22 @@ function _buildProformaHTML(id, includeButtons){
     <td style="padding:6px 8px;text-align:right;font-weight:700">₦${(i.total||((i.price||0)*i.qty)).toLocaleString()}</td>
   </tr>`).join('');
   // Build 3-column bank table (up to 3 banks, one per column with category label)
-  // Group banks: split into up to 3 display groups
-  const bankCols = [];
-  const getBankLabel = (b) => b.acctLabel||b.name;
-  // Try to build 3 columns: first 3 distinct named banks
   const allBanks = [...transferBanks, ...posBanks.filter(b=>!transferBanks.find(t=>t._id===b._id))];
   const col1 = allBanks[0]||null, col2 = allBanks[1]||null, col3 = allBanks[2]||null;
-  const mkBankCol = (b, label) => b ? `<div style="flex:1;background:#f8f9ff;border:1px solid #c7d2fe;border-radius:6px;padding:10px 12px">
+  // Icon follows the category text itself (door/electrical keywords) rather
+  // than a hardcoded bank name — stays data-driven as new banks are added.
+  const categoryIcon = (cat) => {
+    const c = (cat||'').toLowerCase();
+    const hasDoor = c.includes('door'); const hasElec = c.includes('electric');
+    if (hasDoor && hasElec) return '⚡🚪';
+    if (hasDoor) return '🚪';
+    if (hasElec) return '⚡';
+    return '💳';
+  };
+  const mkBankCol = (b) => b ? `<div style="flex:1;background:#f8f9ff;border:1px solid #c7d2fe;border-radius:6px;padding:10px 12px">
     <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
-      <span style="font-size:14px">${b.type==='pos'?'🏧':'⚡'}</span>
-      <b style="font-size:11px;color:#1a237e;text-transform:uppercase">${esc(label||b.name)}</b>
+      <span style="font-size:14px">${b.category?categoryIcon(b.category):(b.type==='pos'?'🏧':'⚡')}</span>
+      <b style="font-size:11px;color:#1a237e;text-transform:uppercase">${esc(b.category||b.name)}</b>
     </div>
     <div style="font-size:12px;color:#333;line-height:1.7">
       <div><b>Bank:</b> ${esc(b.name)}</div>
@@ -12619,9 +12625,9 @@ function _buildProformaHTML(id, includeButtons){
       <b style="font-size:13px;color:#7c3aed;text-transform:uppercase;letter-spacing:1px">Payment / Bank Details</b>
     </div>
     <div style="display:flex;gap:10px">
-      ${mkBankCol(col1, col1?.bankLabel||'')}
-      ${mkBankCol(col2, col2?.bankLabel||'')}
-      ${mkBankCol(col3, col3?.bankLabel||'')}
+      ${mkBankCol(col1)}
+      ${mkBankCol(col2)}
+      ${mkBankCol(col3)}
     </div>
     <div style="margin-top:10px;font-size:10px;color:#666;border-top:1px dashed #ccc;padding-top:8px;text-align:center;font-style:italic">
       Goods remain the property of Great Chid Electro (Nig.) until full payment is confirmed.<br>
@@ -16473,14 +16479,16 @@ function renderSettingsFull(){
     <td><b>${esc(b.name)}</b></td>
     <td style="font-size:12px;color:var(--text3)">${esc(b.acct||'—')}</td>
     <td style="font-size:12px;color:var(--text3)">${esc(b.accountName||'—')}</td>
+    <td style="font-size:12px;color:var(--text3)">${esc(b.category||'—')}</td>
     <td>${STATE.user?.role==='admin'?`<button class="btn btn-sm" onclick="removeBank('${b._id||b.id}')" style="color:var(--danger)">Remove</button>`:''}</td>
-  </tr>`).join(''):'<tr><td colspan="4" style="text-align:center;color:var(--text3);padding:10px">No bank accounts added yet.</td></tr>';
+  </tr>`).join(''):'<tr><td colspan="5" style="text-align:center;color:var(--text3);padding:10px">No bank accounts added yet.</td></tr>';
 
   const posRows=posBanks.length?posBanks.map(b=>`<tr>
     <td><b>${esc(b.name)}</b></td>
     <td style="font-size:12px;color:var(--text3)">${esc(b.acct||'—')}</td>
+    <td style="font-size:12px;color:var(--text3)">${esc(b.category||'—')}</td>
     <td>${STATE.user?.role==='admin'?`<button class="btn btn-sm" onclick="removeBank('${b._id||b.id}')" style="color:var(--danger)">Remove</button>`:''}</td>
-  </tr>`).join(''):'<tr><td colspan="3" style="text-align:center;color:var(--text3);padding:10px">No POS terminals added yet.</td></tr>';
+  </tr>`).join(''):'<tr><td colspan="4" style="text-align:center;color:var(--text3);padding:10px">No POS terminals added yet.</td></tr>';
 
   const secTitle=(icon,title)=>`<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--brand);margin-bottom:12px;display:flex;align-items:center;gap:6px">
     <span style="width:3px;height:14px;background:var(--brand);border-radius:2px;display:inline-block"></span>
@@ -16568,7 +16576,7 @@ function renderSettingsFull(){
     <div class="form-card" style="margin-bottom:1.25rem">
       ${secTitle('🏦','Bank Accounts')}
       <p style="font-size:12px;color:var(--text3);margin-bottom:12px">Banks shown when "Bank transfer" is selected as payment mode.</p>
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:8px;align-items:flex-end;margin-bottom:12px;max-width:720px">
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr auto;gap:8px;align-items:flex-end;margin-bottom:12px;max-width:900px">
         <div>
           <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);margin-bottom:3px">BANK NAME <span style="color:var(--danger)">*</span></div>
           <input class="form-input" id="set-transfer-name" placeholder="e.g. Zenith Bank" style="width:100%">
@@ -16581,10 +16589,15 @@ function renderSettingsFull(){
           <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);margin-bottom:3px">ACCOUNT NAME (OPTIONAL)</div>
           <input class="form-input" id="set-transfer-accname" placeholder="e.g. Great Chid Electro Nig Ltd" style="width:100%">
         </div>
+        <div>
+          <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);margin-bottom:3px">CATEGORY / LABEL (OPTIONAL)</div>
+          <input class="form-input" id="set-transfer-category" placeholder="e.g. Electrical Goods Only" style="width:100%">
+        </div>
         <button class="btn btn-primary" onclick="addBankByType('transfer')" style="white-space:nowrap">Add bank</button>
       </div>
+      <div style="font-size:11px;color:var(--text3);margin:-6px 0 12px;max-width:900px">This label is what shows as the heading on Proforma Invoices (e.g. "Electrical Goods Only", "Doors Payment Only") — leave blank to just show the bank name.</div>
       <div class="tbl-wrap" style="border-radius:var(--radius);border:1px solid var(--border)">
-        <table><thead><tr><th>BANK NAME</th><th>ACCOUNT NUMBER</th><th>ACCOUNT NAME</th><th></th></tr></thead>
+        <table><thead><tr><th>BANK NAME</th><th>ACCOUNT NUMBER</th><th>ACCOUNT NAME</th><th>CATEGORY / LABEL</th><th></th></tr></thead>
         <tbody>${transferRows}</tbody></table>
       </div>
     </div>
@@ -16593,7 +16606,7 @@ function renderSettingsFull(){
     <div class="form-card" style="margin-bottom:1.25rem">
       ${secTitle('🏧','POS Terminals')}
       <p style="font-size:12px;color:var(--text3);margin-bottom:12px">Terminals shown when "POS" is selected as payment mode.</p>
-      <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:flex-end;margin-bottom:12px;max-width:560px">
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:8px;align-items:flex-end;margin-bottom:12px;max-width:760px">
         <div>
           <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);margin-bottom:3px">TERMINAL NAME <span style="color:var(--danger)">*</span></div>
           <input class="form-input" id="set-pos-name" placeholder="e.g. Moniepoint POS 1" style="width:100%">
@@ -16602,10 +16615,14 @@ function renderSettingsFull(){
           <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);margin-bottom:3px">TERMINAL ID (OPTIONAL)</div>
           <input class="form-input" id="set-pos-acct" placeholder="e.g. TID-001" style="width:100%">
         </div>
+        <div>
+          <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);margin-bottom:3px">CATEGORY / LABEL (OPTIONAL)</div>
+          <input class="form-input" id="set-pos-category" placeholder="e.g. Doors Payment Only" style="width:100%">
+        </div>
         <button class="btn btn-primary" onclick="addBankByType('pos')" style="white-space:nowrap">Add terminal</button>
       </div>
       <div class="tbl-wrap" style="border-radius:var(--radius);border:1px solid var(--border)">
-        <table><thead><tr><th>TERMINAL NAME</th><th>TERMINAL ID</th><th></th></tr></thead>
+        <table><thead><tr><th>TERMINAL NAME</th><th>TERMINAL ID</th><th>CATEGORY / LABEL</th><th></th></tr></thead>
         <tbody>${posRows}</tbody></table>
       </div>
     </div>
@@ -16761,15 +16778,18 @@ async function addBankByType(type){
   const nameId=type==='pos'?'set-pos-name':'set-transfer-name';
   const acctId=type==='pos'?'set-pos-acct':'set-transfer-acct';
   const accNameId='set-transfer-accname';
+  const categoryId=type==='pos'?'set-pos-category':'set-transfer-category';
   const name=document.getElementById(nameId)?.value.trim();
   if(!name){showToast(`Enter ${type==='pos'?'terminal':'bank'} name.`,'error');return;}
   const acct=document.getElementById(acctId)?.value.trim()||'';
   const accountName=type==='transfer'?(document.getElementById(accNameId)?.value.trim()||''):'';
-  const id=uid();const bank={id,name,type,acct,accountName};
+  const category=document.getElementById(categoryId)?.value.trim()||'';
+  const id=uid();const bank={id,name,type,acct,accountName,category};
   setSyncStatus('saving');
   try{await fsSave('v2_banks',id,bank);if(!STATE.banks)STATE.banks={};STATE.banks[id]={...bank,_id:id,_savedAt:Date.now()};
     document.getElementById(nameId).value='';document.getElementById(acctId).value='';
     const accNameEl=document.getElementById(accNameId); if(accNameEl) accNameEl.value='';
+    const categoryEl=document.getElementById(categoryId); if(categoryEl) categoryEl.value='';
     setSyncStatus('synced');showToast(`${type==='pos'?'POS terminal':'Bank'} "${name}" added.`,'success');renderSettings();}
   catch(e){setSyncStatus('error');showToast('Failed.','error');}
 }
