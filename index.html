@@ -4288,7 +4288,7 @@ function renderSales() {
         <input type="date" class="form-input" style="font-size:11.5px;padding:4px 8px;border-radius:var(--radius-sm);height:30px;width:auto"
           onchange="window._salesFilter='date';window._salesFilterDate=this.value;window._v2SalesPage=0;renderSales()"
           value="${filter==='date'?filterDate:''}">
-        <button class="btn btn-sm" onclick="void(0)" style="color:#1a237e;border-color:#93c5fd;font-size:11.5px">🖨️ Print</button>
+        <button class="btn btn-sm" onclick="printSalesLedger()" style="color:#1a237e;border-color:#93c5fd;font-size:11.5px">🖨️ Print</button>
       </div>
     </div>
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
@@ -4352,6 +4352,103 @@ function renderSales() {
   // this, the tendered/change field silently never appears for the most
   // common payment type. Run it once now that the form is in the DOM.
   if (document.getElementById('s-payment')) v2OnPayTypeChange();
+}
+// Prints the Sales Ledger exactly as currently filtered (Today/All/specific
+// date + search), not a single invoice — each ledger row already has its
+// own View/Print buttons for that.
+function printSalesLedger() {
+  const filter = window._salesFilter||'today';
+  const filterDate = window._salesFilterDate||'';
+  const searchTerm = (salesSearch||'').toLowerCase();
+  const today = new Date().toLocaleDateString();
+
+  const allSales = Object.values(STATE.sales||{}).filter(s=>!s.voided);
+  const invGroups = {};
+  allSales.forEach(s=>{
+    const k = s.invoiceNum;
+    if (!invGroups[k]) invGroups[k] = {invoiceNum:k, date:s.date, custName:s.printName||s.custName||'Walk-in',
+      payment:s.payment, payMode:s.payMode, items:[], total:0, profit:0};
+    invGroups[k].items.push(s);
+    invGroups[k].total += s.total||0;
+    invGroups[k].profit += s.profit||0;
+  });
+  const keys = Object.keys(invGroups).filter(k=>{
+    const g = invGroups[k];
+    if (searchTerm) {
+      if (!k.toLowerCase().includes(searchTerm) && !(g.custName||'').toLowerCase().includes(searchTerm) &&
+          !g.items.some(s=>(s.name||'').toLowerCase().includes(searchTerm))) return false;
+    }
+    if (filter==='today') return g.date===today;
+    if (filter==='date'&&filterDate) {
+      const dp=filterDate.split('-');
+      return g.date===new Date(+dp[0],+dp[1]-1,+dp[2]).toLocaleDateString();
+    }
+    return true;
+  }).sort((a,b)=>b.localeCompare(a));
+
+  if (!keys.length) { showToast('No invoices match the current filter.','info'); return; }
+
+  const periodLabel = filter==='today'?'Today ('+today+')':filter==='date'&&filterDate?filterDate:'All Time';
+  let grandTotal=0, grandProfit=0;
+  const rows = keys.map(k=>{
+    const g = invGroups[k];
+    grandTotal += g.total; grandProfit += g.profit;
+    const itemsStr = g.items.slice(0,2).map(s=>esc(s.name)).join(', ')+(g.items.length>2?` +${g.items.length-2} more`:'');
+    const payLabel = g.payment==='credit'?'Credit':g.payment==='part'?'Part Pay':g.payment==='deposit'?'Deposit':(g.payMode||'Cash');
+    return `<tr>
+      <td style="padding:6px 8px;border-bottom:1px solid #eee;font-size:11px">${g.date||''}</td>
+      <td style="padding:6px 8px;border-bottom:1px solid #eee;font-size:11px;font-weight:700">${esc(g.invoiceNum)}</td>
+      <td style="padding:6px 8px;border-bottom:1px solid #eee;font-size:11px">${esc(g.custName)}</td>
+      <td style="padding:6px 8px;border-bottom:1px solid #eee;font-size:11px">${itemsStr}</td>
+      <td style="padding:6px 8px;border-bottom:1px solid #eee;font-size:11px;text-align:right">₦${g.total.toLocaleString()}</td>
+      <td style="padding:6px 8px;border-bottom:1px solid #eee;font-size:10.5px;color:#666">${esc(payLabel)}</td>
+    </tr>`;
+  }).join('');
+
+  const html = `<!DOCTYPE html><html><head><title>Sales Ledger — ${esc(periodLabel)}</title>
+  <style>
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{font-family:Arial,Helvetica,sans-serif;color:#1a1a1a;padding:20px;max-width:820px;margin:0 auto}
+    table{width:100%;border-collapse:collapse}
+    @media print{body{padding:8mm}.no-print{display:none!important}}
+  </style></head><body>
+    <div style="text-align:center;margin-bottom:14px;border-bottom:3px solid #c0392b;padding-bottom:10px">
+      <div style="font-size:16px;font-weight:900;color:#c0392b">GREAT CHID ELECTRO (NIG.) | GLOBAL DOORS LTD</div>
+      <div style="font-size:13px;font-weight:700;margin-top:6px">SALES LEDGER — ${esc(periodLabel)}</div>
+      <div style="font-size:10.5px;color:#666;margin-top:2px">${keys.length} invoice${keys.length!==1?'s':''}</div>
+    </div>
+    <table>
+      <thead><tr style="background:#1a237e;color:#fff">
+        <th style="padding:7px 8px;text-align:left;font-size:9.5px">DATE</th>
+        <th style="padding:7px 8px;text-align:left;font-size:9.5px">INVOICE #</th>
+        <th style="padding:7px 8px;text-align:left;font-size:9.5px">CUSTOMER</th>
+        <th style="padding:7px 8px;text-align:left;font-size:9.5px">ITEMS</th>
+        <th style="padding:7px 8px;text-align:right;font-size:9.5px">TOTAL</th>
+        <th style="padding:7px 8px;text-align:left;font-size:9.5px">MODE</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+      <tfoot>
+        <tr style="border-top:2px solid #1a237e;background:#f0f4ff">
+          <td colspan="4" style="padding:8px;text-align:right;font-size:12px;font-weight:800">GRAND TOTAL</td>
+          <td style="padding:8px;text-align:right;font-size:14px;font-weight:900;color:#c0392b">₦${grandTotal.toLocaleString()}</td>
+          <td></td>
+        </tr>
+        <tr>
+          <td colspan="4" style="padding:4px 8px;text-align:right;font-size:11px;color:#15803d">Total Profit</td>
+          <td style="padding:4px 8px;text-align:right;font-size:12px;font-weight:700;color:#15803d">₦${grandProfit.toLocaleString()}</td>
+          <td></td>
+        </tr>
+      </tfoot>
+    </table>
+    <div style="margin-top:16px;font-size:10px;color:#888;text-align:center;border-top:1px solid #eee;padding-top:8px">
+      Generated by GCE Business Dashboard v2 &nbsp;|&nbsp; ${new Date().toLocaleString()}
+    </div>
+    <div class="no-print" style="text-align:center;margin-top:16px">
+      <button onclick="window.print()" style="padding:8px 16px;background:#1a237e;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600">🖨️ Print</button>
+    </div>
+  </body></html>`;
+  const w = window.open('','_blank','width=850,height=1000');
+  if (w) { w.document.write(html); w.document.close(); }
 }
 function v2CustSearch(val) {
   const dd = document.getElementById('s-cust-dd'); if(!dd) return;
@@ -5145,6 +5242,30 @@ function viewSalesReturn(id) {
     credit:'<span style="background:#eff6ff;color:#1d4ed8;padding:4px 10px;border-radius:20px;font-size:11px;font-weight:700">STORE CREDIT</span>',
     exchange:'<span style="background:#fef3c7;color:#92400e;padding:4px 10px;border-radius:20px;font-size:11px;font-weight:700">EXCHANGE</span>'
   }[r.refundType] || '';
+
+  const isExchange = r.refundType==='exchange';
+  const returnedValue = r.refundAmt||0; // value of the item(s) returned
+  const exchangedValue = isExchange ? Math.round((r.exNewPrice||0)*(r.qty||1)) : 0;
+  const diff = exchangedValue - returnedValue; // >0 = customer owed more (shortfall), <0 = refund/credit due
+  const settleLabelMap = {cash:'Cash',pos:'POS',transfer:'Bank Transfer',credit:'Adjusted on customer balance',split:'Split (cash + transfer)'};
+
+  const exchangeSection = isExchange ? `
+    <div style="display:flex;justify-content:space-between"><span>Item returned — value</span><b>${fmt(returnedValue)}</b></div>
+    <div style="display:flex;justify-content:space-between"><span>Exchanged for</span><b>${esc(r.exchangedForItemName||'—')}</b></div>
+    <div style="display:flex;justify-content:space-between"><span>Exchanged item — value</span><b>${fmt(exchangedValue)}</b></div>
+    <div style="display:flex;justify-content:space-between;border-top:1px dashed var(--border);margin-top:6px;padding-top:6px">
+      <span>${diff>0?'Shortfall paid by customer':diff<0?'Refunded / credited to customer':'Difference'}</span>
+      <b style="color:${diff>0?'var(--danger)':diff<0?'var(--success)':'var(--text2)'}">${diff===0?'No difference':fmt(Math.abs(diff))}</b>
+    </div>
+    ${diff!==0?`<div style="display:flex;justify-content:space-between;margin-top:2px"><span style="color:var(--text3);font-size:12px">Settled via</span><span style="font-size:12px">${esc(settleLabelMap[r.exSettleMode]||r.exSettleMode||'Cash')}${(r.exSettleMode==='transfer'&&r.exBankName)?' → '+esc(r.exBankName):''}${(r.exSettleMode==='pos'&&r.exPosName)?' ('+esc(r.exPosName)+')':''}</span></div>`:''}
+    ${r.exSettleMode==='split'?`<div style="font-size:11.5px;color:var(--text3);margin-top:2px">${esc(r.exSplitMode1||'cash')}: ${fmt(r.exSplitAmt1||0)} + ${esc(r.exSplitMode2||'transfer')}: ${fmt(r.exSplitAmt2||0)}</div>`:''}
+  ` : `
+    <div style="display:flex;justify-content:space-between;border-top:1px dashed var(--border);margin-top:6px;padding-top:6px">
+      <span>${r.refundType==='credit'?'Store credit applied':'Refund amount'}</span>
+      <b style="color:var(--danger)">${fmt(returnedValue)}</b>
+    </div>
+  `;
+
   const body = `
     <div style="text-align:center;margin-bottom:14px">${badge}</div>
     <div style="background:var(--surface);border-radius:10px;padding:14px 16px;font-size:13px;line-height:1.8">
@@ -5153,8 +5274,7 @@ function viewSalesReturn(id) {
       <div style="display:flex;justify-content:space-between"><span>Customer</span><b>${esc(r.custName||'Walk-in')}</b></div>
       <div style="display:flex;justify-content:space-between"><span>Item returned</span><b>${esc(r.itemName||'—')}</b></div>
       <div style="display:flex;justify-content:space-between"><span>Qty</span><b>${r.qty||1}</b></div>
-      ${r.refundType==='exchange'&&r.exchangedForItemName?`<div style="display:flex;justify-content:space-between"><span>Exchanged for</span><b>${esc(r.exchangedForItemName)}</b></div>`:''}
-      <div style="display:flex;justify-content:space-between;border-top:1px dashed var(--border);margin-top:6px;padding-top:6px"><span>Refund amount</span><b style="color:var(--danger)">${fmt(r.refundAmt||0)}</b></div>
+      ${exchangeSection}
       ${r.reason?`<div style="margin-top:6px"><span style="color:var(--text3)">Reason:</span> ${esc(r.reason)}</div>`:''}
       <div style="margin-top:6px;font-size:11.5px;color:var(--text3)">Processed by ${esc(r.by||'—')}</div>
     </div>
@@ -5169,6 +5289,23 @@ function printSalesReturn(id) {
   const r = STATE.salesReturns?.[id];
   if (!r) { showToast('Return not found.','error'); return; }
   const typeLabel = {cash:'Cash Refund',transfer:'Transfer Refund',credit:'Store Credit',exchange:'Exchange'}[r.refundType] || 'Refund';
+
+  const isExchange = r.refundType==='exchange';
+  const returnedValue = r.refundAmt||0;
+  const exchangedValue = isExchange ? Math.round((r.exNewPrice||0)*(r.qty||1)) : 0;
+  const diff = exchangedValue - returnedValue;
+  const settleLabelMap = {cash:'Cash',pos:'POS',transfer:'Bank Transfer',credit:'Adjusted on customer balance',split:'Split (cash + transfer)'};
+
+  const exchangeRows = isExchange ? `
+    <tr><td class="lbl">Item returned — value</td><td style="text-align:right">${fmt(returnedValue)}</td></tr>
+    <tr><td class="lbl">Exchanged for</td><td style="text-align:right">${esc(r.exchangedForItemName||'—')}</td></tr>
+    <tr><td class="lbl">Exchanged item — value</td><td style="text-align:right">${fmt(exchangedValue)}</td></tr>
+    ${diff!==0?`<tr><td class="lbl">${diff>0?'Shortfall paid by customer':'Refunded / credited to customer'}</td><td style="text-align:right;font-weight:800;color:${diff>0?'#c0392b':'#15803d'}">${fmt(Math.abs(diff))}</td></tr>
+    <tr><td class="lbl">Settled via</td><td style="text-align:right">${esc(settleLabelMap[r.exSettleMode]||r.exSettleMode||'Cash')}${(r.exSettleMode==='transfer'&&r.exBankName)?' → '+esc(r.exBankName):''}${(r.exSettleMode==='pos'&&r.exPosName)?' ('+esc(r.exPosName)+')':''}</td></tr>
+    ${r.exSettleMode==='split'?`<tr><td class="lbl">Split breakdown</td><td style="text-align:right">${esc(r.exSplitMode1||'cash')}: ${fmt(r.exSplitAmt1||0)} + ${esc(r.exSplitMode2||'transfer')}: ${fmt(r.exSplitAmt2||0)}</td></tr>`:''}`
+    :`<tr><td class="lbl">No price difference</td><td style="text-align:right">—</td></tr>`}
+  ` : '';
+
   const html = `<!DOCTYPE html><html><head><title>Return Receipt — ${esc(r.invoiceNum||'')}</title>
   <style>
     body{font-family:Arial,Helvetica,sans-serif;margin:0;padding:20px;color:#222}
@@ -5192,11 +5329,11 @@ function printSalesReturn(id) {
       <tr><td class="lbl">Customer</td><td style="text-align:right">${esc(r.custName||'Walk-in')}</td></tr>
       <tr><td class="lbl">Item returned</td><td style="text-align:right">${esc(r.itemName||'—')}</td></tr>
       <tr><td class="lbl">Qty</td><td style="text-align:right">${r.qty||1}</td></tr>
-      ${r.refundType==='exchange'&&r.exchangedForItemName?`<tr><td class="lbl">Exchanged for</td><td style="text-align:right">${esc(r.exchangedForItemName)}</td></tr>`:''}
+      ${exchangeRows}
       ${r.reason?`<tr><td class="lbl">Reason</td><td style="text-align:right">${esc(r.reason)}</td></tr>`:''}
       <tr><td class="lbl">Processed by</td><td style="text-align:right">${esc(r.by||'—')}</td></tr>
     </table>
-    <div class="tot">Refund amount: ${fmt(r.refundAmt||0)}</div>
+    <div class="tot">${isExchange?(diff===0?'No amount due':diff>0?'Shortfall paid: '+fmt(diff):'Refunded to customer: '+fmt(Math.abs(diff))):(r.refundType==='credit'?'Store credit applied: ':'Refund amount: ')+fmt(returnedValue)}</div>
     <div class="ftr">Thank you for choosing Great Chid Electro (Nig.)</div>
     <div class="no-print"><button onclick="window.print()" style="padding:8px 16px;background:#1a237e;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600">🖨️ Print</button></div>
   </body></html>`;
@@ -6699,7 +6836,22 @@ function showInvoiceViewModal(invNum) {
   else payLabel='<span style="color:#15803d;font-weight:700">Fully paid</span>';
 
   let modeStr = '';
-  if(payMode==='split'&&splitPayment) {
+  if (payment==='deposit') {
+    // Deposit sales store the deposit itself separately from how the
+    // SHORTFALL was settled (depositShortfallMode) — payMode here is just
+    // the literal string 'deposit', so it never matched the split case
+    // below and silently hid the actual breakdown.
+    const sfMode = first.depositShortfallMode || 'cash';
+    const sfBank = first.depositShortfallBank || '';
+    if (sfMode==='split' && splitPayment) {
+      const b1=splitPayment.bank1?` → ${splitPayment.bank1}`:'';
+      const b2=splitPayment.bank2?` → ${splitPayment.bank2}`:'';
+      modeStr=`${splitPayment.mode1}${b1}: ${fmt(splitPayment.amt1||0)} + ${splitPayment.mode2}${b2}: ${fmt(splitPayment.amt2||0)}`;
+    } else if (sfMode==='transfer') modeStr=`Transfer → ${sfBank||'Bank transfer'}`;
+    else if (sfMode==='pos') modeStr=`POS${sfBank?' ('+sfBank+')':''}`;
+    else if (sfMode==='credit') modeStr='—';
+    else modeStr='Cash';
+  } else if(payMode==='split'&&splitPayment) {
     const b1=splitPayment.bank1?` → ${splitPayment.bank1}`:'';
     const b2=splitPayment.bank2?` → ${splitPayment.bank2}`:'';
     modeStr=`${splitPayment.mode1}${b1}: ${fmt(splitPayment.amt1||0)} + ${splitPayment.mode2}${b2}: ${fmt(splitPayment.amt2||0)}`;
@@ -7225,6 +7377,109 @@ async function saveCommission(invNum) {
   } catch(e){setSyncStatus('error');showToast('Failed.','error');}
 }
 
+// ── PAY COMMISSION ────────────────────────────────────────
+function showPayCommissionModal(custId) {
+  const c = STATE.customers?.[custId]; if (!c) return;
+  const commissions = Object.values(STATE.cashflow||{}).filter(cf=>cf.custId===custId&&cf.cat==='Commission');
+  const earned = commissions.filter(cf=>cf.type==='in'||cf.commType==='earned').reduce((a,cc)=>a+(cc.amount||0),0);
+  const paid = commissions.filter(cf=>cf.type==='out'||cf.commType==='paid').reduce((a,cc)=>a+(cc.amount||0),0);
+  const due = Math.max(0, earned-paid);
+  if (due<=0) { showToast('No commission balance due for this customer.','info'); return; }
+  window._pcState = {custId, due, owed:c.creditBalance||0, amount:due, clearDebt:false, debtAmt:0, mode:'cash', bankName:''};
+  renderPayCommissionModal();
+}
+
+function renderPayCommissionModal() {
+  const st = window._pcState; if (!st) return;
+  const c = STATE.customers?.[st.custId]; if (!c) return;
+  if (st.amount>st.due) st.amount=st.due;
+  if (st.amount<1) st.amount=1;
+  if (st.clearDebt) st.debtAmt=Math.min(st.debtAmt||st.owed,st.amount,st.owed);
+  const remainder = Math.max(0,(st.amount||0)-(st.clearDebt?(st.debtAmt||0):0));
+
+  const body = `
+    <div style="background:var(--surface);border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:13px">
+      <div style="display:flex;justify-content:space-between"><span style="color:var(--text3)">Commission balance due</span><b style="color:#16a34a">${fmt(st.due)}</b></div>
+      ${st.owed>0?`<div style="display:flex;justify-content:space-between;margin-top:4px"><span style="color:var(--text3)">${esc(c.name)} currently owes</span><b style="color:var(--danger)">${fmt(st.owed)}</b></div>`:''}
+    </div>
+    <div class="form-group" style="margin-bottom:10px">
+      <label>Amount to pay out (₦)</label>
+      <input class="form-input" id="pc-amount" type="number" min="1" max="${st.due}" value="${st.amount}" onchange="window._pcState.amount=parseFloat(this.value)||0;renderPayCommissionModal()">
+    </div>
+    ${st.owed>0?`
+    <div class="form-group" style="margin-bottom:10px">
+      <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:400">
+        <input type="checkbox" id="pc-cleardebt" ${st.clearDebt?'checked':''} onchange="window._pcState.clearDebt=this.checked;window._pcState.debtAmt=this.checked?Math.min(window._pcState.amount,window._pcState.owed):0;renderPayCommissionModal()">
+        Use part of this payout to clear ${esc(c.name)}'s outstanding debt
+      </label>
+    </div>
+    ${st.clearDebt?`<div class="form-group" style="margin-bottom:10px">
+      <label>Amount to apply to debt (₦)</label>
+      <input class="form-input" id="pc-debtamt" type="number" min="0" max="${Math.min(st.amount,st.owed)}" value="${st.debtAmt}" onchange="window._pcState.debtAmt=Math.min(parseFloat(this.value)||0,Math.min(window._pcState.amount,window._pcState.owed));renderPayCommissionModal()">
+    </div>`:''}`:''}
+    ${remainder>0?`
+    <div class="form-group" style="margin-bottom:10px">
+      <label>Payout method for remaining ${fmt(remainder)}</label>
+      <select class="form-input" id="pc-mode" onchange="window._pcState.mode=this.value;toggleGenericBankField('pc','out')">
+        <option value="cash" ${st.mode==='cash'?'selected':''}>Cash</option>
+        <option value="transfer" ${st.mode==='transfer'?'selected':''}>Bank Transfer</option>
+        <option value="pos" ${st.mode==='pos'?'selected':''}>POS</option>
+      </select>
+    </div>
+    <div class="form-group" id="pc-bank-wrap" style="display:${st.mode==='transfer'?'block':'none'};margin-bottom:10px">
+      <label id="pc-bank-label">Bank Account</label>
+      <select class="form-input" id="pc-bank" onchange="window._pcState.bankName=this.value">${bankSelectOpts('transfer',st.bankName)}</select>
+    </div>`:`<div style="font-size:12px;color:var(--text3);padding:6px 0">Entire amount applied to debt — no cash/transfer payout needed.</div>`}
+    <div class="form-group" style="margin-bottom:6px"><label>Note (optional)</label><input class="form-input" id="pc-note" placeholder="e.g. June commission payout"></div>
+  `;
+  showModal('🎯 Pay Commission', body, [
+    {label:'Cancel', action:'close', style:''},
+    {label:'✓ Confirm Payout', action:'confirmPayCommission()', style:'btn-primary'}
+  ]);
+}
+
+async function confirmPayCommission() {
+  const st = window._pcState; if (!st) return;
+  const c = STATE.customers?.[st.custId]; if (!c) return;
+  const amount = parseFloat(document.getElementById('pc-amount')?.value)||0;
+  if (!amount || amount<=0 || amount>st.due) { showToast('Enter a valid amount, up to the balance due.','error'); return; }
+  const debtAmt = st.clearDebt ? Math.min(st.debtAmt||0, amount, st.owed) : 0;
+  const remainder = amount-debtAmt;
+  const mode = document.getElementById('pc-mode')?.value || 'cash';
+  const bankName = document.getElementById('pc-bank')?.value || '';
+  const note = document.getElementById('pc-note')?.value?.trim() || '';
+  const now=new Date();const date=now.toLocaleDateString();const month=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
+
+  setSyncStatus('saving');
+  try {
+    const cfId=uid();
+    const cf={id:cfId, type:'out', cat:'Commission', commType:'paid',
+      desc:`Commission payout — ${c.name}${debtAmt>0?` (${fmt(debtAmt)} applied to debt)`:''}${note?' — '+note:''}`,
+      amount, payMode: remainder>0?mode:'credit', bankName:(remainder>0&&mode==='transfer')?bankName:'',
+      custId:st.custId, custName:c.name, date, month, by:STATE.user?.name};
+    await fsSave(COLS.CASHFLOW, cfId, cf);
+    if(!STATE.cashflow)STATE.cashflow={};
+    STATE.cashflow[cfId]={...cf,_id:cfId,_savedAt:Date.now()};
+
+    if (debtAmt>0) {
+      const updCust={...c, creditBalance:Math.max(0,(c.creditBalance||0)-debtAmt)};
+      await fsSave(COLS.CUSTOMERS, st.custId, updCust);
+      STATE.customers[st.custId]={...updCust,_id:st.custId,_savedAt:Date.now()};
+    }
+
+    closeModal();
+    setSyncStatus('synced');
+    showToast(`✅ Commission payout of ${fmt(amount)} recorded.`,'success');
+    logActivity('Commission paid', `${c.name} — ${fmt(amount)}${debtAmt>0?` (${fmt(debtAmt)} to debt)`:''}`, note);
+    window._pcState=null;
+    window._custProfileId=st.custId;
+    renderCustomerProfile(st.custId);
+  } catch(e) {
+    setSyncStatus('error');
+    showToast('Failed: '+e.message,'error');
+  }
+}
+
 
 async function voidInvoice(invNum) {
   if (!confirm(`Void Invoice #${invNum}? This will restore inventory stock.`)) return;
@@ -7666,10 +7921,10 @@ function renderPurchases() {
       <div style="font-size:13px;font-weight:700;color:var(--text1);margin:1.5rem 0 10px;display:flex;align-items:center;gap:6px">↩ Purchase Returns</div>
       <div class="tbl-wrap" style="border-radius:var(--radius);border:1px solid var(--border)">
         <table>
-          <thead><tr><th>DATE</th><th>PO #</th><th>ITEM</th><th style="text-align:center">QTY</th><th>TYPE</th><th>SETTLEMENT</th></tr></thead>
+          <thead><tr><th>DATE</th><th>PO #</th><th>ITEM</th><th style="text-align:center">QTY</th><th>TYPE</th><th>SETTLEMENT</th><th></th></tr></thead>
           <tbody>${(()=>{
             const retLog = Object.values(STATE.purchaseReturns||{}).sort((a,b)=>(new Date(b.date||0).getTime()||0)-(new Date(a.date||0).getTime()||0)).slice(0,150);
-            if (!retLog.length) return '<tr><td colspan="6"><div class="empty-state"><div class="empty-state-icon">↩</div><div>No returns recorded yet.</div></div></td></tr>';
+            if (!retLog.length) return '<tr><td colspan="7"><div class="empty-state"><div class="empty-state-icon">↩</div><div>No returns recorded yet.</div></div></td></tr>';
             return retLog.map(r=>{
               const typeLabel = r.returnType==='exchange' ? `<span class="badge badge-warning" style="font-size:10px">🔄 Exchange</span>` : `<span class="badge badge-danger" style="font-size:10px">✕ Complete</span>`;
               const settleLabel = r.returnType==='exchange' ? `Back to Pending Deliveries`
@@ -7682,6 +7937,10 @@ function renderPurchases() {
                 <td style="text-align:center;font-weight:700;color:var(--danger)">${r.qty||0}</td>
                 <td>${typeLabel}</td>
                 <td style="font-size:11px;color:var(--text3)">${settleLabel}</td>
+                <td style="display:flex;gap:4px;flex-wrap:wrap">
+                  <button class="btn btn-sm" onclick="viewPurchaseReturn('${r._id||r.id}')" style="color:var(--primary);border-color:#b6d4fe;font-size:11px;padding:3px 8px">👁 View</button>
+                  <button class="btn btn-sm" onclick="showSharePurchaseReturnModal('${r._id||r.id}')" style="color:#16a34a;border-color:#86efac;font-size:11px;padding:3px 8px">📤 Share</button>
+                </td>
               </tr>`;
             }).join('');
           })()}</tbody>
@@ -8328,6 +8587,131 @@ async function confirmReturnPurchase() {
     window._rpState = null;
     renderPurchases();
   } catch(e) { setSyncStatus('error'); showToast('Failed: '+e.message,'error'); }
+}
+
+// ── Purchase Return: View / Share (same engine as Purchase Orders) ──
+function _buildPurchaseReturnHTML(retId, includeButtons) {
+  const r = STATE.purchaseReturns?.[retId];
+  if (!r) return null;
+  const value = (r.qty||0)*(r.costPrice||0);
+  const typeLabel = r.returnType==='exchange' ? 'RETURN FOR EXCHANGE' : 'COMPLETE RETURN';
+  const settleLabel = r.returnType==='exchange' ? 'Awaiting replacement from supplier — goods sent back to Pending Deliveries'
+    : r.settleMode==='balance' ? `Reduced amount owed to ${esc(r.supplier||'supplier')} by ${fmt(value)}`
+    : `Refunded by supplier — ${fmt(value)} via ${(r.payMode||'cash').toUpperCase()}${r.bankOrPos?' ('+esc(r.bankOrPos)+')':''}`;
+
+  const shieldSVG=`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 95" width="62" height="74">
+    <defs>
+      <linearGradient id="sg4" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" style="stop-color:#c0392b"/><stop offset="100%" style="stop-color:#7b241c"/></linearGradient>
+      <linearGradient id="gg4" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" style="stop-color:#f9d835"/><stop offset="100%" style="stop-color:#c9a227"/></linearGradient>
+    </defs>
+    <path d="M40 2 L76 17 L76 50 C76 70 40 90 40 90 C40 90 4 70 4 50 L4 17 Z" fill="url(#sg4)" stroke="url(#gg4)" stroke-width="3"/>
+    <text x="40" y="34" text-anchor="middle" font-family="Arial Black,sans-serif" font-size="13" font-weight="900" fill="#f9d835" letter-spacing="2">GCE</text>
+    <rect x="29" y="45" width="22" height="26" rx="2" fill="none" stroke="#f9d835" stroke-width="1.6"/>
+    <rect x="35" y="56" width="10" height="15" rx="1" fill="#f9d835"/>
+    <circle cx="40" cy="51" r="3.5" fill="#f9d835"/>
+    <text x="40" y="79" text-anchor="middle" font-family="Arial,sans-serif" font-size="7" font-weight="700" fill="#f9d835" letter-spacing="1.5">ELECTRO</text>
+  </svg>`;
+
+  const actionButtons = includeButtons ? `
+  <div class="no-print" style="text-align:center;margin-top:16px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
+    <button onclick="window.print()" style="padding:8px 16px;background:#1a237e;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600">🖨️ Print</button>
+    <button onclick="window.opener&&window.opener.sharePurchaseReturnFile('${retId}','image')" style="padding:8px 16px;background:#16a34a;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600">📷 Share Image</button>
+    <button onclick="window.opener&&window.opener.sharePurchaseReturnFile('${retId}','pdf')" style="padding:8px 16px;background:#7c3aed;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600">📄 Share PDF</button>
+  </div>` : '';
+
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Purchase Return — PO ${esc(r.purchaseInvoiceNum||'')}</title>
+  <style>
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{font-family:Arial,Helvetica,sans-serif;font-size:13px;color:#1a1a1a;padding:20px;max-width:700px;margin:0 auto}
+    @media print{body{padding:8mm}.no-print{display:none!important}}
+  </style></head><body>
+
+  <div style="display:flex;align-items:flex-start;justify-content:space-between;padding-bottom:10px;border-bottom:3px solid #c0392b;margin-bottom:12px">
+    <div style="flex:1;padding-right:10px">
+      <div style="font-size:16px;font-weight:900;color:#c0392b;line-height:1.1">GREAT CHID ELECTRO (NIG.) |</div>
+      <div style="font-size:14px;font-weight:900;color:#1a237e;line-height:1.15;margin-bottom:5px">GLOBAL DOORS LTD</div>
+      <div style="font-size:9px;color:#555;line-height:1.5">
+        <b>Ogbomoso:</b> Ile-Bara Oke-Ado, Sabo Ilorin Rd &nbsp;|&nbsp; 08035158594<br>
+        <b>Ilorin:</b> 189, Ibrahim Taiwo Rd, beside UBA Bank &nbsp;|&nbsp; 08033617798
+      </div>
+    </div>
+    <div style="flex-shrink:0">${shieldSVG}</div>
+  </div>
+
+  <div style="text-align:center;margin-bottom:12px">
+    <div style="display:inline-block;font-size:15px;font-weight:900;color:#000;letter-spacing:2px;border-top:2px solid #000;border-bottom:2px solid #000;padding:4px 26px">PURCHASE RETURN</div>
+    <div style="margin-top:6px"><span style="background:${r.returnType==='exchange'?'#fef3c7':'#fee2e2'};color:${r.returnType==='exchange'?'#92400e':'#c0392b'};padding:3px 14px;border-radius:20px;font-size:11px;font-weight:800;letter-spacing:1px">${typeLabel}</span></div>
+  </div>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">
+    <div style="border:1px solid #ccc;border-radius:4px;padding:8px 10px">
+      <div style="font-size:11px;font-weight:700;color:#555;margin-bottom:4px">Supplier:</div>
+      <div style="font-size:13px;font-weight:700">${esc(r.supplier||'—')}</div>
+    </div>
+    <div style="border:1px solid #ccc;border-radius:4px;padding:8px 10px">
+      <div style="font-size:11px;font-weight:700;color:#555;margin-bottom:4px">Return Details:</div>
+      <div style="font-size:10.5px;line-height:1.7">
+        <div><b>Original PO #:</b> ${esc(r.purchaseInvoiceNum||'—')}</div>
+        <div><b>Date:</b> ${r.date||''}</div>
+        <div><b>By:</b> ${esc(r.by||'—')}</div>
+      </div>
+    </div>
+  </div>
+
+  <table style="border:1px solid #ccc;border-radius:4px;overflow:hidden;margin-bottom:8px;width:100%;border-collapse:collapse">
+    <thead><tr style="background:#1a237e;color:#fff">
+      <th style="padding:7px 8px;text-align:left;font-size:9.5px;font-weight:800">Item Returned</th>
+      <th style="padding:7px 6px;width:60px;text-align:center;font-size:9.5px;font-weight:800">Qty</th>
+      <th style="padding:7px 6px;width:100px;text-align:right;font-size:9.5px;font-weight:800">Cost/Unit</th>
+      <th style="padding:7px 6px;width:110px;text-align:right;font-size:9.5px;font-weight:800">Value</th>
+    </tr></thead>
+    <tbody><tr style="border-bottom:1px solid #eee">
+      <td style="padding:7px 10px;font-weight:600;font-size:12px">${esc(r.itemName||'')}</td>
+      <td style="padding:7px 10px;text-align:center;font-size:12px;color:#c0392b;font-weight:700">${r.qty||0}</td>
+      <td style="padding:7px 10px;text-align:right;font-size:12px">₦${(r.costPrice||0).toLocaleString()}</td>
+      <td style="padding:7px 10px;text-align:right;font-weight:700;font-size:12px">₦${value.toLocaleString()}</td>
+    </tr></tbody>
+    <tfoot>
+      <tr style="border-top:2px solid #1a237e;background:#f0f4ff">
+        <td colspan="3" style="padding:8px;text-align:right;font-size:13px;font-weight:800">TOTAL VALUE</td>
+        <td style="padding:8px;text-align:right;font-size:15px;font-weight:900;color:#c0392b">₦${value.toLocaleString()}</td>
+      </tr>
+    </tfoot>
+  </table>
+
+  <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:4px;padding:10px 12px;margin-bottom:8px;font-size:12px">
+    <b style="color:#92400e">Settlement:</b> ${settleLabel}
+  </div>
+
+  <div style="margin-top:12px;font-size:10px;color:#555;border-top:1px solid #eee;padding-top:8px;text-align:center">
+    Generated by GCE Business Dashboard v2 &nbsp;|&nbsp; ${r.date||''}
+  </div>
+  ${actionButtons}
+  </body></html>`;
+}
+
+function viewPurchaseReturn(retId) {
+  const html = _buildPurchaseReturnHTML(retId, true);
+  if (!html) { showToast('Return not found.','error'); return; }
+  const w = window.open('','_blank','width=700,height=900');
+  if (w) { w.document.write(html); w.document.close(); }
+}
+
+function showSharePurchaseReturnModal(retId) {
+  showModal('📤 Share Purchase Return', `
+    <div style="font-size:13px;color:var(--text3);margin-bottom:14px">Share this return record exactly as it appears when printed.</div>
+    <div style="display:flex;gap:10px">
+      <button class="btn btn-primary" style="flex:1" onclick="closeModal();sharePurchaseReturnFile('${retId}','image')">📷 Share as Image</button>
+      <button class="btn btn-primary" style="flex:1" onclick="closeModal();sharePurchaseReturnFile('${retId}','pdf')">📄 Share as PDF</button>
+    </div>
+  `, [{label:'Cancel', action:'close', style:''}]);
+}
+
+async function sharePurchaseReturnFile(retId, format) {
+  const html = _buildPurchaseReturnHTML(retId, false);
+  if (!html) { showToast('Return not found.','error'); return; }
+  const r = STATE.purchaseReturns?.[retId];
+  await shareDocumentAs(html, format, `PurchaseReturn_${String(r?.purchaseInvoiceNum||retId).replace(/[^a-z0-9]+/gi,'_')}`);
 }
 
 // ── Purchase Order: View / Print / Share (same engine as invoices) ──
@@ -14351,7 +14735,7 @@ function renderCustomerProfile(id){
   const invGroups={};
   allSales.forEach(s=>{
     const k=s.invoiceNum;
-    if(!invGroups[k])invGroups[k]={invoiceNum:k,date:s.date,month:s.month,total:0,profit:0,payment:s.payment,payMode:s.payMode||'cash',splitPayment:s.splitPayment||null,bankName:s.bankName||'',posName:s.posName||'',seller:s.seller||'',items:[],dueDate:s.dueDate||''};
+    if(!invGroups[k])invGroups[k]={invoiceNum:k,date:s.date,month:s.month,total:0,profit:0,payment:s.payment,payMode:s.payMode||'cash',splitPayment:s.splitPayment||null,bankName:s.bankName||'',posName:s.posName||'',depositShortfallMode:s.depositShortfallMode||'',depositShortfallBank:s.depositShortfallBank||'',seller:s.seller||'',items:[],dueDate:s.dueDate||''};
     invGroups[k].total+=s.total||0;invGroups[k].profit+=s.profit||0;
     invGroups[k].items.push(s);
   });
@@ -14540,8 +14924,12 @@ function renderCustomerProfile(id){
     <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:10px">
       <div class="kpi-card" style="border-left:3px solid var(--text3)"><div class="kpi-label">CREDIT LIMIT</div><div class="kpi-value" style="font-size:18px;font-weight:800">${c.creditLimit?fmt(c.creditLimit):'No limit'}</div><div class="kpi-sub">Set limit</div></div>
       <div class="kpi-card" style="border-left:3px solid #8b5cf6"><div class="kpi-label" style="color:#8b5cf6">DEPOSIT BALANCE</div><div class="kpi-value" style="font-size:18px;font-weight:800;color:#8b5cf6">${fmt(depositBalance)}</div><div class="kpi-sub">Available</div></div>
+      <div class="kpi-card" style="border-left:3px solid var(--success)"><div class="kpi-label" style="color:var(--success)">COMMISSION EARNED</div><div class="kpi-value" style="font-size:18px;font-weight:800;color:var(--success)">${fmt(totalCommEarned)}</div><div class="kpi-sub">Lifetime</div></div>
       <div class="kpi-card" style="border-left:3px solid var(--warning)"><div class="kpi-label" style="color:var(--warning)">COMMISSION PAID</div><div class="kpi-value" style="font-size:18px;font-weight:800;color:var(--warning)">${fmt(totalCommPaid)}</div><div class="kpi-sub">Paid out</div></div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
       <div class="kpi-card" style="border-left:3px solid var(--brand)"><div class="kpi-label" style="color:var(--brand)">GOODS BALANCE</div><div class="kpi-value" style="font-size:18px;font-weight:800;color:var(--brand)">${fmt(goodsBalance)}</div><div class="kpi-sub">Purchases − Commission</div></div>
+      <div class="kpi-card" style="border-left:3px solid #16a34a"><div class="kpi-label" style="color:#16a34a">COMMISSION DUE</div><div class="kpi-value" style="font-size:18px;font-weight:800;color:#16a34a">${fmt(Math.max(0,totalCommEarned-totalCommPaid))}</div><div class="kpi-sub">Not yet paid out</div></div>
     </div>
     <div style="display:grid;grid-template-columns:1fr 3fr;gap:10px;margin-bottom:1.25rem">
       <div class="kpi-card" style="border-left:3px solid var(--success)"><div class="kpi-label" style="color:var(--success)">NET GOODS BALANCE</div><div class="kpi-value" style="font-size:20px;font-weight:800;color:var(--success)">${fmt(netGoodsBalance)}</div><div class="kpi-sub">After returns & commission</div></div>
@@ -14564,6 +14952,7 @@ function renderCustomerProfile(id){
           <button class="btn btn-sm btn-primary" onclick="showFullPaymentModal('${id}')" style="font-size:12px">+ Record Payment</button>
           ${depositBalance>0?`<button class="btn btn-sm" onclick="showApplyDepositModal('${id}')" style="font-size:12px;color:#8b5cf6;border-color:#c4b5fd">💜 Apply Deposit</button>`:''}
           ${creditBalance>0?`<button class="btn btn-sm" onclick="writeOffCredit('${id}')" style="font-size:12px;background:#f59e0b;border-color:#f59e0b;color:#fff">✕ Write-off</button>`:''}
+          ${(totalCommEarned-totalCommPaid)>0?`<button class="btn btn-sm" onclick="showPayCommissionModal('${id}')" style="font-size:12px;color:#16a34a;border-color:#86efac">🎯 Pay Commission</button>`:''}
           ${STATE.user?.role==='admin'?`<button class="btn btn-sm" onclick="verifyCustomerBalance('${id}')" style="font-size:12px;color:#1d4ed8;border-color:#93c5fd" title="Loads this customer's full purchase history (all months) and checks the stored balance against it">🔍 Verify Balance</button>`:''}
         </div>
       </div>
@@ -14696,7 +15085,12 @@ function renderCustomerProfile(id){
         <thead><tr><th>INVOICE #</th><th>DATE</th><th>ITEMS BOUGHT</th><th class="td-right">TOTAL</th><th class="td-right">PROFIT</th><th>PAYMENT MODE</th><th>PAY TYPE</th><th>DUE DATE</th><th>SELLER</th><th></th></tr></thead>
         <tbody>${invList.map(g=>{
           const items=g.items.slice(0,2).map(s=>esc(s.name)).join(', ')+(g.items.length>2?` +${g.items.length-2}`:'');
-          const modeStr=g.payMode==='split'&&g.splitPayment?`Split (${g.splitPayment.mode1}+${g.splitPayment.mode2})`:g.payMode==='transfer'&&g.bankName?`Transfer → ${esc(g.bankName)}`:g.payMode==='pos'&&g.posName?`POS (${esc(g.posName)})`:g.payMode||'cash';
+          const modeStr = g.payment==='deposit'
+            ? (g.depositShortfallMode==='split'&&g.splitPayment?`${g.splitPayment.mode1}: ${fmt(g.splitPayment.amt1||0)} + ${g.splitPayment.mode2}: ${fmt(g.splitPayment.amt2||0)}`
+              :g.depositShortfallMode==='transfer'?`Transfer${g.depositShortfallBank?' → '+esc(g.depositShortfallBank):''}`
+              :g.depositShortfallMode==='pos'?`POS${g.depositShortfallBank?' ('+esc(g.depositShortfallBank)+')':''}`
+              :g.depositShortfallMode==='credit'?'—':'Cash')
+            : g.payMode==='split'&&g.splitPayment?`Split (${g.splitPayment.mode1}+${g.splitPayment.mode2})`:g.payMode==='transfer'&&g.bankName?`Transfer → ${esc(g.bankName)}`:g.payMode==='pos'&&g.posName?`POS (${esc(g.posName)})`:g.payMode||'cash';
           const payTypeBadge=g.payment==='credit'?'<span style="background:#fee2e2;color:#dc2626;padding:2px 7px;border-radius:20px;font-size:10px;font-weight:700">Credit</span>':g.payment==='part'?'<span style="background:#fef3c7;color:#92400e;padding:2px 7px;border-radius:20px;font-size:10px;font-weight:700">Part pay</span>':'<span style="background:#d1fae5;color:#065f46;padding:2px 7px;border-radius:20px;font-size:10px;font-weight:700">Paid</span>';
           const profit=g.items.reduce((a,s)=>a+(s.profit||0),0);
           return`<tr>
