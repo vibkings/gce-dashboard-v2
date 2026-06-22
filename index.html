@@ -15761,7 +15761,7 @@ function renderUsersFull(){
         </div>
       </div>
       <div style="margin-top:10px">
-        <button class="btn btn-sm" onclick="if(confirm('Sign out?'))signOut()" style="color:var(--danger);border-color:var(--danger)">🚪 Sign out</button>
+        <button class="btn btn-sm" onclick="if(confirm('Sign out?'))doSignout()" style="color:var(--danger);border-color:var(--danger)">🚪 Sign out</button>
       </div>
     </div>`;
 
@@ -15885,10 +15885,21 @@ async function deleteUser(userId){
 async function saveMyProfile(){
   const name=document.getElementById('up-name')?.value.trim();
   const pass=document.getElementById('up-newpass')?.value;
+  const curPass=document.getElementById('up-curpass')?.value;
   if(!name){showToast('Name required.','error');return;}
   const userId=STATE.user?._id||STATE.user?.id;if(!userId)return;
   const upd={...STATE.user,name};
-  if(pass&&pass.length>=6)upd.password=btoa(pass);
+  if(pass&&pass.length>=6){
+    // The form asks for current password "to confirm" a change — actually
+    // verify it instead of just accepting whatever's typed there.
+    let matches=false;
+    try{matches=atob(STATE.user?.password||'')===curPass;}catch(e){}
+    if(!curPass){showToast('Enter your current password to confirm the change.','error');return;}
+    if(!matches){showToast('Current password is incorrect.','error');return;}
+    upd.password=btoa(pass);
+  } else if(pass&&pass.length<6){
+    showToast('New password must be at least 6 characters.','error');return;
+  }
   setSyncStatus('saving');
   try{await fsSave(COLS.USERS,userId,upd);STATE.users[userId]={...upd,_id:userId,_savedAt:Date.now()};STATE.user={...STATE.user,name};const el=document.getElementById('user-name');if(el)el.textContent=name;setSyncStatus('synced');showToast('Profile updated.','success');
     logActivity('Profile updated',`${STATE.user?.name||''} updated profile`,'');}
