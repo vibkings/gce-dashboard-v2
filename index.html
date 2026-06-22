@@ -16012,23 +16012,75 @@ function renderSupplierProfile(id){
       </table></div>`:'<div style="color:var(--text3);font-size:13px;text-align:center;padding:20px">No deposits recorded yet. <button class="btn btn-sm" onclick="showSupplierDepositModal(\''+id+'\')" style="color:#7c3aed;border-color:#c4b5fd;font-size:11px;margin-left:8px">+ Add deposit</button></div>'}
     </div>
 
-    <!-- Purchase History -->
+    <!-- Purchase History — grouped by PO (one row per invoice, not per
+         individual receive event). Includes pending-only POs too, same
+         "committed at creation" principle used everywhere else on this page. -->
     <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px 16px;margin-bottom:1.25rem">
       <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--brand);margin-bottom:12px;display:flex;align-items:center;gap:6px">
         <span style="width:3px;height:14px;background:var(--brand);border-radius:2px;display:inline-block"></span>
         🛒 PURCHASE HISTORY
       </div>
+      ${(()=>{
+        const histGroupsMap = {};
+        purchases.forEach(p=>{
+          const k = p.purchaseInvoiceNum || p._id||p.id;
+          if (!histGroupsMap[k]) histGroupsMap[k] = {invoiceNum:k, date:p.date, payMode:p.payMode, itemNames:[], totalQty:0, totalCost:0, pendingQty:0, pendingCost:0, savedAt:0};
+          if (!histGroupsMap[k].itemNames.includes(p.itemName)) histGroupsMap[k].itemNames.push(p.itemName);
+          histGroupsMap[k].totalQty += p.qty||0;
+          histGroupsMap[k].totalCost += p.totalCost||0;
+          histGroupsMap[k].savedAt = Math.max(histGroupsMap[k].savedAt, p._savedAt||0);
+        });
+        pendingForSup.forEach(pd=>{
+          const stillPending = Math.max(0,(pd.orderedQty||0)-(pd.receivedQty||0));
+          if (stillPending<=0) return;
+          const k = pd.purchaseInvoiceNum || pd._id||pd.id;
+          if (!histGroupsMap[k]) histGroupsMap[k] = {invoiceNum:k, date:pd.date, payMode:pd.payMode, itemNames:[], totalQty:0, totalCost:0, pendingQty:0, pendingCost:0, savedAt:0};
+          if (!histGroupsMap[k].itemNames.includes(pd.itemName)) histGroupsMap[k].itemNames.push(pd.itemName);
+          histGroupsMap[k].pendingQty += stillPending;
+          histGroupsMap[k].pendingCost += stillPending*(pd.costPrice||0);
+          histGroupsMap[k].savedAt = Math.max(histGroupsMap[k].savedAt, pd._savedAt||0);
+        });
+        const histGroupList = Object.values(histGroupsMap).sort((a,b)=>(b.savedAt||new Date(b.date||0).getTime()||0)-(a.savedAt||new Date(a.date||0).getTime()||0));
+        if (!histGroupList.length) return '<div style="color:var(--text3);font-size:13px;text-align:center;padding:16px">No purchases recorded yet.</div>';
+        const modeBadge=(m)=>({credit:'<span class="badge badge-danger" style="font-size:10px">Credit</span>',
+          part:'<span class="badge badge-warning" style="font-size:10px">Part Pay</span>',
+          transfer:'<span class="badge" style="font-size:10px;background:#0d6efd;color:#fff">Transfer</span>',
+          pos:'<span class="badge" style="font-size:10px;background:#0891b2;color:#fff">POS</span>'}[m]||'<span class="badge badge-success" style="font-size:10px">Cash</span>');
+        const rows = histGroupList.map(g=>{
+          const itemsStr = g.itemNames.slice(0,2).map(n=>esc(n)).join(', ')+(g.itemNames.length>2?` +${g.itemNames.length-2} more`:'');
+          const grandQty = g.totalQty+g.pendingQty;
+          const grandCost = g.totalCost+g.pendingCost;
+          return `<tr>
+            <td style="font-size:12px;color:var(--text3)">${g.date||'—'}</td>
+            <td><b>PO #${esc(g.invoiceNum)}</b><div style="font-size:11px;color:var(--text3)">${itemsStr}</div></td>
+            <td style="text-align:center;font-weight:700">${grandQty}${g.pendingQty>0?`<div style="font-size:10px;color:#c0392b;font-weight:700">⏳ ${g.pendingQty} pending</div>`:''}</td>
+            <td class="td-right" style="font-weight:600">${fmt(grandCost)}</td>
+            <td>${modeBadge(g.payMode)}</td>
+          </tr>`;
+        }).join('');
+        return `<div class="tbl-wrap" style="border-radius:var(--radius);border:1px solid var(--border)"><table>
+          <thead><tr><th>DATE</th><th>PO / ITEMS</th><th style="text-align:center">QTY</th><th class="td-right">TOTAL</th><th>MODE</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table></div>`;
+      })()}
+    </div>
+
+    <!-- Delivery Log — every individual receive event for this supplier,
+         so you can see how each PO above actually got fulfilled over time. -->
+    <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px 16px;margin-bottom:1.25rem">
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--info);margin-bottom:12px;display:flex;align-items:center;gap:6px">
+        <span style="width:3px;height:14px;background:var(--info);border-radius:2px;display:inline-block"></span>
+        📦 DELIVERY LOG
+      </div>
       ${purchases.length?`<div class="tbl-wrap" style="border-radius:var(--radius);border:1px solid var(--border)"><table>
-        <thead><tr><th>DATE</th><th>ITEM</th><th style="text-align:center">QTY</th><th class="td-right">COST/UNIT</th><th class="td-right">TOTAL</th><th>MODE</th></tr></thead>
-        <tbody>${purchases.map(p=>`<tr>
+        <thead><tr><th>DATE</th><th>PO #</th><th>ITEM</th><th class="td-right">QTY SUPPLIED</th></tr></thead>
+        <tbody>${purchases.slice().sort((a,b)=>(b._savedAt||new Date(b.date||0).getTime()||0)-(a._savedAt||new Date(a.date||0).getTime()||0)).map(p=>`<tr>
           <td style="font-size:12px;color:var(--text3)">${p.date||'—'}</td>
-          <td><b>${esc(p.itemName||'—')}</b>${p.purchaseInvoiceNum?`<div style="font-size:10px;color:var(--text3)">${esc(p.purchaseInvoiceNum)}</div>`:''}</td>
-          <td style="text-align:center;font-weight:700">${p.qty||0}</td>
-          <td class="td-right">${fmt(p.costPrice||0)}</td>
-          <td class="td-right;font-weight:600">${fmt(p.totalCost||0)}</td>
-          <td style="font-size:11px;color:var(--text3)">${p.payMode||'cash'}</td>
+          <td><b style="font-family:var(--font-mono)">${esc(p.purchaseInvoiceNum||'—')}</b></td>
+          <td style="font-size:12px">${esc(p.itemName||'—')}</td>
+          <td class="td-right" style="font-weight:700;color:var(--success)">${p.qty||0}</td>
         </tr>`).join('')}</tbody>
-      </table></div>`:'<div style="color:var(--text3);font-size:13px;text-align:center;padding:16px">No purchases recorded yet.</div>'}
+      </table></div>`:'<div style="color:var(--text3);font-size:13px;text-align:center;padding:16px">No deliveries logged yet.</div>'}
     </div>
 
     <!-- Payment History -->
