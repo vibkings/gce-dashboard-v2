@@ -2218,6 +2218,7 @@ async function initDataLayer() {
     loadCollection(COLS.WAREHOUSE,    'warehouse'),
     loadCollection(COLS.SETTINGS,     'settings'),
     loadCollection('v2_banks',        'banks'),
+    loadCollection('v2_messageLog',   'messageLog'),
     loadCollection(COLS.BORROWS,      'borrows'),
     loadCollection(COLS.PROFORMAS,    'proformas'),
     loadCollection(COLS.ADJLOG,       'adjLog'),
@@ -9136,14 +9137,18 @@ async function sendTwilioWhatsApp(){
     if(phone.startsWith('0'))phone='234'+phone.substring(1);
     if(!phone.startsWith('234')&&!phone.startsWith('+'))phone='234'+phone;
     phone=phone.replace(/^\+/,'');
+    let sentTxt='';
     try{
       let body;
-      if(contentSid){body=`From=${encodeURIComponent(TWILIO_FROM)}&To=${encodeURIComponent('whatsapp:+'+phone)}&ContentSid=${encodeURIComponent(contentSid)}&ContentVariables=${encodeURIComponent(JSON.stringify({1:c.name||'Valued Customer'}))}`;}
-      else{const txt=msg.replace(/\{name\}/g,c.name).replace(/\{balance\}/g,(c.creditBalance||0)>0?fmt(c.creditBalance):'₦0');body=`From=${encodeURIComponent(TWILIO_FROM)}&To=${encodeURIComponent('whatsapp:+'+phone)}&Body=${encodeURIComponent(txt)}`;}
+      if(contentSid){sentTxt=`[Template: ${contentSid}]`;body=`From=${encodeURIComponent(TWILIO_FROM)}&To=${encodeURIComponent('whatsapp:+'+phone)}&ContentSid=${encodeURIComponent(contentSid)}&ContentVariables=${encodeURIComponent(JSON.stringify({1:c.name||'Valued Customer'}))}`;}
+      else{const txt=msg.replace(/\{name\}/g,c.name).replace(/\{balance\}/g,(c.creditBalance||0)>0?fmt(c.creditBalance):'₦0');sentTxt=txt;body=`From=${encodeURIComponent(TWILIO_FROM)}&To=${encodeURIComponent('whatsapp:+'+phone)}&Body=${encodeURIComponent(txt)}`;}
       const r=await fetch(url,{method:'POST',headers,body});
       const j=await r.json();
-      results.push({name:c.name,phone:c.phone,status:j.sid?'✅ Sent':'❌ '+(j.message||j.error_message||'Failed')});
-    }catch(e){results.push({name:c.name,phone:c.phone,status:'❌ Error: '+e.message});}
+      const ok=!!j.sid;
+      results.push({name:c.name,phone:c.phone,status:ok?'✅ Sent':'❌ '+(j.message||j.error_message||'Failed')});
+      await _logMessageSent({custId:c._id||c.id,custName:c.name,phone:c.phone,channel:'whatsapp-twilio',status:ok?'sent':'failed',errorMsg:ok?'':(j.message||j.error_message||'Failed'),snippet:sentTxt.slice(0,200)});
+    }catch(e){results.push({name:c.name,phone:c.phone,status:'❌ Error: '+e.message});
+      await _logMessageSent({custId:c._id||c.id,custName:c.name,phone:c.phone,channel:'whatsapp-twilio',status:'failed',errorMsg:e.message,snippet:sentTxt.slice(0,200)});}
     await new Promise(r=>setTimeout(r,300));
   }
   const sent=results.filter(r=>r.status.startsWith('✅')).length;
@@ -9179,7 +9184,9 @@ async function sendTermiiSMS(){
       const j=await r.json().catch(()=>({}));
       const ok=r.ok&&(j.message_id||j.messageId||j.code==='ok'||j.status==='Message Sent');
       results.push({name:c.name,phone:c.phone,status:ok?'✅ Sent':'❌ '+(j.message||j.error||j.description||'HTTP '+r.status)});
-    }catch(e){results.push({name:c.name,phone:c.phone,status:'❌ Error: '+e.message});}
+      await _logMessageSent({custId:c._id||c.id,custName:c.name,phone:c.phone,channel:'sms-termii',status:ok?'sent':'failed',errorMsg:ok?'':(j.message||j.error||j.description||'HTTP '+r.status),snippet:txt.slice(0,200)});
+    }catch(e){results.push({name:c.name,phone:c.phone,status:'❌ Error: '+e.message});
+      await _logMessageSent({custId:c._id||c.id,custName:c.name,phone:c.phone,channel:'sms-termii',status:'failed',errorMsg:e.message,snippet:txt.slice(0,200)});}
     await new Promise(r=>setTimeout(r,200));
   }
   const sent=results.filter(r=>r.status.startsWith('✅')).length;
@@ -9209,8 +9216,11 @@ async function sendMetaWhatsApp(){
     try{
       const r=await fetch('https://greatchid-inventory.valentineahize.workers.dev?url='+encodeURIComponent(`https://graph.facebook.com/v19.0/${phoneId}/messages`),{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+accessToken},body:JSON.stringify(payload)});
       const j=await r.json();
-      r.ok&&j.messages?sent++:(failed++,errors.push(c.name+': '+(j.error?.message||'Unknown error')));
-    }catch(e){failed++;errors.push(c.name+': '+e.message);}
+      const ok=r.ok&&!!j.messages;
+      if(ok)sent++;else{failed++;errors.push(c.name+': '+(j.error?.message||'Unknown error'));}
+      await _logMessageSent({custId:c._id||c.id,custName:c.name,phone:c.phone,channel:'whatsapp-meta',status:ok?'sent':'failed',errorMsg:ok?'':(j.error?.message||'Unknown error'),snippet:`[Template: ${templateName}]`});
+    }catch(e){failed++;errors.push(c.name+': '+e.message);
+      await _logMessageSent({custId:c._id||c.id,custName:c.name,phone:c.phone,channel:'whatsapp-meta',status:'failed',errorMsg:e.message,snippet:`[Template: ${templateName}]`});}
   }
   const summary=`💙 Meta WhatsApp: ${sent} sent${failed?` | ❌ ${failed} failed`:''}`;
   if(statusEl)statusEl.innerHTML=`<span style="color:${failed?'#dc2626':'#0084ff'}">${summary}${errors.length?`<br><small style="color:#dc2626">${errors.slice(0,3).join('<br>')}</small>`:''}</span>`;
@@ -9220,6 +9230,84 @@ async function sendMetaWhatsApp(){
 // ══════════════════════════════════════════════════════════════
 // END MESSAGING MODULE
 // ══════════════════════════════════════════════════════════════
+
+// ── MESSAGE LOG ───────────────────────────────────────────
+// Per-recipient send record — who, when, which channel, whether it actually
+// went through, and a snippet of what was sent. Distinct from the generic
+// Activity Log entry (which only ever captured an aggregate "X sent" line,
+// not who specifically got a message or whether THEIRS succeeded).
+async function _logMessageSent({custId,custName,phone,channel,status,errorMsg,snippet}){
+  const now=new Date();
+  const id=uid();
+  const entry={id,custId:custId||null,custName:custName||'',phone:phone||'',channel,status,
+    errorMsg:errorMsg||'',snippet:snippet||'',date:now.toLocaleDateString(),
+    time:now.toLocaleTimeString(),month:now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0'),
+    by:STATE.user?.name||''};
+  try{
+    await fsSave('v2_messageLog',id,entry);
+    if(!STATE.messageLog)STATE.messageLog={};
+    STATE.messageLog[id]={...entry,_id:id,_savedAt:Date.now()};
+  }catch(e){ /* never block the send flow on a logging failure */ }
+}
+
+function renderMessageLog(){
+  const el=document.getElementById('customers-content'); if(!el)return;
+  const tabBar=`<div class="subtabs">
+    <button class="subtab" onclick="window._custTab='list';renderCustomers()">👥 All Customers</button>
+    <button class="subtab" onclick="window._custTab='messaging';renderCustomers()">📱 Messaging</button>
+    <button class="subtab active">📨 Message Log</button>
+  </div>`;
+
+  const channelFilter=window._msgLogChannel||'all';
+  const statusFilter=window._msgLogStatus||'all';
+  const search=(window._msgLogSearch||'').toLowerCase();
+
+  let log=Object.values(STATE.messageLog||{}).sort((a,b)=>(b._savedAt||0)-(a._savedAt||0));
+  if(channelFilter!=='all') log=log.filter(m=>m.channel===channelFilter);
+  if(statusFilter!=='all') log=log.filter(m=>m.status===statusFilter);
+  if(search) log=log.filter(m=>(m.custName||'').toLowerCase().includes(search)||(m.phone||'').includes(search));
+
+  const totalSent=log.filter(m=>m.status==='sent').length;
+  const totalFailed=log.filter(m=>m.status==='failed').length;
+  const channelLabel={'whatsapp-twilio':'WhatsApp (Twilio)','whatsapp-meta':'WhatsApp (Meta)','sms-termii':'SMS (Termii)'};
+
+  const rows=log.slice(0,300).map(m=>`<tr>
+    <td style="font-size:12px;color:var(--text3);white-space:nowrap">${m.date||''} ${m.time||''}</td>
+    <td><b>${esc(m.custName||'—')}</b><div style="font-size:11px;color:var(--text3)">${esc(m.phone||'')}</div></td>
+    <td style="font-size:12px">${esc(channelLabel[m.channel]||m.channel||'—')}</td>
+    <td>${m.status==='sent'?'<span class="badge badge-success" style="font-size:10px">✅ Sent</span>':`<span class="badge badge-danger" style="font-size:10px" title="${esc(m.errorMsg||'')}">❌ Failed</span>`}</td>
+    <td style="font-size:11px;color:var(--text3);max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(m.snippet||'')}">${esc(m.snippet||'—')}</td>
+    <td style="font-size:11px;color:var(--text3)">${esc(m.by||'—')}</td>
+  </tr>`).join('');
+
+  el.innerHTML=`${tabBar}
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:1rem 0">
+      <div class="kpi-card" style="border-left:3px solid var(--success)"><div class="kpi-label" style="color:var(--success)">SENT</div><div class="kpi-value" style="font-size:22px;font-weight:800;color:var(--success)">${totalSent}</div></div>
+      <div class="kpi-card" style="border-left:3px solid var(--danger)"><div class="kpi-label" style="color:var(--danger)">FAILED</div><div class="kpi-value" style="font-size:22px;font-weight:800;color:var(--danger)">${totalFailed}</div></div>
+      <div class="kpi-card" style="border-left:3px solid var(--text3)"><div class="kpi-label">TOTAL ATTEMPTS</div><div class="kpi-value" style="font-size:22px;font-weight:800">${log.length}</div></div>
+    </div>
+    <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
+      <input class="form-input" placeholder="Search by customer or phone..." value="${esc(window._msgLogSearch||'')}" style="max-width:240px" oninput="window._msgLogSearch=this.value;renderMessageLog()">
+      <select class="form-input" style="max-width:180px" onchange="window._msgLogChannel=this.value;renderMessageLog()">
+        <option value="all" ${channelFilter==='all'?'selected':''}>All channels</option>
+        <option value="whatsapp-twilio" ${channelFilter==='whatsapp-twilio'?'selected':''}>WhatsApp (Twilio)</option>
+        <option value="whatsapp-meta" ${channelFilter==='whatsapp-meta'?'selected':''}>WhatsApp (Meta)</option>
+        <option value="sms-termii" ${channelFilter==='sms-termii'?'selected':''}>SMS (Termii)</option>
+      </select>
+      <select class="form-input" style="max-width:140px" onchange="window._msgLogStatus=this.value;renderMessageLog()">
+        <option value="all" ${statusFilter==='all'?'selected':''}>All statuses</option>
+        <option value="sent" ${statusFilter==='sent'?'selected':''}>Sent</option>
+        <option value="failed" ${statusFilter==='failed'?'selected':''}>Failed</option>
+      </select>
+    </div>
+    ${log.length?`<div class="tbl-wrap" style="border-radius:var(--radius);border:1px solid var(--border)"><table>
+      <thead><tr><th>DATE/TIME</th><th>CUSTOMER</th><th>CHANNEL</th><th>STATUS</th><th>MESSAGE</th><th>SENT BY</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>${log.length>300?`<div style="font-size:11px;color:var(--text3);text-align:center;margin-top:8px">Showing most recent 300 of ${log.length}.</div>`:''}`
+    :'<div class="empty-state"><div class="empty-state-icon">📨</div><div>No messages logged yet — once you send via the Messaging tab, every recipient shows up here.</div></div>'}
+  `;
+}
+
 
 function renderCustomers(){
   const el=document.getElementById('customers-content');if(!el)return;
@@ -14717,6 +14805,7 @@ function renderCustomersFull(){
     {id:'list',label:'All Customers'},
     {id:'add',label:'Add Customer'},
     {id:'messaging',label:'📱 Messaging'},
+    {id:'msglog',label:'📨 Message Log'},
     {id:'profile',label:'Customer Profile',hidden:!window._custProfileId}
   ].filter(t=>!t.hidden).map(t=>`<button class="subtab${tab===t.id?' active':''}" onclick="window._custTab='${t.id}';renderCustomers()">${t.label}</button>`).join('');
 
@@ -14835,6 +14924,7 @@ function renderCustomerProfile(id){
     <button class="subtab" onclick="window._custProfileId=null;window._custTab='list';renderCustomers()">All Customers</button>
     <button class="subtab" onclick="window._custTab='add';renderCustomers()">Add Customer</button>
     <button class="subtab" onclick="window._custTab='messaging';renderCustomers()">📱 Messaging</button>
+    <button class="subtab" onclick="window._custTab='msglog';renderCustomers()">📨 Message Log</button>
     <button class="subtab active">Customer Profile</button>
   </div>`;
 
@@ -16916,12 +17006,16 @@ async function fixInvoiceCounter(){
 
 // ── WIRE-UP OVERRIDES ─────────────────────────────────────
 renderCustomers = function(){
-  // Messaging tab is handled outside renderCustomersFull
+  // Messaging tab and Message Log are handled outside renderCustomersFull
   if(window._custTab==='messaging'){
     const el=document.getElementById('customers-content');
     if(!el)return;
-    const tabBar=`<div class="subtabs"><button class="subtab" onclick="window._custTab='list';renderCustomers()">👥 All Customers</button><button class="subtab active">📱 Messaging</button></div>`;
+    const tabBar=`<div class="subtabs"><button class="subtab" onclick="window._custTab='list';renderCustomers()">👥 All Customers</button><button class="subtab active">📱 Messaging</button><button class="subtab" onclick="window._custTab='msglog';renderCustomers()">📨 Message Log</button></div>`;
     el.innerHTML=tabBar+buildMessagingPanel();
+    return;
+  }
+  if(window._custTab==='msglog'){
+    renderMessageLog();
     return;
   }
   renderCustomersFull();
