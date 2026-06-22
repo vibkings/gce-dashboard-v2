@@ -4036,10 +4036,41 @@ function renderSales() {
         <label>Bank</label>
         <select class="form-input" id="s-deposit-sf-bank">${bankSelectOpts('transfer')}</select>
       </div>
-      <div class="form-group" id="s-deposit-sf-cash-wrap" style="margin:0;display:none;grid-column:1/-1">
-        <label>Cash portion of shortfall (₦)</label>
-        <input class="form-input" id="s-deposit-sf-cash" type="number" min="0" placeholder="0">
-        <div id="s-deposit-sf-split-info" style="font-size:11px;color:var(--text3);margin-top:4px"></div>
+      <div class="form-group" id="s-deposit-sf-split-wrap" style="margin:0;display:none;grid-column:1/-1;background:var(--surface);border:1.5px solid #b6d4fe;border-radius:var(--radius-sm);padding:12px">
+        <div style="font-size:12px;font-weight:700;color:var(--primary);margin-bottom:10px">🔀 Split payment — enter amount for each mode</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px">
+          <div class="form-group" style="margin:0"><label>Mode 1</label>
+            <select class="form-input" id="s-deposit-sf-split-mode1" onchange="v2OnDepositSplitModeChange()">
+              <option value="cash">Cash</option>
+              <option value="transfer">Bank transfer</option>
+              <option value="pos">POS</option>
+            </select></div>
+          <div class="form-group" style="margin:0"><label>Amount 1 (₦)</label>
+            <input class="form-input" id="s-deposit-sf-split-amt1" type="number" min="0" placeholder="0" oninput="v2OnDepositSplitAmtChange()"></div>
+          <div class="form-group" style="margin:0"><label>Mode 2</label>
+            <select class="form-input" id="s-deposit-sf-split-mode2" onchange="v2OnDepositSplitModeChange()">
+              <option value="transfer">Bank transfer</option>
+              <option value="cash">Cash</option>
+              <option value="pos">POS</option>
+            </select></div>
+          <div class="form-group" style="margin:0"><label>Amount 2 (₦)</label>
+            <input class="form-input" id="s-deposit-sf-split-amt2" type="number" min="0" placeholder="0" oninput="v2OnDepositSplitAmtChange()"></div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">
+          <div class="form-group" style="margin:0;display:none" id="s-deposit-sf-split-bank-wrap1">
+            <label>Bank (Mode 1 transfer)</label>
+            <select class="form-input" id="s-deposit-sf-split-bank1">${bankSelectOpts('transfer')}</select>
+          </div>
+          <div class="form-group" style="margin:0;display:none" id="s-deposit-sf-split-pos-wrap">
+            <label>POS terminal</label>
+            <select class="form-input" id="s-deposit-sf-split-posid">${bankSelectOpts('pos')}</select>
+          </div>
+          <div class="form-group" style="margin:0;display:none" id="s-deposit-sf-split-bank-wrap2">
+            <label>Bank (Mode 2 transfer)</label>
+            <select class="form-input" id="s-deposit-sf-split-bank2">${bankSelectOpts('transfer')}</select>
+          </div>
+        </div>
+        <div id="s-deposit-sf-split-total-check" style="font-size:12px;margin-top:8px;font-weight:600"></div>
       </div>
       <div class="form-group" id="s-change-wrap" style="margin:0;display:none">
         <label>Amount tendered by customer (₦)</label>
@@ -5357,7 +5388,7 @@ function v2OnPayTypeChange() {
   show('s-deposit-info-wrap',     pt==='deposit');
   show('s-deposit-shortfall-wrap',pt==='deposit');
   show('s-deposit-sf-bank-wrap',  false);
-  show('s-deposit-sf-cash-wrap',  false);
+  show('s-deposit-sf-split-wrap', false);
   if(pt==='transfer'){const s=document.getElementById('s-paymode');if(s)s.value='transfer';const b=document.getElementById('s-bank-name');if(b)b.innerHTML=bankSelectOpts('transfer');}
   if(pt==='pos'){const s=document.getElementById('s-paymode');if(s)s.value='pos';const b=document.getElementById('s-pos-name');if(b)b.innerHTML=bankSelectOpts('pos');}
   if(pt==='split') v2OnSplitModeChange();
@@ -5378,7 +5409,35 @@ function v2OnDepositSfModeChange() {
   const v = document.getElementById('s-deposit-sf-mode')?.value;
   const show = (id,vis) => { const el=document.getElementById(id); if(el) el.style.display=vis?'block':'none'; };
   show('s-deposit-sf-bank-wrap', v==='transfer'||v==='pos');
-  show('s-deposit-sf-cash-wrap', v==='split');
+  show('s-deposit-sf-split-wrap', v==='split');
+  if (v==='split') v2OnDepositSplitModeChange();
+}
+
+function v2OnDepositSplitModeChange() {
+  const m1 = document.getElementById('s-deposit-sf-split-mode1')?.value;
+  const m2 = document.getElementById('s-deposit-sf-split-mode2')?.value;
+  const show = (id,vis) => { const el=document.getElementById(id); if(el) el.style.display=vis?'':'none'; };
+  show('s-deposit-sf-split-bank-wrap1', m1==='transfer');
+  show('s-deposit-sf-split-bank-wrap2', m2==='transfer');
+  show('s-deposit-sf-split-pos-wrap',   m1==='pos' || m2==='pos');
+  const b1=document.getElementById('s-deposit-sf-split-bank1');
+  const b2=document.getElementById('s-deposit-sf-split-bank2');
+  const pos=document.getElementById('s-deposit-sf-split-posid');
+  if(b1) b1.innerHTML=bankSelectOpts('transfer');
+  if(b2) b2.innerHTML=bankSelectOpts('transfer');
+  if(pos) pos.innerHTML=bankSelectOpts('pos');
+}
+
+function v2OnDepositSplitAmtChange() {
+  const shortfall = window._saleDepositShortfall||0;
+  const a1 = parseFloat(document.getElementById('s-deposit-sf-split-amt1')?.value)||0;
+  const a2 = parseFloat(document.getElementById('s-deposit-sf-split-amt2')?.value)||0;
+  const el = document.getElementById('s-deposit-sf-split-total-check');
+  if (!el) return;
+  const sum = a1+a2;
+  if (sum===shortfall) el.innerHTML=`<span style="color:#16a34a;font-weight:600">✓ Split amounts match shortfall (₦${shortfall.toLocaleString()})</span>`;
+  else if (sum>0) el.innerHTML=`<span style="color:#dc2626;font-weight:600">⚠ Split total: ₦${sum.toLocaleString()} | Shortfall: ₦${shortfall.toLocaleString()} | Diff: ₦${Math.abs(shortfall-sum).toLocaleString()}</span>`;
+  else el.innerHTML='';
 }
 
 function v2UpdateDepositBreakdown() {
@@ -5861,9 +5920,31 @@ async function v2SaveSale(mode) {
   const depSfMode = pt==='deposit' ? (document.getElementById('s-deposit-sf-mode')?.value||'cash') : null;
   const depSfBank = (pt==='deposit' && (depSfMode==='transfer'||depSfMode==='pos')) ? (document.getElementById('s-deposit-sf-bank')?.value||'') : '';
   const depSfShortfallAmt = pt==='deposit' ? (window._saleDepositShortfall||0) : 0;
-  const depSfSplitCash = (pt==='deposit' && depSfMode==='split') ? (parseFloat(document.getElementById('s-deposit-sf-cash')?.value)||0) : 0;
-  const depSfSplitTransfer = (pt==='deposit' && depSfMode==='split') ? Math.max(0, depSfShortfallAmt - depSfSplitCash) : 0;
-  const depSplitPayment = (pt==='deposit' && depSfMode==='split') ? {mode1:'cash',amt1:depSfSplitCash,mode2:'transfer',amt2:depSfSplitTransfer,bank1:'',bank2:depSfBank} : null;
+  let depSplitPayment = null;
+  if (pt==='deposit' && depSfMode==='split') {
+    const m1 = document.getElementById('s-deposit-sf-split-mode1')?.value||'cash';
+    const a1 = parseFloat(document.getElementById('s-deposit-sf-split-amt1')?.value)||0;
+    const m2 = document.getElementById('s-deposit-sf-split-mode2')?.value||'transfer';
+    const a2 = parseFloat(document.getElementById('s-deposit-sf-split-amt2')?.value)||0;
+    if (a1<=0||a2<=0) { showToast('Enter amounts for both split modes.','error'); return; }
+    if (Math.abs(a1+a2-depSfShortfallAmt)>1) {
+      showBlockingError('Split Amount Mismatch',
+        `Split amounts (${fmt(a1+a2)}) must equal the shortfall (${fmt(depSfShortfallAmt)}).<br><br>Please adjust the amounts so they add up exactly.`);
+      return;
+    }
+    if (m1==='transfer'&&!document.getElementById('s-deposit-sf-split-bank1')?.value) {
+      showToast('Select the bank for Mode 1 transfer.','error'); return;
+    }
+    if (m2==='transfer'&&!document.getElementById('s-deposit-sf-split-bank2')?.value) {
+      showToast('Select the bank for Mode 2 transfer.','error'); return;
+    }
+    depSplitPayment = {
+      mode1:m1, amt1:a1, mode2:m2, amt2:a2,
+      bank1: m1==='transfer'?(document.getElementById('s-deposit-sf-split-bank1')?.value||''):'',
+      bank2: m2==='transfer'?(document.getElementById('s-deposit-sf-split-bank2')?.value||''):'',
+      posId: (m1==='pos'||m2==='pos')?(document.getElementById('s-deposit-sf-split-posid')?.value||''):''
+    };
+  }
   const partBankVal = (partModeVal==='transfer'||partModeVal==='pos') ? (document.getElementById('s-part-bank')?.value||'') : '';
   const partSplitCashVal = partModeVal==='split' ? (parseFloat(document.getElementById('s-part-split-cash')?.value)||0) : 0;
   const partSplitTransferVal = partModeVal==='split' ? Math.max(0, partAmt - partSplitCashVal) : 0;
