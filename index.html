@@ -4360,19 +4360,21 @@ function renderSales() {
         credit:'<span style="background:#eff6ff;color:#1d4ed8;padding:3px 8px;border-radius:20px;font-size:10px;font-weight:700">CREDIT</span>',
         exchange:'<span style="background:#fef3c7;color:#92400e;padding:3px 8px;border-radius:20px;font-size:10px;font-weight:700">EXCHANGE</span>'
       };
-      const retRows=periodReturns.map(r=>`<tr>
+      const retRows=periodReturns.map(r=>{
+        const rs=_retSummary(r);
+        return `<tr>
         <td style="font-size:12px;white-space:nowrap;color:var(--text3)">${r.date||'—'}</td>
         <td><b style="font-family:var(--font-mono)">#${esc(r.invoiceNum||'—')}</b></td>
         <td style="font-size:12px">${esc(r.custName||'Walk-in')}</td>
-        <td><b>${esc(r.itemName||'—')}</b></td>
-        <td style="text-align:center;font-weight:700">${r.qty||1}</td>
-        <td class="td-right" style="color:var(--danger);font-weight:700">${fmt(r.refundAmt||0)}</td>
+        <td><b>${esc(rs.firstItemName)}</b>${rs.lineCount>1?` <span style="color:var(--text3);font-size:11px">+${rs.lineCount-1} more</span>`:''}</td>
+        <td style="text-align:center;font-weight:700">${rs.totalQty}</td>
+        <td class="td-right" style="color:var(--danger);font-weight:700">${fmt(rs.totalValue)}</td>
         <td>${retBadges[r.refundType]||retBadges.cash}</td>
         <td style="display:flex;gap:4px;flex-wrap:wrap">
           <button class="btn btn-sm" onclick="viewSalesReturn('${r._id||r.id}')" style="color:var(--primary);border-color:#b6d4fe;font-size:11px;padding:3px 8px">👁 View</button>
           <button class="btn btn-sm" onclick="printSalesReturn('${r._id||r.id}')" style="color:#1a237e;border-color:#93c5fd;font-size:11px;padding:3px 8px">🖨 Print</button>
         </td>
-      </tr>`).join('');
+      </tr>`;}).join('');
       return `<div class="tbl-wrap"><table>
         <thead><tr><th>Date</th><th>Invoice #</th><th>Customer</th><th>Item</th><th style="text-align:center">Qty</th><th style="text-align:right">Refund</th><th>Type</th><th></th></tr></thead>
         <tbody>${retRows}</tbody>
@@ -4880,99 +4882,141 @@ function v2RemoveInvItem(idx) { invoiceItems.splice(idx,1); renderSales(); }
 // v2_salesReturns record and tracks "already returned" qty by summing prior
 // return records for that saleId, so the same line can't be over-returned
 // across multiple separate returns.
+// Summarizes a salesReturns record for display, handling both the old
+// single-item shape and the new multi-line/multi-exchange shape so every
+// log table and KPI calc can read one consistent {itemsLabel, totalQty,
+// totalValue} regardless of which version created the record.
+function _retSummary(r) {
+  const lines = Array.isArray(r.returnLines) ? r.returnLines : (r.itemName?[{name:r.itemName, qty:r.qty||1, lineValue:r.refundAmt||0}]:[]);
+  const totalQty = lines.reduce((a,l)=>a+(l.qty||0), 0);
+  const totalValue = r.returnTotal!=null ? r.returnTotal : (r.refundAmt||0);
+  const itemsLabel = lines.length ? lines.map(l=>`${l.qty}× ${l.name}`).join(', ') : '—';
+  const firstItemName = lines[0]?.name || r.itemName || '—';
+  return {itemsLabel, totalQty, totalValue, firstItemName, lineCount:lines.length};
+}
+
 function showReturnModal(invoiceNum) {
   const lines = Object.values(STATE.sales||{}).filter(s=>s.invoiceNum===invoiceNum && !s.voided);
   if (!lines.length) { showToast('Invoice not found.','error'); return; }
-  const items = lines.map(s=>{
+  const linesOut = lines.map(s=>{
     const saleId = s._id||s.id;
     const alreadyReturned = Object.values(STATE.salesReturns||{})
-      .filter(r=>r.invoiceNum===invoiceNum && r.saleId===saleId)
-      .reduce((a,r)=>a+(r.qty||0),0);
+      .filter(r=>r.invoiceNum===invoiceNum)
+      .reduce((a,r)=>{
+        if (Array.isArray(r.returnLines)) return a + r.returnLines.filter(l=>l.saleId===saleId).reduce((aa,l)=>aa+(l.qty||0),0);
+        return a + (r.saleId===saleId ? (r.qty||0) : 0); // backward compat with old single-line records
+      },0);
     const returnable = Math.max(0,(s.qty||0)-alreadyReturned);
+    const unitNet = s.qty?Math.round((s.total||0)/s.qty):0;
     return {saleId, itemId:s.itemId||null, name:s.name,
-      qty:s.qty||0, unitNet: s.qty?Math.round((s.total||0)/s.qty):0,
-      alreadyReturned, returnable};
+      soldQty:s.qty||0, unitNet, alreadyReturned, returnable,
+      selQty:0, adjPrice:unitNet};
   }).filter(i=>i.returnable>0);
-  if (!items.length) { showToast('Everything on this invoice has already been returned.','info'); return; }
+  if (!linesOut.length) { showToast('Everything on this invoice has already been returned.','info'); return; }
   const sample = lines[0];
   window._retState = {
     invoiceNum, custId: sample.custId||null, custName: sample.printName||sample.custName||'Walk-in',
-    items, selectedSaleId: items[0].saleId, qty:1,
-    refundType:'cash', bankName:'', reason:'',
-    exNewItemId:'', exNewPrice:0, exSettleMode:'cash', exBankName:'', editingReturnId:null
+    saleDate: sample.date||'', lines: linesOut,
+    reason:'', returnDate: _todayLocalISO(),
+    refundType:'cash', bankName:'',
+    exchangeItems: [], // each: {itemId, name, qty, price}
+    exSettleMode:'cash', exBankName:'', exPosName:'',
+    exSplitMode1:'cash', exSplitAmt1:0, exSplitBank1:'', exSplitMode2:'transfer', exSplitAmt2:0, exSplitBank2:'', exSplitPosId:'',
+    editingReturnId:null
   };
   renderReturnModal();
 }
 
 function renderReturnModal() {
   const st = window._retState; if (!st) return;
-  const item = st.items.find(i=>i.saleId===st.selectedSaleId);
-  if (!item) { closeModal(); return; }
-  if (st.qty > item.returnable) st.qty = item.returnable;
-  if (st.qty < 1) st.qty = 1;
-  const refundAmt = Math.round(item.unitNet * st.qty);
 
-  const itemOpts = st.items.map(i=>`<option value="${i.saleId}" ${st.selectedSaleId===i.saleId?'selected':''}>${esc(i.name)} (sold ${i.qty}${i.alreadyReturned?`, ${i.alreadyReturned} already returned`:''} — ${i.returnable} returnable)</option>`).join('');
+  const returnTotal = st.lines.reduce((a,l)=>a+Math.max(0,(l.selQty||0))*(l.adjPrice||0), 0);
+  const exchangeTotal = st.exchangeItems.reduce((a,e)=>a+(e.qty||0)*(e.price||0), 0);
+  const isExchange = st.refundType==='exchange';
+  const diff = isExchange ? exchangeTotal - returnTotal : 0;
+  const saleDateISO = (()=>{
+    const d=(st.saleDate||'').split('/'); // locale "M/D/YYYY"
+    return d.length===3 ? `${d[2]}-${String(d[0]).padStart(2,'0')}-${String(d[1]).padStart(2,'0')}` : '';
+  })();
 
-  const exItems = Object.values(STATE.inventory||{}).filter(i=>(i._id||i.id)!==item.itemId).sort((a,b)=>(a.name||'').localeCompare(b.name||''));
-  const exNewItem = st.exNewItemId ? STATE.inventory?.[st.exNewItemId] : null;
-  if (exNewItem && !st.exNewPrice) st.exNewPrice = exNewItem.sell||exNewItem.sellPrice||0;
-  // Exchange qty is independent of the returned qty — you can return 2 of
-  // one item for 3 (or 1) of another. Defaults to match the returned qty
-  // the first time a replacement is picked, but stays adjustable from there.
-  if (exNewItem && !st.exQty) st.exQty = st.qty;
-  if (st.exQty < 1) st.exQty = 1;
-  const exDiff = exNewItem ? Math.round((st.exNewPrice||0)*st.exQty) - refundAmt : 0;
+  const lineRows = st.lines.map(l=>`
+    <div style="border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:8px">
+      <div style="font-weight:700;font-size:13px;margin-bottom:2px">${esc(l.name)}</div>
+      <div style="font-size:11px;color:var(--text3);margin-bottom:8px">Sold: ${l.soldQty} @ ${fmt(l.unitNet)} · Already returned: ${l.alreadyReturned} · Max: ${l.returnable}</div>
+      <div class="form-grid c2">
+        <div class="form-group" style="margin:0"><label style="font-size:11px">Return Qty</label>
+          <input class="form-input" type="number" min="0" max="${l.returnable}" value="${l.selQty||0}" onchange="retUpdateLineQty('${l.saleId}', this.value)"></div>
+        <div class="form-group" style="margin:0"><label style="font-size:11px">Adj. Price (₦)</label>
+          <input class="form-input" type="number" min="0" value="${l.adjPrice||0}" onchange="retUpdateLinePrice('${l.saleId}', this.value)"></div>
+      </div>
+    </div>`).join('');
+
+  const exRows = st.exchangeItems.map((e,idx)=>`
+    <div style="border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:8px;position:relative">
+      <div style="display:flex;gap:6px;align-items:flex-start;margin-bottom:8px">
+        <div style="flex:1;position:relative">
+          <input class="form-input" id="ex-item-search-${idx}" placeholder="Search item..." autocomplete="off"
+            value="${esc(e.name||'')}" oninput="retFilterExchangeDd(${idx}, this.value)" onfocus="retFilterExchangeDd(${idx}, this.value)">
+          <div id="ex-dd-${idx}" style="display:none;position:absolute;top:100%;left:0;right:0;background:var(--white);border:1px solid var(--border);border-radius:var(--radius-sm);box-shadow:var(--shadow-lg);max-height:200px;overflow-y:auto;z-index:9999;margin-top:2px"></div>
+        </div>
+        <button class="btn btn-sm" onclick="retRemoveExchangeItem(${idx})" style="color:var(--danger);border-color:#f5c2c7">✕</button>
+      </div>
+      ${e.itemId?`<div class="form-grid c2">
+        <div class="form-group" style="margin:0"><label style="font-size:11px">Qty</label>
+          <input class="form-input" type="number" min="1" value="${e.qty||1}" onchange="retUpdateExchangeQty(${idx}, this.value)"></div>
+        <div class="form-group" style="margin:0"><label style="font-size:11px">Price (₦)</label>
+          <input class="form-input" type="number" min="0" value="${e.price||0}" onchange="retUpdateExchangePrice(${idx}, this.value)"></div>
+      </div>
+      ${(e.stockQty||0)<(e.qty||0)?`<div style="margin-top:6px;font-size:11px;color:#d97706">⚠️ Only ${e.stockQty||0} in stock — will be capped.</div>`:''}`
+      :`<div style="font-size:12px;color:var(--text3)">Search and select an item above.</div>`}
+    </div>`).join('');
+
+  const settleLabelMap = {cash:'Cash',pos:'POS',transfer:'Bank Transfer',credit:'Adjust customer balance',split:'Split (2 modes)'};
 
   const body = `
     <div style="font-size:13px;margin-bottom:10px">Invoice #${esc(st.invoiceNum)} &nbsp;·&nbsp; Customer: <b>${esc(st.custName)}</b></div>
-    <div class="form-group" style="margin-bottom:10px">
-      <label>Item to return</label>
-      <select class="form-input" id="ret-item" onchange="window._retState.selectedSaleId=this.value;window._retState.qty=1;renderReturnModal()">${itemOpts}</select>
-    </div>
-    <div class="form-grid c2" style="margin-bottom:10px">
-      <div class="form-group"><label>Qty to return (max ${item.returnable})</label>
-        <input class="form-input" id="ret-qty" type="number" min="1" max="${item.returnable}" value="${st.qty}" onchange="window._retState.qty=parseInt(this.value)||1;renderReturnModal()">
-      </div>
-      <div class="form-group"><label>Refund amount</label>
-        <div style="padding:9px 12px;background:var(--surface);border-radius:8px;font-weight:700">${fmt(refundAmt)}</div>
-      </div>
+
+    <div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--text3);margin-bottom:6px">ITEMS ON THIS INVOICE</div>
+    ${lineRows}
+
+    <div class="form-group" style="margin-bottom:10px;margin-top:14px">
+      <label>Return Reason <span class="req">*</span></label>
+      <input class="form-input" id="ret-reason" placeholder="e.g. Defective, Wrong item, Customer changed mind" value="${esc(st.reason)}" onchange="window._retState.reason=this.value">
     </div>
     <div class="form-group" style="margin-bottom:10px">
-      <label>Refund type</label>
-      <select class="form-input" id="ret-type" onchange="window._retState.refundType=this.value;renderReturnModal()">
+      <label>Return Date</label>
+      <input class="form-input" type="date" value="${st.returnDate}" min="${saleDateISO}" onchange="window._retState.returnDate=this.value">
+      ${saleDateISO?`<div style="font-size:11px;color:var(--text3);margin-top:3px">Must be on or after the sale date (${esc(st.saleDate)})</div>`:''}
+    </div>
+    <div class="form-group" style="margin-bottom:10px">
+      <label>Refund Type</label>
+      <select class="form-input" onchange="window._retState.refundType=this.value;renderReturnModal()">
         <option value="cash" ${st.refundType==='cash'?'selected':''}>Cash refund</option>
         <option value="transfer" ${st.refundType==='transfer'?'selected':''}>Transfer refund</option>
         <option value="credit" ${st.refundType==='credit'?'selected':''} ${!st.custId?'disabled':''}>Store Credit${!st.custId?' (no registered customer)':''}</option>
-        <option value="exchange" ${st.refundType==='exchange'?'selected':''}>Exchange for another item</option>
+        <option value="exchange" ${st.refundType==='exchange'?'selected':''}>Exchange only (no refund)</option>
       </select>
     </div>
-    ${st.refundType==='transfer'?`<div class="form-group" style="margin-bottom:10px"><label>Bank</label><select class="form-input" id="ret-bank" onchange="window._retState.bankName=this.value">${bankSelectOpts('transfer',st.bankName)}</select></div>`:''}
-    ${st.refundType==='exchange'?`
-      <div class="form-group" style="margin-bottom:10px"><label>Replacement item</label>
-        <select class="form-input" id="ret-ex-item" onchange="window._retState.exNewItemId=this.value;window._retState.exNewPrice=0;renderReturnModal()">
-          <option value="">-- Select replacement item --</option>
-          ${exItems.map(i=>`<option value="${i._id||i.id}" ${st.exNewItemId===(i._id||i.id)?'selected':''}>${esc(i.name)} (stock: ${i.qty||0}, ${fmt(i.sell||i.sellPrice||0)})</option>`).join('')}
-        </select>
-      </div>
-      ${exNewItem?`
-      <div class="form-grid c2" style="margin-bottom:10px">
-        <div class="form-group"><label>Exchange qty</label><input class="form-input" id="ret-ex-qty" type="number" min="1" value="${st.exQty}" onchange="window._retState.exQty=parseInt(this.value)||1;renderReturnModal()"></div>
-        <div class="form-group"><label>Unit price (₦)</label><input class="form-input" id="ret-ex-price" type="number" min="0" value="${st.exNewPrice}" onchange="window._retState.exNewPrice=parseFloat(this.value)||0;renderReturnModal()"></div>
-      </div>
-      <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:10px;font-size:12.5px">
-        <div>Returning ${st.qty} × ${esc(item.name)} = <b>${fmt(refundAmt)}</b></div>
-        <div>New: ${st.exQty} × ${esc(exNewItem.name)} = <b>${fmt(Math.round((st.exNewPrice||0)*st.exQty))}</b></div>
-        <div style="border-top:1px dashed var(--border);margin-top:6px;padding-top:6px;font-weight:700;color:${exDiff>0?'#dc2626':exDiff<0?'#15803d':'var(--text2)'}">
-          ${exDiff===0?'No price difference':exDiff>0?`Customer owes ${fmt(exDiff)} more`:`Refund/credit due: ${fmt(Math.abs(exDiff))}`}
+    ${st.refundType==='transfer'?`<div class="form-group" style="margin-bottom:10px"><label>Bank</label><select class="form-input" onchange="window._retState.bankName=this.value">${bankSelectOpts('transfer',st.bankName)}</select></div>`:''}
+
+    ${isExchange?`
+    <div style="background:#ecfdf5;border:1px solid #86efac;border-radius:10px;padding:12px 14px;margin-bottom:10px">
+      <div style="font-weight:700;color:#15803d;margin-bottom:4px">📦 Exchange Goods</div>
+      <div style="font-size:12px;color:#166534;margin-bottom:10px">Select items the customer is taking in exchange. The price difference (if any) gets settled below.</div>
+      ${exRows}
+      <button class="btn btn-sm" onclick="retAddExchangeItem()" style="background:#16a34a;color:#fff;border-color:#16a34a">+ Add item</button>
+      <div style="background:#fff;border-radius:8px;padding:10px 12px;margin-top:12px;font-size:12.5px">
+        <div style="display:flex;justify-content:space-between"><span>Return value</span><b>${fmt(returnTotal)}</b></div>
+        <div style="display:flex;justify-content:space-between"><span>Exchange value</span><b>${fmt(exchangeTotal)}</b></div>
+        <div style="display:flex;justify-content:space-between;border-top:1px dashed var(--border);margin-top:6px;padding-top:6px;font-weight:700;color:${diff>0?'#dc2626':diff<0?'#15803d':'var(--text2)'}">
+          <span>${diff===0?'Balance':diff>0?'Customer pays extra':'Refund/credit due'}</span><b>${diff===0?'Even':fmt(Math.abs(diff))}</b>
         </div>
-        ${(exNewItem.qty||0)<st.exQty?`<div style="margin-top:6px;color:#d97706">⚠️ Only ${exNewItem.qty||0} in stock — exchange will be capped to what's available.</div>`:`<div style="margin-top:6px;color:#15803d">✓ ${exNewItem.qty||0} in stock — all ${st.exQty} available.</div>`}
       </div>
-      ${exDiff!==0?`
-      <div class="form-group" style="margin-bottom:10px">
+      ${diff!==0?`
+      <div class="form-group" style="margin-top:10px;margin-bottom:10px">
         <label>Settle the difference via</label>
-        <select class="form-input" id="ret-ex-settle" onchange="window._retState.exSettleMode=this.value;renderReturnModal()">
-          ${exDiff>0?`
+        <select class="form-input" onchange="window._retState.exSettleMode=this.value;renderReturnModal()">
+          ${diff>0?`
           <option value="cash" ${st.exSettleMode==='cash'?'selected':''}>Cash</option>
           <option value="pos" ${st.exSettleMode==='pos'?'selected':''}>POS</option>
           <option value="transfer" ${st.exSettleMode==='transfer'?'selected':''}>Bank Transfer</option>
@@ -4988,53 +5032,142 @@ function renderReturnModal() {
       ${st.exSettleMode==='credit'&&st.custId?(()=>{
         const cust=STATE.customers?.[st.custId]; if(!cust) return '';
         const lim=cust.creditLimit||0; const bal=cust.creditBalance||0;
-        if (exDiff>0 && lim>0) {
+        if (diff>0 && lim>0) {
           const avail=Math.max(0,lim-bal);
-          return `<div style="font-size:11.5px;color:${exDiff>avail?'var(--danger)':'var(--text3)'};margin-bottom:10px">${exDiff>avail?'⚠️ ':''}Credit limit ${fmt(lim)} · Currently used ${fmt(bal)} · Available ${fmt(avail)}</div>`;
+          return `<div style="font-size:11.5px;color:${diff>avail?'var(--danger)':'var(--text3)'};margin-bottom:10px">${diff>avail?'⚠️ ':''}Credit limit ${fmt(lim)} · Currently used ${fmt(bal)} · Available ${fmt(avail)}</div>`;
         }
         return '';
       })():''}
-      ${st.exSettleMode==='pos'?`<div class="form-group" style="margin-bottom:10px"><label>POS Terminal</label><select class="form-input" id="ret-ex-pos" onchange="window._retState.exPosName=this.value">${bankSelectOpts('pos',st.exPosName)}</select></div>`:''}
-      ${st.exSettleMode==='transfer'?`<div class="form-group" style="margin-bottom:10px"><label>Bank</label><select class="form-input" id="ret-ex-bank" onchange="window._retState.exBankName=this.value">${bankSelectOpts('transfer',st.exBankName)}</select></div>`:''}
+      ${st.exSettleMode==='pos'?`<div class="form-group" style="margin-bottom:10px"><label>POS Terminal</label><select class="form-input" onchange="window._retState.exPosName=this.value">${bankSelectOpts('pos',st.exPosName)}</select></div>`:''}
+      ${st.exSettleMode==='transfer'?`<div class="form-group" style="margin-bottom:10px"><label>Bank</label><select class="form-input" onchange="window._retState.exBankName=this.value">${bankSelectOpts('transfer',st.exBankName)}</select></div>`:''}
       ${st.exSettleMode==='split'?`
       <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:10px;margin-bottom:10px">
         <div class="form-grid c2" style="margin-bottom:8px">
           <div class="form-group" style="margin:0"><label>Mode 1</label>
-            <select class="form-input" id="ret-ex-split-mode1" onchange="window._retState.exSplitMode1=this.value;renderReturnModal()">
+            <select class="form-input" onchange="window._retState.exSplitMode1=this.value;renderReturnModal()">
               <option value="cash" ${st.exSplitMode1==='cash'?'selected':''}>Cash</option>
               <option value="transfer" ${st.exSplitMode1==='transfer'?'selected':''}>Bank transfer</option>
               <option value="pos" ${st.exSplitMode1==='pos'?'selected':''}>POS</option>
             </select>
           </div>
           <div class="form-group" style="margin:0"><label>Amount 1 (₦)</label>
-            <input class="form-input" id="ret-ex-split-amt1" type="number" min="0" value="${st.exSplitAmt1||0}" onchange="window._retState.exSplitAmt1=parseFloat(this.value)||0;renderReturnModal()"></div>
+            <input class="form-input" type="number" min="0" value="${st.exSplitAmt1||0}" onchange="window._retState.exSplitAmt1=parseFloat(this.value)||0;renderReturnModal()"></div>
           <div class="form-group" style="margin:0"><label>Mode 2</label>
-            <select class="form-input" id="ret-ex-split-mode2" onchange="window._retState.exSplitMode2=this.value;renderReturnModal()">
+            <select class="form-input" onchange="window._retState.exSplitMode2=this.value;renderReturnModal()">
               <option value="transfer" ${st.exSplitMode2==='transfer'?'selected':''}>Bank transfer</option>
               <option value="cash" ${st.exSplitMode2==='cash'?'selected':''}>Cash</option>
               <option value="pos" ${st.exSplitMode2==='pos'?'selected':''}>POS</option>
             </select>
           </div>
           <div class="form-group" style="margin:0"><label>Amount 2 (₦)</label>
-            <input class="form-input" id="ret-ex-split-amt2" type="number" min="0" value="${st.exSplitAmt2||0}" onchange="window._retState.exSplitAmt2=parseFloat(this.value)||0;renderReturnModal()"></div>
+            <input class="form-input" type="number" min="0" value="${st.exSplitAmt2||0}" onchange="window._retState.exSplitAmt2=parseFloat(this.value)||0;renderReturnModal()"></div>
         </div>
-        ${st.exSplitMode1==='transfer'?`<div class="form-group" style="margin-bottom:6px"><label>Bank (Mode 1)</label><select class="form-input" id="ret-ex-split-bank1" onchange="window._retState.exSplitBank1=this.value">${bankSelectOpts('transfer',st.exSplitBank1)}</select></div>`:''}
-        ${st.exSplitMode1==='pos'||st.exSplitMode2==='pos'?`<div class="form-group" style="margin-bottom:6px"><label>POS Terminal</label><select class="form-input" id="ret-ex-split-posid" onchange="window._retState.exSplitPosId=this.value">${bankSelectOpts('pos',st.exSplitPosId)}</select></div>`:''}
-        ${st.exSplitMode2==='transfer'?`<div class="form-group" style="margin-bottom:6px"><label>Bank (Mode 2)</label><select class="form-input" id="ret-ex-split-bank2" onchange="window._retState.exSplitBank2=this.value">${bankSelectOpts('transfer',st.exSplitBank2)}</select></div>`:''}
-        <div style="font-size:12px;font-weight:600;color:${((st.exSplitAmt1||0)+(st.exSplitAmt2||0))===exDiff?'var(--success)':'var(--danger)'}">
-          ${fmt((st.exSplitAmt1||0)+(st.exSplitAmt2||0))} of ${fmt(exDiff)} entered${((st.exSplitAmt1||0)+(st.exSplitAmt2||0))!==exDiff?' — must add up exactly':''}
+        ${st.exSplitMode1==='transfer'?`<div class="form-group" style="margin-bottom:6px"><label>Bank (Mode 1)</label><select class="form-input" onchange="window._retState.exSplitBank1=this.value">${bankSelectOpts('transfer',st.exSplitBank1)}</select></div>`:''}
+        ${st.exSplitMode1==='pos'||st.exSplitMode2==='pos'?`<div class="form-group" style="margin-bottom:6px"><label>POS Terminal</label><select class="form-input" onchange="window._retState.exSplitPosId=this.value">${bankSelectOpts('pos',st.exSplitPosId)}</select></div>`:''}
+        ${st.exSplitMode2==='transfer'?`<div class="form-group" style="margin-bottom:6px"><label>Bank (Mode 2)</label><select class="form-input" onchange="window._retState.exSplitBank2=this.value">${bankSelectOpts('transfer',st.exSplitBank2)}</select></div>`:''}
+        <div style="font-size:12px;font-weight:600;color:${((st.exSplitAmt1||0)+(st.exSplitAmt2||0))===Math.abs(diff)?'var(--success)':'var(--danger)'}">
+          ${fmt((st.exSplitAmt1||0)+(st.exSplitAmt2||0))} of ${fmt(Math.abs(diff))} entered${((st.exSplitAmt1||0)+(st.exSplitAmt2||0))!==Math.abs(diff)?' — must add up exactly':''}
         </div>
-      </div>
+      </div>`:''}
       `:''}
-      `:''}
-      `:`<div style="color:var(--text3);font-size:13px;padding:6px 0">Select a replacement item above.</div>`}
-    `:''}
-    <div class="form-group" style="margin-bottom:6px"><label>Reason (optional)</label><input class="form-input" id="ret-reason" value="${esc(st.reason)}" onchange="window._retState.reason=this.value"></div>
+    </div>`:`
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:10px;font-size:13px;display:flex;justify-content:space-between">
+      <span>${st.refundType==='credit'?'Store credit amount':'Refund amount'}</span><b style="color:var(--danger)">${fmt(returnTotal)}</b>
+    </div>`}
   `;
-  showModal(st.editingReturnId?'✏ Edit Return':'↩ Return Item', body, [
+
+  const buttons = [
     {label:'Cancel', action:'close', style:''},
     {label:st.editingReturnId?'💾 Save Changes':'✓ Confirm Return', action:'confirmSalesReturn()', style:'btn-primary'}
-  ]);
+  ];
+
+  // Lots of interactive fields here — update the existing modal in place
+  // rather than tearing the whole thing down on every change (same fix
+  // applied to the Warehouse Transfer Cart).
+  const existingBody = document.querySelector('#modal-root .modal-body');
+  const existingFooter = document.querySelector('#modal-root .modal-footer');
+  if (existingBody) {
+    existingBody.innerHTML = body;
+    if (existingFooter) {
+      existingFooter.innerHTML = buttons.map(b => b.action==='close'
+        ? `<button class="btn" onclick="closeModal()">${b.label}</button>`
+        : `<button class="btn ${b.style||''}" onclick="${b.action}">${b.label}</button>`).join('');
+    }
+  } else {
+    showModal(st.editingReturnId?'✏ Edit Return':'↩ Return Items', body, buttons);
+  }
+}
+
+function retUpdateLineQty(saleId, val) {
+  const st = window._retState; if (!st) return;
+  const line = st.lines.find(l=>l.saleId===saleId); if (!line) return;
+  let qty = parseInt(val)||0;
+  if (qty<0) qty=0;
+  if (qty>line.returnable) qty=line.returnable;
+  line.selQty = qty;
+  renderReturnModal();
+}
+
+function retUpdateLinePrice(saleId, val) {
+  const st = window._retState; if (!st) return;
+  const line = st.lines.find(l=>l.saleId===saleId); if (!line) return;
+  line.adjPrice = Math.max(0, parseFloat(val)||0);
+  renderReturnModal();
+}
+
+function retAddExchangeItem() {
+  const st = window._retState; if (!st) return;
+  st.exchangeItems.push({itemId:'', name:'', qty:1, price:0, stockQty:0});
+  renderReturnModal();
+}
+
+function retRemoveExchangeItem(idx) {
+  const st = window._retState; if (!st) return;
+  st.exchangeItems.splice(idx,1);
+  renderReturnModal();
+}
+
+function retFilterExchangeDd(idx, val) {
+  const dd = document.getElementById(`ex-dd-${idx}`); if (!dd) return;
+  const term = (val||'').toLowerCase().trim();
+  if (!term) { dd.style.display='none'; return; }
+  const matches = Object.values(STATE.inventory||{}).filter(i=>(i.name||'').toLowerCase().includes(term)||(i.cat||'').toLowerCase().includes(term)).slice(0,30);
+  if (!matches.length) { dd.innerHTML='<div style="padding:10px 12px;color:var(--text3);font-size:12px">No matching items.</div>'; dd.style.display='block'; return; }
+  dd.innerHTML = matches.map(i=>{
+    const id=i._id||i.id;
+    return `<div data-id="${id}" data-name="${esc(i.name)}" data-price="${i.sell||i.sellPrice||0}" data-stock="${i.qty||0}"
+      style="padding:9px 12px;cursor:pointer;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;font-size:13px"
+      onmouseover="this.style.background='var(--surface)'" onmouseout="this.style.background=''" onmousedown="retSelectExchangeItem(${idx}, this)">
+      <span><b>${esc(i.name)}</b></span>
+      <span style="color:var(--text3);font-size:12px">${fmt(i.sell||i.sellPrice||0)} · stock: ${i.qty||0}</span>
+    </div>`;
+  }).join('');
+  dd.style.display = 'block';
+}
+
+function retSelectExchangeItem(idx, el) {
+  const st = window._retState; if (!st) return;
+  const e = st.exchangeItems[idx]; if (!e) return;
+  e.itemId = el.dataset.id;
+  e.name = el.dataset.name;
+  e.price = parseFloat(el.dataset.price)||0;
+  e.stockQty = parseInt(el.dataset.stock)||0;
+  if (!e.qty) e.qty = 1;
+  renderReturnModal();
+}
+
+function retUpdateExchangeQty(idx, val) {
+  const st = window._retState; if (!st) return;
+  const e = st.exchangeItems[idx]; if (!e) return;
+  e.qty = Math.max(1, parseInt(val)||1);
+  renderReturnModal();
+}
+
+function retUpdateExchangePrice(idx, val) {
+  const st = window._retState; if (!st) return;
+  const e = st.exchangeItems[idx]; if (!e) return;
+  e.price = Math.max(0, parseFloat(val)||0);
+  renderReturnModal();
 }
 
 // Undoes whatever inventory/cashflow/customer-balance changes a return
@@ -5043,10 +5176,18 @@ function renderReturnModal() {
 // side effects sitting alongside the new ones — same "frozen originals,
 // side-effects must follow" principle used for purchases/pending deliveries.
 async function _reverseSalesReturnEffects(r) {
-  if (r.itemId && r.invReturnQty) {
+  if (Array.isArray(r.returnLines)) {
+    for (const l of r.returnLines) {
+      if (l.itemId && l.qty) await _safeAdjustInventory(l.itemId, -l.qty);
+    }
+  } else if (r.itemId && r.invReturnQty) { // backward compat: old single-line records
     await _safeAdjustInventory(r.itemId, -r.invReturnQty);
   }
-  if (r.exchangedForItemId && r.exNewQtyDeducted) {
+  if (Array.isArray(r.exchangeLines)) {
+    for (const l of r.exchangeLines) {
+      if (l.itemId && l.qtyDeducted) await _safeAdjustInventory(l.itemId, l.qtyDeducted);
+    }
+  } else if (r.exchangedForItemId && r.exNewQtyDeducted) { // backward compat
     await _safeAdjustInventory(r.exchangedForItemId, r.exNewQtyDeducted);
   }
   if (Array.isArray(r.cashflowIds)) {
@@ -5073,32 +5214,35 @@ async function _reverseSalesReturnEffects(r) {
 
 async function confirmSalesReturn() {
   const st = window._retState; if (!st) return;
-  const item = st.items.find(i=>i.saleId===st.selectedSaleId);
-  if (!item) { showToast('Select an item to return.','error'); return; }
-  if (!st.qty || st.qty<1 || st.qty>item.returnable) { showToast('Enter a valid quantity (up to what is returnable).','error'); return; }
+  const selectedLines = st.lines.filter(l=>(l.selQty||0)>0);
+  if (!selectedLines.length) { showToast('Enter a return quantity for at least one item.','error'); return; }
+  for (const l of selectedLines) {
+    if (l.selQty>l.returnable) { showToast(`${l.name}: cannot return more than ${l.returnable}.`,'error'); return; }
+  }
+  const reason = (document.getElementById('ret-reason')?.value||st.reason||'').trim();
+  if (!reason) { showToast('Enter a return reason.','error'); return; }
   if ((st.refundType==='credit' || (st.refundType==='exchange' && st.exSettleMode==='credit')) && !st.custId) {
     showToast('No registered customer on this invoice — choose a different settlement.','error'); return;
   }
-  let exNewItem = null;
-  if (st.refundType==='exchange') {
-    exNewItem = STATE.inventory?.[st.exNewItemId];
-    if (!exNewItem) { showToast('Select a replacement item for the exchange.','error'); return; }
-  }
 
-  const refundAmt = Math.round(item.unitNet * st.qty);
+  const returnTotal = selectedLines.reduce((a,l)=>a+l.selQty*(l.adjPrice||0), 0);
+  const isExchange = st.refundType==='exchange';
+  let exchangeTotal = 0, diff = 0;
 
-  // ── CREDIT LIMIT ENFORCEMENT (exchange shortfall settled to balance) ──
-  // Mirrors the same blocking logic used in v2SaveSale for regular credit
-  // sales — a shortfall going onto a customer's balance is, financially,
-  // exactly that: new credit being extended to them.
-  if (st.refundType==='exchange' && st.exSettleMode==='credit') {
-    const newAmount = Math.round((st.exNewPrice||0)*st.exQty);
-    const exDiff = newAmount - refundAmt;
-    if (exDiff>0) {
+  if (isExchange) {
+    const validEx = st.exchangeItems.filter(e=>e.itemId && e.qty>0);
+    if (!validEx.length) { showToast('Select at least one item for the exchange.','error'); return; }
+    exchangeTotal = validEx.reduce((a,e)=>a+e.qty*(e.price||0), 0);
+    diff = exchangeTotal - returnTotal;
+
+    // ── CREDIT LIMIT ENFORCEMENT — a shortfall going onto a customer's
+    // balance is, financially, new credit being extended to them. Mirrors
+    // the same blocking logic used in v2SaveSale for regular credit sales.
+    if (diff>0 && st.exSettleMode==='credit') {
       const cust = STATE.customers?.[st.custId];
       const creditLimit = cust?.creditLimit||0;
       const currentBalance = cust?.creditBalance||0;
-      if (creditLimit>0 && currentBalance+exDiff>creditLimit) {
+      if (creditLimit>0 && currentBalance+diff>creditLimit) {
         const available = Math.max(0, creditLimit-currentBalance);
         showBlockingError(
           'Credit Limit Exceeded',
@@ -5107,29 +5251,26 @@ async function confirmSalesReturn() {
             <div style="display:flex;justify-content:space-between;margin-bottom:6px"><span>Credit limit:</span><b>${fmt(creditLimit)}</b></div>
             <div style="display:flex;justify-content:space-between;margin-bottom:6px"><span>Currently used:</span><b style="color:#dc2626">${fmt(currentBalance)}</b></div>
             <div style="display:flex;justify-content:space-between;margin-bottom:6px"><span>Available credit:</span><b style="color:${available>0?'#15803d':'#dc2626'}">${fmt(available)}</b></div>
-            <div style="display:flex;justify-content:space-between;border-top:1px solid #fca5a5;padding-top:6px;margin-top:4px"><span>This exchange needs:</span><b style="color:#dc2626">${fmt(exDiff)}</b></div>
+            <div style="display:flex;justify-content:space-between;border-top:1px solid #fca5a5;padding-top:6px;margin-top:4px"><span>This exchange needs:</span><b style="color:#dc2626">${fmt(diff)}</b></div>
           </div><br>
           Choose a different settlement instead.`
         );
         return;
       }
     }
-  }
-
-  // Split settlement must add up exactly, or the till reconciliation breaks
-  if (st.refundType==='exchange' && st.exSettleMode==='split') {
-    const newAmount = Math.round((st.exNewPrice||0)*st.exQty);
-    const exDiff = Math.abs(newAmount - refundAmt);
-    const splitTotal = (st.exSplitAmt1||0)+(st.exSplitAmt2||0);
-    if (splitTotal !== exDiff) {
-      showToast(`Split amounts (${fmt(splitTotal)}) must add up to ${fmt(exDiff)}.`,'error'); return;
+    // Split settlement must add up exactly, or the till reconciliation breaks
+    if (diff!==0 && st.exSettleMode==='split') {
+      const splitTotal = (st.exSplitAmt1||0)+(st.exSplitAmt2||0);
+      if (splitTotal !== Math.abs(diff)) {
+        showToast(`Split amounts (${fmt(splitTotal)}) must add up to ${fmt(Math.abs(diff))}.`,'error'); return;
+      }
     }
   }
 
   const now = new Date();
   const date = now.toLocaleDateString();
   const month = now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
-  const reason = (document.getElementById('ret-reason')?.value||st.reason||'').trim();
+  const itemsLabel = selectedLines.map(l=>`${l.selQty}× ${l.name}`).join(', ');
 
   setSyncStatus('saving');
   try {
@@ -5145,18 +5286,20 @@ async function confirmSalesReturn() {
     let cashflowIds = [];
     let creditDelta = 0;
     let depositCfId = null;
-    let exNewQtyDeducted = 0;
+    const returnLines = [];
+    const exchangeLines = [];
 
-    // Returned item always goes back into inventory, regardless of refund type
-    if (item.itemId) {
-      await _safeAdjustInventory(item.itemId, st.qty);
+    // Returned items always go back into inventory, regardless of refund type
+    for (const l of selectedLines) {
+      if (l.itemId) await _safeAdjustInventory(l.itemId, l.selQty);
+      returnLines.push({saleId:l.saleId, itemId:l.itemId||null, name:l.name, qty:l.selQty, adjPrice:l.adjPrice||0, lineValue:l.selQty*(l.adjPrice||0)});
     }
 
     if (st.refundType==='cash' || st.refundType==='transfer') {
       const cfId=uid();
       const cf={id:cfId,type:'out',cat:'Sales Refund',isReturn:true,
-        desc:`Return — Inv #${st.invoiceNum} — ${st.qty}× ${item.name}`,
-        amount:refundAmt, payMode:st.refundType, bankName:st.refundType==='transfer'?st.bankName:'',
+        desc:`Return — Inv #${st.invoiceNum} — ${itemsLabel}`,
+        amount:returnTotal, payMode:st.refundType, bankName:st.refundType==='transfer'?st.bankName:'',
         custId:st.custId||null, custName:st.custName, date, month, invoiceNum:st.invoiceNum, by:STATE.user?.name};
       await fsSave(COLS.CASHFLOW, cfId, cf);
       if(!STATE.cashflow)STATE.cashflow={};
@@ -5166,12 +5309,11 @@ async function confirmSalesReturn() {
     } else if (st.refundType==='credit') {
       // Store credit: pay down what the customer owes first; any leftover
       // becomes a Customer Deposit they can use on a future purchase — reuses
-      // the same deposit mechanic already trusted elsewhere in the app,
-      // rather than inventing a new "negative balance" concept.
+      // the same deposit mechanic already trusted elsewhere in the app.
       const cust = STATE.customers?.[st.custId];
       if (cust) {
-        const newBal = Math.max(0,(cust.creditBalance||0)-refundAmt);
-        const excess = Math.max(0, refundAmt-(cust.creditBalance||0));
+        const newBal = Math.max(0,(cust.creditBalance||0)-returnTotal);
+        const excess = Math.max(0, returnTotal-(cust.creditBalance||0));
         creditDelta = newBal-(cust.creditBalance||0);
         const updCust = {...cust, creditBalance:newBal};
         await fsSave(COLS.CUSTOMERS, st.custId, updCust);
@@ -5179,7 +5321,7 @@ async function confirmSalesReturn() {
         if (excess>0) {
           const depId=uid();
           const dep={id:depId,type:'in',cat:'Customer Deposit',
-            desc:`Store credit from return — Inv #${st.invoiceNum} — ${st.qty}× ${item.name}`,
+            desc:`Store credit from return — Inv #${st.invoiceNum} — ${itemsLabel}`,
             amount:excess, custId:st.custId, custName:st.custName, date, month, invoiceNum:st.invoiceNum, by:STATE.user?.name};
           await fsSave(COLS.CASHFLOW, depId, dep);
           STATE.cashflow[depId]={...dep,_id:depId,_savedAt:Date.now()};
@@ -5187,26 +5329,28 @@ async function confirmSalesReturn() {
         }
       }
 
-    } else if (st.refundType==='exchange') {
-      const deductResult = await _safeAdjustInventory(st.exNewItemId, -st.exQty);
-      exNewQtyDeducted = Math.abs(deductResult.applied||0);
-      const newAmount = Math.round((st.exNewPrice||0)*st.exQty);
-      const exDiff = newAmount - refundAmt;
-      if (exDiff!==0) {
+    } else if (isExchange) {
+      const validEx = st.exchangeItems.filter(e=>e.itemId && e.qty>0);
+      for (const e of validEx) {
+        const deductResult = await _safeAdjustInventory(e.itemId, -e.qty);
+        const qtyDeducted = Math.abs(deductResult.applied||0);
+        exchangeLines.push({itemId:e.itemId, name:e.name, qty:e.qty, price:e.price||0, lineValue:e.qty*(e.price||0), qtyDeducted});
+      }
+      const exLabel = validEx.map(e=>`${e.qty}× ${e.name}`).join(', ');
+      if (diff!==0) {
         if (st.exSettleMode==='credit') {
           const cust = STATE.customers?.[st.custId];
-          const newBal = (cust?.creditBalance||0)+exDiff;
           if (cust) {
-            creditDelta = exDiff;
-            const updCust={...cust, creditBalance:newBal};
+            creditDelta = diff;
+            const updCust={...cust, creditBalance:(cust.creditBalance||0)+diff};
             await fsSave(COLS.CUSTOMERS, st.custId, updCust);
             STATE.customers[st.custId]={...updCust,_id:st.custId,_savedAt:Date.now()};
           }
         } else if (st.exSettleMode==='split') {
-          const mk=(amt,mode,bank)=>({id:uid(), type: exDiff>0?'in':'out',
-            cat: exDiff>0?'Sales (Item Exchange)':'Sales Refund (Item Exchange)',
-            isReturn: exDiff<0,
-            desc:`Item exchange (split) — Inv #${st.invoiceNum} — ${st.qty}× ${item.name} → ${st.exQty}× ${exNewItem.name}`,
+          const mk=(amt,mode,bank)=>({id:uid(), type: diff>0?'in':'out',
+            cat: diff>0?'Sales (Item Exchange)':'Sales Refund (Item Exchange)',
+            isReturn: diff<0,
+            desc:`Item exchange (split) — Inv #${st.invoiceNum} — ${itemsLabel} → ${exLabel}`,
             amount: amt, payMode:mode, bankName:mode==='transfer'?bank:'',
             custId:st.custId||null, custName:st.custName, date, month, invoiceNum:st.invoiceNum, by:STATE.user?.name});
           const cf1=mk(st.exSplitAmt1||0, st.exSplitMode1, st.exSplitBank1);
@@ -5218,11 +5362,11 @@ async function confirmSalesReturn() {
           cashflowIds.push(cf1.id, cf2.id);
         } else {
           const cfId=uid();
-          const cf={id:cfId, type: exDiff>0?'in':'out',
-            cat: exDiff>0?'Sales (Item Exchange)':'Sales Refund (Item Exchange)',
-            isReturn: exDiff<0,
-            desc:`Item exchange — Inv #${st.invoiceNum} — ${st.qty}× ${item.name} → ${st.exQty}× ${exNewItem.name}`,
-            amount: Math.abs(exDiff), payMode:st.exSettleMode,
+          const cf={id:cfId, type: diff>0?'in':'out',
+            cat: diff>0?'Sales (Item Exchange)':'Sales Refund (Item Exchange)',
+            isReturn: diff<0,
+            desc:`Item exchange — Inv #${st.invoiceNum} — ${itemsLabel} → ${exLabel}`,
+            amount: Math.abs(diff), payMode:st.exSettleMode,
             bankName:st.exSettleMode==='transfer'?st.exBankName:'',
             posName:st.exSettleMode==='pos'?st.exPosName:'',
             custId:st.custId||null, custName:st.custName, date, month, invoiceNum:st.invoiceNum, by:STATE.user?.name};
@@ -5234,25 +5378,20 @@ async function confirmSalesReturn() {
     }
 
     // Logged for Returns Tracker regardless of type, and used to cap future
-    // "already returned" qty for this same line. The linkage fields below
-    // (invReturnQty/cashflowIds/creditDelta/depositCfId/exNewQtyDeducted)
-    // let a future edit precisely reverse this exact version before
-    // applying whatever the edit changes to.
+    // "already returned" qty for each line. The linkage fields below let a
+    // future edit precisely reverse this exact version before applying
+    // whatever the edit changes to.
     const retId=st.editingReturnId||uid();
-    const ret={id:retId, invoiceNum:st.invoiceNum, saleId:item.saleId, itemId:item.itemId||null,
-      itemName:item.name, qty:st.qty, refundAmt, refundType:st.refundType,
-      custId:st.custId||null, custName:st.custName, reason,
-      exchangedForItemId: st.refundType==='exchange'?st.exNewItemId:null,
-      exchangedForItemName: st.refundType==='exchange'?(exNewItem?.name||''):null,
-      exNewPrice: st.refundType==='exchange'?(st.exNewPrice||0):null,
-      exQty: st.refundType==='exchange'?(st.exQty||st.qty):null,
-      exSettleMode: st.refundType==='exchange'?st.exSettleMode:null,
-      exBankName: st.refundType==='exchange'?(st.exBankName||''):'',
-      exPosName: st.refundType==='exchange'?(st.exPosName||''):'',
+    const ret={id:retId, invoiceNum:st.invoiceNum, custId:st.custId||null, custName:st.custName, reason,
+      returnDate: st.returnDate||date, refundType:st.refundType,
+      returnLines, returnTotal,
+      exchangeLines: isExchange?exchangeLines:[], exchangeTotal: isExchange?exchangeTotal:0, diff: isExchange?diff:0,
+      exSettleMode: isExchange?st.exSettleMode:null,
+      exBankName: isExchange?(st.exBankName||''):'', exPosName: isExchange?(st.exPosName||''):'',
       exSplitMode1: st.exSplitMode1||null, exSplitAmt1: st.exSplitAmt1||null, exSplitBank1: st.exSplitBank1||'',
       exSplitMode2: st.exSplitMode2||null, exSplitAmt2: st.exSplitAmt2||null, exSplitBank2: st.exSplitBank2||'',
       bankName: st.refundType==='transfer'?(st.bankName||''):'',
-      invReturnQty: item.itemId?st.qty:0, cashflowIds, creditDelta, depositCfId, exNewQtyDeducted,
+      cashflowIds, creditDelta, depositCfId,
       date, month, by:STATE.user?.name,
       editedBy: st.editingReturnId?STATE.user?.name:undefined,
       editedAt: st.editingReturnId?new Date().toISOString():undefined};
@@ -5262,8 +5401,8 @@ async function confirmSalesReturn() {
 
     closeModal();
     setSyncStatus('synced');
-    showToast(st.editingReturnId?'✅ Return updated.':`✅ Returned ${st.qty}× ${item.name}${st.refundType==='exchange'?` for ${exNewItem.name}`:''}.`,'success');
-    logActivity('Sales return', `${st.editingReturnId?'Updated':'New'} — Inv #${st.invoiceNum}: ${st.qty}× ${item.name} (${st.refundType})`, '');
+    showToast(st.editingReturnId?'✅ Return updated.':`✅ Returned ${itemsLabel}${isExchange?' for exchange':''}.`,'success');
+    logActivity('Sales return', `${st.editingReturnId?'Updated':'New'} — Inv #${st.invoiceNum}: ${itemsLabel} (${st.refundType})`, '');
     window._retState = null;
     renderSales(); updateInventoryBadge?.();
     if (document.getElementById('page-returns')?.classList.contains('active')) renderReturnsTracker();
@@ -5285,15 +5424,23 @@ function viewSalesReturn(id) {
   }[r.refundType] || '';
 
   const isExchange = r.refundType==='exchange';
-  const returnedValue = r.refundAmt||0; // value of the item(s) returned
-  const exchangedValue = isExchange ? Math.round((r.exNewPrice||0)*(r.exQty||r.qty||1)) : 0;
-  const diff = exchangedValue - returnedValue; // >0 = customer owed more (shortfall), <0 = refund/credit due
+  const returnLines = Array.isArray(r.returnLines) ? r.returnLines : (r.itemName?[{name:r.itemName,qty:r.qty||1,lineValue:r.refundAmt||0}]:[]);
+  const exchangeLines = Array.isArray(r.exchangeLines) ? r.exchangeLines : (r.exchangedForItemName?[{name:r.exchangedForItemName,qty:r.exQty||1,lineValue:Math.round((r.exNewPrice||0)*(r.exQty||1))}]:[]);
+  const returnTotal = r.returnTotal!=null ? r.returnTotal : (r.refundAmt||0);
+  const exchangeTotal = r.exchangeTotal!=null ? r.exchangeTotal : exchangeLines.reduce((a,l)=>a+(l.lineValue||0),0);
+  const diff = r.diff!=null ? r.diff : (exchangeTotal-returnTotal);
   const settleLabelMap = {cash:'Cash',pos:'POS',transfer:'Bank Transfer',credit:'Adjusted on customer balance',split:'Split (cash + transfer)'};
 
+  const returnRows = returnLines.map(l=>`<div style="display:flex;justify-content:space-between"><span>${l.qty}× ${esc(l.name)}</span><b>${fmt(l.lineValue||0)}</b></div>`).join('');
+  const exchangeRows = exchangeLines.map(l=>`<div style="display:flex;justify-content:space-between"><span>${l.qty}× ${esc(l.name)}</span><b>${fmt(l.lineValue||0)}</b></div>`).join('');
+
   const exchangeSection = isExchange ? `
-    <div style="display:flex;justify-content:space-between"><span>Item returned — value</span><b>${fmt(returnedValue)}</b></div>
-    <div style="display:flex;justify-content:space-between"><span>Exchanged for</span><b>${r.exQty||1}× ${esc(r.exchangedForItemName||'—')}</b></div>
-    <div style="display:flex;justify-content:space-between"><span>Exchanged item — value</span><b>${fmt(exchangedValue)}</b></div>
+    <div style="margin-top:6px"><span style="color:var(--text3);font-size:12px">ITEMS RETURNED</span></div>
+    ${returnRows}
+    <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--text3);border-top:1px dashed var(--border);margin-top:2px;padding-top:4px"><span>Return value</span><b>${fmt(returnTotal)}</b></div>
+    <div style="margin-top:10px"><span style="color:var(--text3);font-size:12px">EXCHANGED FOR</span></div>
+    ${exchangeRows||'<div style="color:var(--text3);font-size:12px">—</div>'}
+    <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--text3);border-top:1px dashed var(--border);margin-top:2px;padding-top:4px"><span>Exchange value</span><b>${fmt(exchangeTotal)}</b></div>
     <div style="display:flex;justify-content:space-between;border-top:1px dashed var(--border);margin-top:6px;padding-top:6px">
       <span>${diff>0?'Shortfall paid by customer':diff<0?'Refunded / credited to customer':'Difference'}</span>
       <b style="color:${diff>0?'var(--danger)':diff<0?'var(--success)':'var(--text2)'}">${diff===0?'No difference':fmt(Math.abs(diff))}</b>
@@ -5301,9 +5448,10 @@ function viewSalesReturn(id) {
     ${diff!==0?`<div style="display:flex;justify-content:space-between;margin-top:2px"><span style="color:var(--text3);font-size:12px">Settled via</span><span style="font-size:12px">${esc(settleLabelMap[r.exSettleMode]||r.exSettleMode||'Cash')}${(r.exSettleMode==='transfer'&&r.exBankName)?' → '+esc(r.exBankName):''}${(r.exSettleMode==='pos'&&r.exPosName)?' ('+esc(r.exPosName)+')':''}</span></div>`:''}
     ${r.exSettleMode==='split'?`<div style="font-size:11.5px;color:var(--text3);margin-top:2px">${esc(r.exSplitMode1||'cash')}: ${fmt(r.exSplitAmt1||0)} + ${esc(r.exSplitMode2||'transfer')}: ${fmt(r.exSplitAmt2||0)}</div>`:''}
   ` : `
+    <div style="margin-top:6px">${returnRows}</div>
     <div style="display:flex;justify-content:space-between;border-top:1px dashed var(--border);margin-top:6px;padding-top:6px">
       <span>${r.refundType==='credit'?'Store credit applied':'Refund amount'}</span>
-      <b style="color:var(--danger)">${fmt(returnedValue)}</b>
+      <b style="color:var(--danger)">${fmt(returnTotal)}</b>
     </div>
   `;
 
@@ -5311,10 +5459,8 @@ function viewSalesReturn(id) {
     <div style="text-align:center;margin-bottom:14px">${badge}</div>
     <div style="background:var(--surface);border-radius:10px;padding:14px 16px;font-size:13px;line-height:1.8">
       <div style="display:flex;justify-content:space-between"><span>Invoice #</span><b>#${esc(r.invoiceNum||'—')}</b></div>
-      <div style="display:flex;justify-content:space-between"><span>Date</span><b>${esc(r.date||'—')}</b></div>
+      <div style="display:flex;justify-content:space-between"><span>Date</span><b>${esc(r.returnDate||r.date||'—')}</b></div>
       <div style="display:flex;justify-content:space-between"><span>Customer</span><b>${esc(r.custName||'Walk-in')}</b></div>
-      <div style="display:flex;justify-content:space-between"><span>Item returned</span><b>${esc(r.itemName||'—')}</b></div>
-      <div style="display:flex;justify-content:space-between"><span>Qty</span><b>${r.qty||1}</b></div>
       ${exchangeSection}
       ${r.reason?`<div style="margin-top:6px"><span style="color:var(--text3)">Reason:</span> ${esc(r.reason)}</div>`:''}
       <div style="margin-top:6px;font-size:11.5px;color:var(--text3)">Processed by ${esc(r.by||'—')}</div>
@@ -5332,20 +5478,28 @@ function printSalesReturn(id) {
   const typeLabel = {cash:'Cash Refund',transfer:'Transfer Refund',credit:'Store Credit',exchange:'Exchange'}[r.refundType] || 'Refund';
 
   const isExchange = r.refundType==='exchange';
-  const returnedValue = r.refundAmt||0;
-  const exchangedValue = isExchange ? Math.round((r.exNewPrice||0)*(r.exQty||r.qty||1)) : 0;
-  const diff = exchangedValue - returnedValue;
+  const returnLines = Array.isArray(r.returnLines) ? r.returnLines : (r.itemName?[{name:r.itemName,qty:r.qty||1,lineValue:r.refundAmt||0}]:[]);
+  const exchangeLines = Array.isArray(r.exchangeLines) ? r.exchangeLines : (r.exchangedForItemName?[{name:r.exchangedForItemName,qty:r.exQty||1,lineValue:Math.round((r.exNewPrice||0)*(r.exQty||1))}]:[]);
+  const returnTotal = r.returnTotal!=null ? r.returnTotal : (r.refundAmt||0);
+  const exchangeTotal = r.exchangeTotal!=null ? r.exchangeTotal : exchangeLines.reduce((a,l)=>a+(l.lineValue||0),0);
+  const diff = r.diff!=null ? r.diff : (exchangeTotal-returnTotal);
   const settleLabelMap = {cash:'Cash',pos:'POS',transfer:'Bank Transfer',credit:'Adjusted on customer balance',split:'Split (cash + transfer)'};
 
+  const returnRowsHtml = returnLines.map(l=>`<tr><td class="lbl">${l.qty}× ${esc(l.name)}</td><td style="text-align:right">${fmt(l.lineValue||0)}</td></tr>`).join('');
+  const exchangeRowsHtml = exchangeLines.map(l=>`<tr><td class="lbl">${l.qty}× ${esc(l.name)}</td><td style="text-align:right">${fmt(l.lineValue||0)}</td></tr>`).join('');
+
   const exchangeRows = isExchange ? `
-    <tr><td class="lbl">Item returned — value</td><td style="text-align:right">${fmt(returnedValue)}</td></tr>
-    <tr><td class="lbl">Exchanged for</td><td style="text-align:right">${r.exQty||1}× ${esc(r.exchangedForItemName||'—')}</td></tr>
-    <tr><td class="lbl">Exchanged item — value</td><td style="text-align:right">${fmt(exchangedValue)}</td></tr>
+    <tr><td colspan="2" style="font-weight:700;padding-top:10px">Items Returned</td></tr>
+    ${returnRowsHtml}
+    <tr><td class="lbl">Return value</td><td style="text-align:right;font-weight:700">${fmt(returnTotal)}</td></tr>
+    <tr><td colspan="2" style="font-weight:700;padding-top:10px">Exchanged For</td></tr>
+    ${exchangeRowsHtml||'<tr><td colspan="2">—</td></tr>'}
+    <tr><td class="lbl">Exchange value</td><td style="text-align:right;font-weight:700">${fmt(exchangeTotal)}</td></tr>
     ${diff!==0?`<tr><td class="lbl">${diff>0?'Shortfall paid by customer':'Refunded / credited to customer'}</td><td style="text-align:right;font-weight:800;color:${diff>0?'#c0392b':'#15803d'}">${fmt(Math.abs(diff))}</td></tr>
     <tr><td class="lbl">Settled via</td><td style="text-align:right">${esc(settleLabelMap[r.exSettleMode]||r.exSettleMode||'Cash')}${(r.exSettleMode==='transfer'&&r.exBankName)?' → '+esc(r.exBankName):''}${(r.exSettleMode==='pos'&&r.exPosName)?' ('+esc(r.exPosName)+')':''}</td></tr>
     ${r.exSettleMode==='split'?`<tr><td class="lbl">Split breakdown</td><td style="text-align:right">${esc(r.exSplitMode1||'cash')}: ${fmt(r.exSplitAmt1||0)} + ${esc(r.exSplitMode2||'transfer')}: ${fmt(r.exSplitAmt2||0)}</td></tr>`:''}`
     :`<tr><td class="lbl">No price difference</td><td style="text-align:right">—</td></tr>`}
-  ` : '';
+  ` : `<tr><td colspan="2" style="font-weight:700;padding-top:10px">Items Returned</td></tr>${returnRowsHtml}`;
 
   const html = `<!DOCTYPE html><html><head><title>Return Receipt — ${esc(r.invoiceNum||'')}</title>
   <style>
@@ -5366,15 +5520,13 @@ function printSalesReturn(id) {
     <div style="text-align:center"><div class="badge">${esc(typeLabel.toUpperCase())}</div></div>
     <table>
       <tr><td class="lbl">Invoice #</td><td style="text-align:right"><b>#${esc(r.invoiceNum||'—')}</b></td></tr>
-      <tr><td class="lbl">Date</td><td style="text-align:right">${esc(r.date||'—')}</td></tr>
+      <tr><td class="lbl">Date</td><td style="text-align:right">${esc(r.returnDate||r.date||'—')}</td></tr>
       <tr><td class="lbl">Customer</td><td style="text-align:right">${esc(r.custName||'Walk-in')}</td></tr>
-      <tr><td class="lbl">Item returned</td><td style="text-align:right">${esc(r.itemName||'—')}</td></tr>
-      <tr><td class="lbl">Qty</td><td style="text-align:right">${r.qty||1}</td></tr>
       ${exchangeRows}
       ${r.reason?`<tr><td class="lbl">Reason</td><td style="text-align:right">${esc(r.reason)}</td></tr>`:''}
       <tr><td class="lbl">Processed by</td><td style="text-align:right">${esc(r.by||'—')}</td></tr>
     </table>
-    <div class="tot">${isExchange?(diff===0?'No amount due':diff>0?'Shortfall paid: '+fmt(diff):'Refunded to customer: '+fmt(Math.abs(diff))):(r.refundType==='credit'?'Store credit applied: ':'Refund amount: ')+fmt(returnedValue)}</div>
+    <div class="tot">${isExchange?(diff===0?'No amount due':diff>0?'Shortfall paid: '+fmt(diff):'Refunded to customer: '+fmt(Math.abs(diff))):(r.refundType==='credit'?'Store credit applied: ':'Refund amount: ')+fmt(returnTotal)}</div>
     <div class="ftr">Thank you for choosing Great Chid Electro (Nig.)</div>
     <div class="no-print"><button onclick="window.print()" style="padding:8px 16px;background:#1a237e;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600">🖨️ Print</button></div>
   </body></html>`;
@@ -13890,7 +14042,8 @@ function renderReturnsTracker() {
 
   // Filtered list
   const filtered=allRet.filter(r=>{
-    if(search&&!(r.itemName||'').toLowerCase().includes(search)&&!(r.custName||'').toLowerCase().includes(search)&&!(r.invoiceNum||'').toLowerCase().includes(search))return false;
+    const rs=_retSummary(r);
+    if(search&&!rs.itemsLabel.toLowerCase().includes(search)&&!(r.custName||'').toLowerCase().includes(search)&&!(r.invoiceNum||'').toLowerCase().includes(search))return false;
     if(dateFrom){const d=new Date(r.date);const f=new Date(dateFrom);f.setHours(0,0,0,0);if(d<f)return false;}
     if(dateTo){const d=new Date(r.date);const t=new Date(dateTo);t.setHours(23,59,59,999);if(d>t)return false;}
     if(typeFilter!=='all'&&r.refundType!==typeFilter)return false;
@@ -13899,25 +14052,29 @@ function renderReturnsTracker() {
 
   // KPI totals
   const totalReturns=allRet.length;
-  const totalRefundVal=allRet.reduce((a,r)=>a+(r.refundAmt||0),0);
+  const totalRefundVal=allRet.reduce((a,r)=>a+_retSummary(r).totalValue,0);
   const monthReturns=allRet.filter(r=>(r.month||r.date?.slice(0,7)||'')===curMonth).length;
-  const monthRefundVal=allRet.filter(r=>(r.month||r.date?.slice(0,7)||'')===curMonth).reduce((a,r)=>a+(r.refundAmt||0),0);
-  // Most returned item
+  const monthRefundVal=allRet.filter(r=>(r.month||r.date?.slice(0,7)||'')===curMonth).reduce((a,r)=>a+_retSummary(r).totalValue,0);
+  // Most returned item — tallied per actual line item, not per return record,
+  // so a 3-item multi-line return contributes to 3 different item totals.
   const itemMap={};
   allRet.forEach(r=>{
-    const k=r.itemName||'Unknown';
-    if(!itemMap[k])itemMap[k]={name:k,count:0,val:0};
-    itemMap[k].count+=r.qty||1;
-    itemMap[k].val+=r.refundAmt||0;
+    const lines = Array.isArray(r.returnLines) ? r.returnLines : (r.itemName?[{name:r.itemName, qty:r.qty||1, lineValue:r.refundAmt||0}]:[]);
+    lines.forEach(l=>{
+      const k=l.name||'Unknown';
+      if(!itemMap[k])itemMap[k]={name:k,count:0,val:0};
+      itemMap[k].count+=l.qty||1;
+      itemMap[k].val+=l.lineValue||0;
+    });
   });
   const topItems=Object.values(itemMap).sort((a,b)=>b.count-a.count);
   const mostReturned=topItems[0];
 
   // Returns breakdown by type
-  const cashRefunds=allRet.filter(r=>r.refundType==='cash').reduce((a,r)=>a+(r.refundAmt||0),0);
-  const transferRefunds=allRet.filter(r=>r.refundType==='transfer').reduce((a,r)=>a+(r.refundAmt||0),0);
-  const creditRefunds=allRet.filter(r=>r.refundType==='credit').reduce((a,r)=>a+(r.refundAmt||0),0);
-  const exchanges=allRet.filter(r=>r.refundType==='exchange').reduce((a,r)=>a+(r.refundAmt||0),0);
+  const cashRefunds=allRet.filter(r=>r.refundType==='cash').reduce((a,r)=>a+_retSummary(r).totalValue,0);
+  const transferRefunds=allRet.filter(r=>r.refundType==='transfer').reduce((a,r)=>a+_retSummary(r).totalValue,0);
+  const creditRefunds=allRet.filter(r=>r.refundType==='credit').reduce((a,r)=>a+_retSummary(r).totalValue,0);
+  const exchanges=allRet.filter(r=>r.refundType==='exchange').reduce((a,r)=>a+_retSummary(r).totalValue,0);
   const breakdownTotal=cashRefunds+transferRefunds+creditRefunds+exchanges||1;
   const breakdownBars=[
     {label:'Cash Refunds',val:cashRefunds,color:'#22c55e',pct:Math.round(cashRefunds/breakdownTotal*100)},
@@ -13951,13 +14108,15 @@ function renderReturnsTracker() {
     exchange:'<span style="background:#fef3c7;color:#92400e;padding:3px 8px;border-radius:20px;font-size:10px;font-weight:700">EXCHANGE</span>'
   };
 
-  const rows=filtered.map(r=>`<tr>
+  const rows=filtered.map(r=>{
+    const rs=_retSummary(r);
+    return `<tr>
     <td style="font-size:12px;white-space:nowrap;color:var(--text3)">${r.date||'—'}</td>
     <td><b style="font-family:var(--font-mono)">#${esc(r.invoiceNum||'—')}</b></td>
     <td style="font-size:12px">${esc(r.custName||'Walk-in')}</td>
-    <td><b>${esc(r.itemName||'—')}</b></td>
-    <td style="text-align:center;font-weight:700">${r.qty||1}</td>
-    <td class="td-right" style="color:var(--danger);font-weight:700">${fmt(r.refundAmt||0)}</td>
+    <td><b>${esc(rs.firstItemName)}</b>${rs.lineCount>1?` <span style="color:var(--text3);font-size:11px">+${rs.lineCount-1} more</span>`:''}</td>
+    <td style="text-align:center;font-weight:700">${rs.totalQty}</td>
+    <td class="td-right" style="color:var(--danger);font-weight:700">${fmt(rs.totalValue)}</td>
     <td style="font-size:12px;color:var(--text3)">${esc(r.reason||'—')}</td>
     <td>${refundBadges[r.refundType]||refundBadges.cash}</td>
     <td style="font-size:11px;color:var(--text3)">${esc(r.by||'—')}</td>
@@ -13966,7 +14125,7 @@ function renderReturnsTracker() {
       <button class="btn btn-sm" onclick="printSalesReturn('${r._id||r.id}')" style="color:#1a237e;border-color:#93c5fd;font-size:11px;padding:3px 8px">🖨 Print</button>
       ${STATE.user?.role==='admin'?`<button class="btn btn-sm" onclick="editReturn('${r._id||r.id}')" style="color:var(--brand);border-color:var(--brand);font-size:11px;padding:3px 8px">✏ Edit</button>`:''}
     </td>
-  </tr>`).join('');
+  </tr>`;}).join('');
 
   el.innerHTML=`
     <!-- 5 KPI cards matching v1 -->
@@ -14060,7 +14219,7 @@ function renderReturnsTracker() {
             <tfoot>
               <tr style="font-weight:700;background:var(--surface)">
                 <td colspan="5" style="padding:8px 12px;text-align:right;text-transform:uppercase;font-size:12px">TOTAL REFUNDED</td>
-                <td class="td-right" style="padding:8px 12px;color:var(--danger)">${fmt(filtered.reduce((a,r)=>a+(r.refundAmt||0),0))}</td>
+                <td class="td-right" style="padding:8px 12px;color:var(--danger)">${fmt(filtered.reduce((a,r)=>a+_retSummary(r).totalValue,0))}</td>
                 <td colspan="4"></td>
               </tr>
             </tfoot>
@@ -14072,29 +14231,46 @@ function renderReturnsTracker() {
 
 function editReturn(id) {
   const r=STATE.salesReturns?.[id]; if(!r) return;
-  const sale = Object.values(STATE.sales||{}).find(s=>(s._id||s.id)===r.saleId);
-  if (!sale) { showToast('Original sale line not found — cannot safely edit this return.','error'); return; }
+  const lines = Object.values(STATE.sales||{}).filter(s=>s.invoiceNum===r.invoiceNum && !s.voided);
+  if (!lines.length) { showToast('Original invoice not found — cannot safely edit this return.','error'); return; }
 
-  // How much room is left on this line, EXCLUDING this return itself (since
-  // we're replacing it, not adding to it).
-  const alreadyReturnedExcl = Object.values(STATE.salesReturns||{})
-    .filter(x=>x.invoiceNum===r.invoiceNum && x.saleId===r.saleId && (x._id||x.id)!==id)
-    .reduce((a,x)=>a+(x.qty||0),0);
-  const returnable = Math.max(0,(sale.qty||0)-alreadyReturnedExcl);
-  if (returnable<=0) { showToast('No room left on this line to edit into — other returns already account for all of it.','error'); return; }
+  // Old shape carried one saleId/qty directly; new shape carries an array.
+  const oldReturnedLines = Array.isArray(r.returnLines) ? r.returnLines : (r.saleId?[{saleId:r.saleId, qty:r.qty||0, adjPrice:Math.round((r.refundAmt||0)/(r.qty||1))}]:[]);
 
-  const item = {saleId:r.saleId, itemId:r.itemId||null, name:r.itemName,
-    qty:sale.qty||0, unitNet: sale.qty?Math.round((sale.total||0)/sale.qty):0,
-    alreadyReturned:alreadyReturnedExcl, returnable};
+  const linesOut = lines.map(s=>{
+    const saleId = s._id||s.id;
+    // Room left on this line EXCLUDING this return itself (we're replacing it)
+    const alreadyReturnedExcl = Object.values(STATE.salesReturns||{})
+      .filter(x=>(x._id||x.id)!==id && x.invoiceNum===r.invoiceNum)
+      .reduce((a,x)=>{
+        if (Array.isArray(x.returnLines)) return a + x.returnLines.filter(l=>l.saleId===saleId).reduce((aa,l)=>aa+(l.qty||0),0);
+        return a + (x.saleId===saleId ? (x.qty||0) : 0);
+      },0);
+    const returnable = Math.max(0,(s.qty||0)-alreadyReturnedExcl);
+    const unitNet = s.qty?Math.round((s.total||0)/s.qty):0;
+    const thisLine = oldReturnedLines.find(l=>l.saleId===saleId);
+    return {saleId, itemId:s.itemId||null, name:s.name,
+      soldQty:s.qty||0, unitNet, alreadyReturned:alreadyReturnedExcl,
+      returnable: thisLine ? returnable+(thisLine.qty||0) : returnable, // this return's own qty still counts as "available to re-enter"
+      selQty: thisLine ? Math.min(thisLine.qty||0, returnable+(thisLine.qty||0)) : 0,
+      adjPrice: thisLine ? (thisLine.adjPrice!=null?thisLine.adjPrice:unitNet) : unitNet};
+  }).filter(l=>l.returnable>0 || l.selQty>0);
+
+  const oldExchangeLines = Array.isArray(r.exchangeLines) ? r.exchangeLines : (r.exchangedForItemId?[{itemId:r.exchangedForItemId, name:r.exchangedForItemName||'', qty:r.exQty||1, price:r.exNewPrice||0}]:[]);
+  const exchangeItems = oldExchangeLines.map(l=>{
+    const inv = STATE.inventory?.[l.itemId];
+    return {itemId:l.itemId, name:l.name, qty:l.qty||1, price:l.price!=null?l.price:0, stockQty:(inv?.qty||0)};
+  });
 
   window._retState = {
     invoiceNum:r.invoiceNum, custId:r.custId||null, custName:r.custName||'Walk-in',
-    items:[item], selectedSaleId:r.saleId, qty:Math.min(r.qty||1, returnable),
-    refundType:r.refundType||'cash', bankName:r.bankName||'', reason:r.reason||'',
-    exNewItemId:r.exchangedForItemId||'', exNewPrice:r.exNewPrice||0, exQty:r.exQty||r.qty||1,
+    saleDate: lines[0]?.date||'', lines: linesOut,
+    reason:r.reason||'', returnDate:r.returnDate||_todayLocalISO(),
+    refundType:r.refundType||'cash', bankName:r.bankName||'',
+    exchangeItems,
     exSettleMode:r.exSettleMode||'cash', exBankName:r.exBankName||'', exPosName:r.exPosName||'',
     exSplitMode1:r.exSplitMode1||'cash', exSplitAmt1:r.exSplitAmt1||0, exSplitBank1:r.exSplitBank1||'',
-    exSplitMode2:r.exSplitMode2||'transfer', exSplitAmt2:r.exSplitAmt2||0, exSplitBank2:r.exSplitBank2||'',
+    exSplitMode2:r.exSplitMode2||'transfer', exSplitAmt2:r.exSplitAmt2||0, exSplitBank2:r.exSplitBank2||'', exSplitPosId:r.exSplitPosId||'',
     editingReturnId:id
   };
   renderReturnModal();
@@ -14175,8 +14351,18 @@ function renderProductReport() {
   // Returns — both directions: this item coming BACK (a return), and this
   // item going OUT as the replacement in someone else's exchange (real
   // stock consumption that's easy to miss if you only look at "returns").
-  const returnsOfItem=Object.values(STATE.salesReturns||{}).filter(r=>r.itemId===itemId||r.itemName===item.name);
-  const givenInExchange=Object.values(STATE.salesReturns||{}).filter(r=>r.exchangedForItemId===itemId).reduce((a,r)=>a+(r.qty||0),0);
+  // Records may now hold multiple lines, so a record only "involves" this
+  // item if ANY of its return lines or exchange lines reference it.
+  const _retLinesForItem = (r) => {
+    if (Array.isArray(r.returnLines)) return r.returnLines.filter(l=>l.itemId===itemId||l.name===item.name);
+    return (r.itemId===itemId||r.itemName===item.name) ? [{qty:r.qty||1}] : [];
+  };
+  const _exLinesForItem = (r) => {
+    if (Array.isArray(r.exchangeLines)) return r.exchangeLines.filter(l=>l.itemId===itemId);
+    return (r.exchangedForItemId===itemId) ? [{qty:r.exQty||r.qty||1}] : [];
+  };
+  const returnsOfItem=Object.values(STATE.salesReturns||{}).filter(r=>_retLinesForItem(r).length>0);
+  const givenInExchange=Object.values(STATE.salesReturns||{}).reduce((a,r)=>a+_exLinesForItem(r).reduce((aa,l)=>aa+(l.qty||0),0), 0);
 
   // Stock adjustments
   const adjOfItem=Object.values(STATE.adjLog||{}).filter(a=>a.itemId===itemId||a.itemName===item.name).sort((a,b)=>(b.date||'').localeCompare(a.date||''));
@@ -14185,7 +14371,7 @@ function renderProductReport() {
   const totalPurchased=purchaseList.reduce((a,p)=>a+(p.qty||0),0);
   const totalSupplied=saleList.reduce((a,s)=>a+s.supplied,0);
   const totalPending=saleList.reduce((a,s)=>a+s.pending,0);
-  const totalReturned=returnsOfItem.reduce((a,r)=>a+(r.qty||1),0);
+  const totalReturned=returnsOfItem.reduce((a,r)=>a+_retLinesForItem(r).reduce((aa,l)=>aa+(l.qty||1),0),0);
   const totalRevenue=saleList.reduce((a,s)=>a+s.total,0);
   const totalCostSpent=purchaseList.reduce((a,p)=>a+(p.totalCost||0),0);
   const totalProfit=saleList.reduce((a,s)=>a+s.profit,0);
@@ -14326,16 +14512,20 @@ function renderProductReport() {
       </div>
       <div class="tbl-wrap" style="border-radius:var(--radius);border:1px solid var(--border)"><table>
         <thead><tr><th>DATE</th><th>INVOICE #</th><th>CUSTOMER</th><th style="text-align:center">QTY</th><th class="td-right">REFUND</th><th>REASON</th><th>TYPE</th><th>BY</th></tr></thead>
-        <tbody>${returnsOfItem.sort((a,b)=>(b.date||'').localeCompare(a.date||'')).map(r=>`<tr>
+        <tbody>${returnsOfItem.sort((a,b)=>(b.date||'').localeCompare(a.date||'')).map(r=>{
+          const itemLines = _retLinesForItem(r);
+          const itemQty = itemLines.reduce((a,l)=>a+(l.qty||1),0);
+          const itemVal = itemLines.reduce((a,l)=>a+(l.lineValue!=null?l.lineValue:(r.refundAmt||0)),0);
+          return `<tr>
           <td style="font-size:12px;color:var(--text3)">${r.date||''}</td>
           <td><b>#${esc(r.invoiceNum||'—')}</b></td>
           <td style="font-size:12px">${esc(r.custName||'—')}</td>
-          <td style="text-align:center;font-weight:700;color:var(--warning)">${r.qty||1}</td>
-          <td class="td-right" style="color:var(--danger);font-weight:700">${fmt(r.refundAmt||0)}</td>
+          <td style="text-align:center;font-weight:700;color:var(--warning)">${itemQty}</td>
+          <td class="td-right" style="color:var(--danger);font-weight:700">${fmt(itemVal)}</td>
           <td style="font-size:12px;color:var(--text3)">${esc(r.reason||'—')}</td>
           <td><span style="background:${r.refundType==='cash'?'#d1fae5':r.refundType==='exchange'?'#fef3c7':'#eff6ff'};color:${r.refundType==='cash'?'#065f46':r.refundType==='exchange'?'#92400e':'#1d4ed8'};padding:2px 8px;border-radius:20px;font-size:10px;font-weight:700;text-transform:uppercase">${r.refundType||'cash'}</span></td>
           <td style="font-size:11px;color:var(--text3)">${esc(r.by||'—')}</td>
-        </tr>`).join('')}</tbody>
+        </tr>`;}).join('')}</tbody>
       </table></div>
     </div>`:''}
 
