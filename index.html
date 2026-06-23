@@ -6761,14 +6761,16 @@ function _buildInvoiceHTML(invNum, mode='a4', invTypeOverride='sales', showOutst
 
 <!-- ═══ BILL TO + INVOICE DETAILS ═══ -->
 <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
-  <div style="border:1px solid #ccc;border-radius:4px;padding:${fs('7px','9px')} ${fs('9px','11px')}">
-    <div style="font-size:${fs('10px','11px')};font-weight:700;color:#555;margin-bottom:4px">Bill To:</div>
-    <div style="font-size:${fs('12px','14px')};font-weight:700;margin-bottom:2px">${esc(custName)}</div>
-      ${address?`<div style="font-size:${fs('9px','10px')};color:#777">Address: ${esc(address)}</div>`:''}
+  <div style="border:1px solid #ccc;border-radius:4px;overflow:hidden">
+    <div style="background:#1a237e;color:#fff;font-size:${fs('9px','10px')};font-weight:800;letter-spacing:0.5px;padding:${fs('4px','5px')} ${fs('9px','11px')};text-transform:uppercase">Bill To</div>
+    <div style="padding:${fs('6px','8px')} ${fs('9px','11px')}">
+      <div style="font-size:${fs('12px','14px')};font-weight:700;margin-bottom:2px">${esc(custName)}</div>
+        ${address?`<div style="font-size:${fs('9px','10px')};color:#777">Address: ${esc(address)}</div>`:''}
+    </div>
   </div>
-  <div style="border:1px solid #ccc;border-radius:4px;padding:${fs('7px','9px')} ${fs('9px','11px')}">
-    <div style="font-size:${fs('10px','11px')};font-weight:700;color:#555;margin-bottom:4px">Invoice Details:</div>
-    <div style="font-size:${fs('9.5px','10.5px')};line-height:1.8">
+  <div style="border:1px solid #ccc;border-radius:4px;overflow:hidden">
+    <div style="background:#1a237e;color:#fff;font-size:${fs('9px','10px')};font-weight:800;letter-spacing:0.5px;padding:${fs('4px','5px')} ${fs('9px','11px')};text-transform:uppercase">Invoice Details</div>
+    <div style="padding:${fs('6px','8px')} ${fs('9px','11px')};font-size:${fs('9.5px','10.5px')};line-height:1.8">
       <div><b>Invoice Number:</b> ${invNum}</div>
       <div><b>Issue Date:</b> ${issueDate}</div>
       ${dueDate?`<div><b>Due Date:</b> ${dueDate}</div>`:''}
@@ -6785,12 +6787,12 @@ function _buildInvoiceHTML(invNum, mode='a4', invTypeOverride='sales', showOutst
 <!-- ═══ ITEMS TABLE ═══ -->
 <table style="border:1px solid #ccc;margin-bottom:0">
   <thead>
-    <tr style="background:#f0f0f0;border-bottom:2px solid #ccc">
-      <th style="padding:${fs('6px','7px')} 8px;text-align:left;font-size:${fs('9px','10px')};font-weight:800">Item Description</th>
-      <th style="padding:${fs('6px','7px')} 8px;text-align:center;font-size:${fs('9px','10px')};font-weight:800;width:42px">Qty</th>
-      <th style="padding:${fs('6px','7px')} 8px;text-align:right;font-size:${fs('9px','10px')};font-weight:800;width:${fs('80px','100px')}">Unit Price</th>
-      <th style="padding:${fs('6px','7px')} 8px;text-align:center;font-size:${fs('9px','10px')};font-weight:800;width:50px">Discount</th>
-      <th style="padding:${fs('6px','7px')} 8px;text-align:right;font-size:${fs('9px','10px')};font-weight:800;width:${fs('80px','100px')}">Total</th>
+    <tr style="background:#1a237e;border-bottom:2px solid #10164f">
+      <th style="padding:${fs('6px','7px')} 8px;text-align:left;font-size:${fs('9px','10px')};font-weight:800;color:#fff">Item Description</th>
+      <th style="padding:${fs('6px','7px')} 8px;text-align:center;font-size:${fs('9px','10px')};font-weight:800;width:42px;color:#fff">Qty</th>
+      <th style="padding:${fs('6px','7px')} 8px;text-align:right;font-size:${fs('9px','10px')};font-weight:800;width:${fs('80px','100px')};color:#fff">Unit Price</th>
+      <th style="padding:${fs('6px','7px')} 8px;text-align:center;font-size:${fs('9px','10px')};font-weight:800;width:50px;color:#fff">Discount</th>
+      <th style="padding:${fs('6px','7px')} 8px;text-align:right;font-size:${fs('9px','10px')};font-weight:800;width:${fs('80px','100px')};color:#fff">Total</th>
     </tr>
   </thead>
   <tbody>${itemRowsFull}${blankRows}</tbody>
@@ -13138,13 +13140,13 @@ function _buildProformaHTML(id, includeButtons){
   </div>
   <!-- Bill To / Invoice Details -->
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
-    <div style="border:1px solid #ccc;border-radius:4px;padding:8px 10px">
-      <div style="font-size:11px;font-weight:700;color:#555;margin-bottom:4px">Bill To:</div>
-      <div style="font-size:13px;font-weight:700">${esc(p.custName||'Walk-in')}</div>
+    <div style="border:1px solid #ccc;border-radius:4px;overflow:hidden">
+      <div style="background:#1a237e;color:#fff;font-size:10px;font-weight:800;letter-spacing:0.5px;padding:5px 10px;text-transform:uppercase">Bill To</div>
+      <div style="padding:7px 10px"><div style="font-size:13px;font-weight:700">${esc(p.custName||'Walk-in')}</div></div>
     </div>
-    <div style="border:1px solid #ccc;border-radius:4px;padding:8px 10px">
-      <div style="font-size:11px;font-weight:700;color:#555;margin-bottom:4px">Proforma Details:</div>
-      <div style="font-size:10.5px;line-height:1.7">
+    <div style="border:1px solid #ccc;border-radius:4px;overflow:hidden">
+      <div style="background:#1a237e;color:#fff;font-size:10px;font-weight:800;letter-spacing:0.5px;padding:5px 10px;text-transform:uppercase">Proforma Details</div>
+      <div style="padding:7px 10px;font-size:10.5px;line-height:1.7">
         <div><b>PRF #:</b> ${esc(p.prfNum||'')}</div>
         <div><b>Issue Date:</b> ${p.date||''}</div>
         <div><b>Valid Until:</b> ${validUntil} (${p.validDays||7} days from issue date)</div>
@@ -13293,13 +13295,13 @@ function printDemoInvoice(id){const d=STATE.demoSales?.[id];if(!d)return;
     <div style="flex-shrink:0">${shieldSVG}</div>
   </div>
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
-    <div style="border:1px solid #ccc;border-radius:4px;padding:9px 11px">
-      <div style="font-size:11px;font-weight:700;color:#555;margin-bottom:4px">Bill To:</div>
-      <div style="font-size:14px;font-weight:700">${esc(d.printName||d.custName||'Walk-in')}</div>
+    <div style="border:1px solid #ccc;border-radius:4px;overflow:hidden">
+      <div style="background:#1a237e;color:#fff;font-size:10px;font-weight:800;letter-spacing:0.5px;padding:5px 11px;text-transform:uppercase">Bill To</div>
+      <div style="padding:8px 11px"><div style="font-size:14px;font-weight:700">${esc(d.printName||d.custName||'Walk-in')}</div></div>
     </div>
-    <div style="border:1px solid #ccc;border-radius:4px;padding:9px 11px">
-      <div style="font-size:11px;font-weight:700;color:#555;margin-bottom:4px">Invoice Details:</div>
-      <div style="font-size:10.5px;line-height:1.8">
+    <div style="border:1px solid #ccc;border-radius:4px;overflow:hidden">
+      <div style="background:#1a237e;color:#fff;font-size:10px;font-weight:800;letter-spacing:0.5px;padding:5px 11px;text-transform:uppercase">Invoice Details</div>
+      <div style="padding:8px 11px;font-size:10.5px;line-height:1.8">
         <div><b>Invoice Number:</b> ${esc(d.invoiceNum)}</div>
         <div><b>Issue Date:</b> ${d.date}</div>
         <div><b>Served By:</b> ${esc(d.by||'—')}</div>
@@ -13311,11 +13313,11 @@ function printDemoInvoice(id){const d=STATE.demoSales?.[id];if(!d)return;
   </div>
   <table style="border:1px solid #ccc">
     <thead>
-      <tr style="background:#f0f0f0;border-bottom:2px solid #ccc">
-        <th style="padding:7px 8px;text-align:left;font-size:10px;font-weight:800">Item Description</th>
-        <th style="padding:7px 8px;text-align:center;font-size:10px;font-weight:800;width:42px">Qty</th>
-        <th style="padding:7px 8px;text-align:right;font-size:10px;font-weight:800;width:100px">Unit Price</th>
-        <th style="padding:7px 8px;text-align:right;font-size:10px;font-weight:800;width:100px">Total</th>
+      <tr style="background:#1a237e;border-bottom:2px solid #10164f">
+        <th style="padding:7px 8px;text-align:left;font-size:10px;font-weight:800;color:#fff">Item Description</th>
+        <th style="padding:7px 8px;text-align:center;font-size:10px;font-weight:800;width:42px;color:#fff">Qty</th>
+        <th style="padding:7px 8px;text-align:right;font-size:10px;font-weight:800;width:100px;color:#fff">Unit Price</th>
+        <th style="padding:7px 8px;text-align:right;font-size:10px;font-weight:800;width:100px;color:#fff">Total</th>
       </tr>
     </thead>
     <tbody>${rows}</tbody>
