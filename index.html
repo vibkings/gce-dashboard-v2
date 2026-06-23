@@ -6504,7 +6504,7 @@ function _qtySupplyLabel(s, size='normal') {
   return `${qty}<div style="font-size:${fontSize};color:#16a34a;font-weight:700;white-space:nowrap;line-height:1.3">✓ ${supplied} supplied</div><div style="font-size:${fontSize};color:#c0392b;font-weight:700;white-space:nowrap;line-height:1.3">⏳ ${pending} pending</div>`;
 }
 
-function _buildInvoiceHTML(invNum, mode='a4', invTypeOverride='sales', showOutstanding=false) {
+function _buildInvoiceHTML(invNum, mode='a4', invTypeOverride='sales', showOutstanding=false, withSig=true) {
   const items = Object.values(STATE.sales||{}).filter(s=>s.invoiceNum===invNum && !s.voided);
   if (!items.length) return null;
   const s0 = items[0];
@@ -6852,7 +6852,7 @@ ${totalWithBalance>0&&showOutstanding?`
 </div>
 
 <!-- ═══ SIGNATURES ═══ -->
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-bottom:${fs('12px','16px')}">
+${withSig ? `<div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-bottom:${fs('12px','16px')}">
   <div style="text-align:center">
     <div style="height:${fs('44px','52px')};border-bottom:1px solid #333;margin-bottom:4px;display:flex;align-items:center;justify-content:center">
       ${custSigUrl
@@ -6867,7 +6867,7 @@ ${totalWithBalance>0&&showOutstanding?`
     </div>
     <div style="font-size:${fs('9.5px','10.5px')};color:#555">Authorized Signature</div>
   </div>
-</div>
+</div>` : ''}
 
 <!-- ═══ QR + SUPPLIED STAMP ═══ -->
 <div style="display:grid;grid-template-columns:auto 1fr;gap:8px;align-items:stretch;margin-top:4px">
@@ -6896,10 +6896,10 @@ ${totalWithBalance>0&&showOutstanding?`
 <\/sc`+`ript>
 </body></html>`;
 }
-function _doPrint(invNum, mode, showOutstanding=false) {
+function _doPrint(invNum, mode, showOutstanding=false, withSig=true) {
   const overlay = document.getElementById('_print_mode_overlay');
   if (overlay) overlay.remove();
-  const html = _buildInvoiceHTML(invNum, mode, 'sales', showOutstanding);
+  const html = _buildInvoiceHTML(invNum, mode, 'sales', showOutstanding, withSig);
   if (!html) { showToast('Invoice not found.', 'error'); return; }
   const winW = mode==='80mm' ? 400 : mode==='a5' ? 620 : 820;
   const winH = mode==='80mm' ? 700 : 960;
@@ -6912,7 +6912,37 @@ function _doPrint(invNum, mode, showOutstanding=false) {
 function printSaleInvoice(invNum) { _showPrintModeModal(invNum); }
 function reprintSaleInvoice(invNum) { _showPrintModeModal(invNum); }
 
+// Entry point for every print/reprint action in the app. Gates on a
+// signature choice first (with / without / cancel), then hands off to the
+// existing outstanding-balance + paper-size flow via _proceedToPrintSizeStep.
 function _showPrintModeModal(invNum) {
+  const existing = document.getElementById('_print_mode_overlay');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = '_print_mode_overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.65);z-index:999999;display:flex;align-items:center;justify-content:center;padding:16px;backdrop-filter:blur(4px)';
+  overlay.innerHTML =
+    '<div style="background:var(--surface,#fff);border-radius:20px;padding:28px 26px;width:100%;max-width:360px;box-shadow:0 24px 80px rgba(0,0,0,.5);text-align:center">' +
+    '<div style="font-size:36px;margin-bottom:10px">✍️</div>' +
+    '<div style="font-size:17px;font-weight:700;color:var(--text1,#1a1a1a);margin-bottom:4px">Print Invoice #'+esc(invNum)+'</div>' +
+    '<div style="font-size:13px;color:#888;margin-bottom:18px">Include the signature section on this print?</div>' +
+    '<button onclick="_proceedToPrintSizeStep(\''+invNum+'\',true)" style="width:100%;padding:13px;background:#1a237e;border:none;border-radius:10px;color:#fff;font-size:14px;font-weight:700;cursor:pointer;margin-bottom:8px">' +
+      '✍️ Print with signature' +
+    '</button>' +
+    '<button onclick="_proceedToPrintSizeStep(\''+invNum+'\',false)" style="width:100%;padding:13px;background:#475569;border:none;border-radius:10px;color:#fff;font-size:14px;font-weight:700;cursor:pointer;margin-bottom:14px">' +
+      '📄 Print without signature' +
+    '</button>' +
+    '<button onclick="document.getElementById(\'_print_mode_overlay\').remove()" style="background:none;border:none;color:#888;font-size:13px;cursor:pointer;font-weight:600;padding:4px">Cancel print</button>' +
+    '</div>';
+
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', e=>{ if(e.target===overlay) overlay.remove(); });
+}
+
+// Old body of _showPrintModeModal — runs after the signature choice is made.
+// Still handles the outstanding-balance branch and the plain size-picker branch.
+function _proceedToPrintSizeStep(invNum, withSig) {
   const existing = document.getElementById('_print_mode_overlay');
   if (existing) existing.remove();
 
@@ -6965,16 +6995,16 @@ function _showPrintModeModal(invNum) {
           '<span style="font-size:15px;font-weight:900;color:#c0392b">'+fmt(outstandingBal)+'</span>' +
         '</div>' +
       '</div>' +
-      '<button onclick="_showSizePicker(\''+invNum+'\',true)" style="width:100%;padding:13px;background:#c0392b;border:none;border-radius:10px;color:#fff;font-size:14px;font-weight:700;cursor:pointer;margin-bottom:8px">' +
+      '<button onclick="_showSizePicker(\''+invNum+'\',true,'+withSig+')" style="width:100%;padding:13px;background:#c0392b;border:none;border-radius:10px;color:#fff;font-size:14px;font-weight:700;cursor:pointer;margin-bottom:8px">' +
         '🖨️ Print with outstanding balance' +
       '</button>' +
-      '<button onclick="_showSizePicker(\''+invNum+'\',false)" style="width:100%;padding:13px;background:#1e293b;border:none;border-radius:10px;color:#fff;font-size:14px;font-weight:700;cursor:pointer;margin-bottom:14px">' +
+      '<button onclick="_showSizePicker(\''+invNum+'\',false,'+withSig+')" style="width:100%;padding:13px;background:#1e293b;border:none;border-radius:10px;color:#fff;font-size:14px;font-weight:700;cursor:pointer;margin-bottom:14px">' +
         '📄 Print current invoice only' +
       '</button>' +
       '<button onclick="document.getElementById(\'_print_mode_overlay\').remove()" style="background:none;border:none;color:#888;font-size:13px;cursor:pointer;font-weight:600;padding:4px">Cancel</button>' +
       '</div>';
   } else {
-    overlay.innerHTML = '<div id="_size_picker_inner">'+_buildSizePickerHTML(invNum, itemCount, suggested, suggestedLabel, sizeRanges, false)+'</div>';
+    overlay.innerHTML = '<div id="_size_picker_inner">'+_buildSizePickerHTML(invNum, itemCount, suggested, suggestedLabel, sizeRanges, false, withSig)+'</div>';
   }
 
   document.body.appendChild(overlay);
@@ -6983,7 +7013,7 @@ function _showPrintModeModal(invNum) {
 
 
 // Show the size picker — called after balance choice is made
-function _showSizePicker(invNum, showOutstanding) {
+function _showSizePicker(invNum, showOutstanding, withSig) {
   const items = Object.values(STATE.sales||{}).filter(s=>s.invoiceNum===invNum && !s.voided);
   const itemCount = items.length;
   let suggested, suggestedLabel;
@@ -6996,10 +7026,10 @@ function _showSizePicker(invNum, showOutstanding) {
     { mode:'a4',   icon:'📄', label:'A4',           fits:'Best for 9+ items',   color:'#7c3aed', range:'9+' },
   ];
   const overlay = document.getElementById('_print_mode_overlay');
-  if (overlay) overlay.innerHTML = `<div>${_buildSizePickerHTML(invNum, itemCount, suggested, suggestedLabel, sizeRanges, showOutstanding)}</div>`;
+  if (overlay) overlay.innerHTML = `<div>${_buildSizePickerHTML(invNum, itemCount, suggested, suggestedLabel, sizeRanges, showOutstanding, withSig)}</div>`;
 }
 
-function _buildSizePickerHTML(invNum, itemCount, suggested, suggestedLabel, sizeRanges, showOutstanding) {
+function _buildSizePickerHTML(invNum, itemCount, suggested, suggestedLabel, sizeRanges, showOutstanding, withSig) {
   return `
     <div style="background:#13172a;border:1px solid rgba(255,255,255,.1);border-radius:18px;padding:26px 28px;width:100%;max-width:440px;box-shadow:0 24px 80px rgba(0,0,0,.8)">
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px">
@@ -7009,6 +7039,7 @@ function _buildSizePickerHTML(invNum, itemCount, suggested, suggestedLabel, size
       <div style="font-size:12.5px;color:#64748b;margin-bottom:6px">
         Invoice <b style="color:#94a3b8">#${invNum}</b> · <b style="color:#94a3b8">${itemCount}</b> line item${itemCount!==1?'s':''}
         ${showOutstanding?'<span style="margin-left:8px;background:rgba(192,57,43,.2);color:#f87171;padding:2px 8px;border-radius:99px;font-size:10.5px;font-weight:700">+ Outstanding Balance</span>':''}
+        <span style="margin-left:8px;background:${withSig?'rgba(34,197,94,.18);color:#4ade80':'rgba(148,163,184,.18);color:#94a3b8'};padding:2px 8px;border-radius:99px;font-size:10.5px;font-weight:700">${withSig?'✍️ With signature':'📄 No signature'}</span>
       </div>
       <!-- Suggestion -->
       <div style="background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.25);border-radius:8px;padding:8px 12px;margin-bottom:16px;display:flex;align-items:center;gap:8px">
@@ -7022,7 +7053,7 @@ function _buildSizePickerHTML(invNum, itemCount, suggested, suggestedLabel, size
       <div style="display:flex;flex-direction:column;gap:8px">
         ${sizeRanges.map(s=>{
           const isRec = s.mode===suggested;
-          return `<button onclick="document.getElementById('_print_mode_overlay').remove();_doPrint('${invNum}','${s.mode}',${showOutstanding})"
+          return `<button onclick="document.getElementById('_print_mode_overlay').remove();_doPrint('${invNum}','${s.mode}',${showOutstanding},${withSig})"
             style="display:flex;align-items:center;gap:14px;padding:12px 16px;
                    border:${isRec?'2px solid '+s.color:'1px solid rgba(255,255,255,.08)'};
                    border-radius:10px;background:${isRec?'rgba('+hexToRgb(s.color)+',.1)':'rgba(255,255,255,.03)'};
