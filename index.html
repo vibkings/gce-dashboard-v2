@@ -7398,11 +7398,16 @@ function clearCustSigCanvas() {
 
 // ── Camera ──────────────────────────────────────────────
 // Auto background-removal + auto-enhance for a photographed or uploaded
-// signature/thumbprint. Converts to grayscale, auto-levels contrast against
-// whatever range of light/dark is actually present in that specific photo
-// (so it adapts to any paper color, shadow, or lighting condition without
-// manual sliders), then flattens onto a pure white background — ink becomes
-// crisp near-black, paper texture/background noise is dropped entirely.
+// signature/thumbprint. Two passes:
+//  1) Flatten uneven lighting/shadows: render a heavily downscaled copy of
+//     the photo (acts as a low-pass blur — too coarse to capture thin ink
+//     strokes) and scale it back up. That gives a per-pixel "what this spot
+//     would look like with no ink" baseline, so a shadow on one side and
+//     bright glare on the other both get normalized to the same white level
+//     before thresholding — this is what makes it robust to uneven lighting,
+//     not just a flat brightness/contrast stretch.
+//  2) Auto-level + threshold the flattened result and render ink as crisp
+//     near-black on pure white, dropping any remaining paper texture/noise.
 function _cleanSignatureCanvas(canvas) {
   const ctx = canvas.getContext('2d');
   const w = canvas.width, h = canvas.height;
@@ -7410,22 +7415,41 @@ function _cleanSignatureCanvas(canvas) {
   const imgData = ctx.getImageData(0, 0, w, h);
   const d = imgData.data;
 
-  // Auto-level: find the luminance range actually present in this photo
+  // Local background estimate via downscale → upscale (cheap stand-in for a
+  // large-radius blur; small enough to erase strokes, big enough to keep
+  // genuine shading gradients).
+  const smallW = Math.max(4, Math.round(w/16));
+  const smallH = Math.max(4, Math.round(h/16));
+  const bgSmall = document.createElement('canvas');
+  bgSmall.width = smallW; bgSmall.height = smallH;
+  bgSmall.getContext('2d').drawImage(canvas, 0, 0, smallW, smallH);
+  const bgBig = document.createElement('canvas');
+  bgBig.width = w; bgBig.height = h;
+  const bgBigCtx = bgBig.getContext('2d');
+  bgBigCtx.imageSmoothingEnabled = true;
+  bgBigCtx.drawImage(bgSmall, 0, 0, w, h);
+  const bgData = bgBigCtx.getImageData(0, 0, w, h).data;
+
+  // Normalize each pixel against its local background, then auto-level the
+  // flattened result.
+  const n = w * h;
+  const norm = new Float32Array(n);
   let min = 255, max = 0;
-  for (let i = 0; i < d.length; i += 4) {
-    const lum = 0.299*d[i] + 0.587*d[i+1] + 0.114*d[i+2];
-    if (lum < min) min = lum;
-    if (lum > max) max = lum;
+  for (let p = 0, i = 0; p < n; p++, i += 4) {
+    const lum   = 0.299*d[i]      + 0.587*d[i+1]      + 0.114*d[i+2];
+    const bgLum = 0.299*bgData[i] + 0.587*bgData[i+1] + 0.114*bgData[i+2];
+    const v = Math.min(255, (lum / Math.max(1, bgLum)) * 255); // 255 = matches local background
+    norm[p] = v;
+    if (v < min) min = v;
+    if (v > max) max = v;
   }
   const range = Math.max(1, max - min);
 
-  for (let i = 0; i < d.length; i += 4) {
-    const lum = 0.299*d[i] + 0.587*d[i+1] + 0.114*d[i+2];
-    const stretched = ((lum - min) / range) * 255;      // 0 (ink) .. 255 (background)
-    const inkAmt = 255 - stretched;                      // 255 (ink) .. 0 (background)
-    // Soft threshold so faint pen strokes survive but paper grain/shadow is dropped
-    const inkStrength = inkAmt < 40 ? 0 : Math.min(1, (inkAmt - 40) / 160);
-    const val = Math.round(255 - inkStrength * 235);     // 255 white .. ~20 near-black ink
+  for (let p = 0, i = 0; p < n; p++, i += 4) {
+    const stretched = ((norm[p] - min) / range) * 255;   // 0 (ink) .. 255 (background)
+    const inkAmt = 255 - stretched;
+    const inkStrength = inkAmt < 35 ? 0 : Math.min(1, (inkAmt - 35) / 140);
+    const val = Math.round(255 - inkStrength * 235);      // 255 white .. ~20 near-black ink
     d[i] = d[i+1] = d[i+2] = val;
     d[i+3] = 255; // flattened — fully opaque, no transparency needed for print/JPEG
   }
