@@ -6920,6 +6920,15 @@ function _showPrintModeModal(invNum) {
   const existing = document.getElementById('_print_mode_overlay');
   if (existing) existing.remove();
 
+  // If this invoice already has a saved customer signature (e.g. reprinting
+  // a copy), reuse it instead of forcing the customer to sign again every
+  // time — only jump to the draw/capture step when there's nothing on file.
+  const firstLine = Object.values(STATE.sales||{}).find(s=>s.invoiceNum===invNum && !s.voided);
+  const hasExistingSig = !!(firstLine?.custSigUrl || STATE.custSigs?.[invNum]);
+  const withSigAction = hasExistingSig
+    ? "_proceedToPrintSizeStep('"+invNum+"',true)"
+    : "showCustSigModal('"+invNum+"')";
+
   const overlay = document.createElement('div');
   overlay.id = '_print_mode_overlay';
   overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.65);z-index:999999;display:flex;align-items:center;justify-content:center;padding:16px;backdrop-filter:blur(4px)';
@@ -6927,9 +6936,9 @@ function _showPrintModeModal(invNum) {
     '<div style="background:var(--surface,#fff);border-radius:20px;padding:28px 26px;width:100%;max-width:360px;box-shadow:0 24px 80px rgba(0,0,0,.5);text-align:center">' +
     '<div style="font-size:36px;margin-bottom:10px">✍️</div>' +
     '<div style="font-size:17px;font-weight:700;color:var(--text1,#1a1a1a);margin-bottom:4px">Print Invoice #'+esc(invNum)+'</div>' +
-    '<div style="font-size:13px;color:#888;margin-bottom:18px">Include the signature section on this print?</div>' +
-    '<button onclick="_proceedToPrintSizeStep(\''+invNum+'\',true)" style="width:100%;padding:13px;background:#1a237e;border:none;border-radius:10px;color:#fff;font-size:14px;font-weight:700;cursor:pointer;margin-bottom:8px">' +
-      '✍️ Print with signature' +
+    '<div style="font-size:13px;color:#888;margin-bottom:18px">'+(hasExistingSig ? 'Include the signature already on file?' : 'Get the customer to sign before printing?')+'</div>' +
+    '<button onclick="'+withSigAction+'" style="width:100%;padding:13px;background:#1a237e;border:none;border-radius:10px;color:#fff;font-size:14px;font-weight:700;cursor:pointer;margin-bottom:8px">' +
+      (hasExistingSig ? '✍️ Print with signature' : '✍️ Print with signature (draw or capture)') +
     '</button>' +
     '<button onclick="_proceedToPrintSizeStep(\''+invNum+'\',false)" style="width:100%;padding:13px;background:#475569;border:none;border-radius:10px;color:#fff;font-size:14px;font-weight:700;cursor:pointer;margin-bottom:14px">' +
       '📄 Print without signature' +
@@ -7330,7 +7339,7 @@ function showCustSigModal(invNum) {
       </div>
       <!-- Skip option -->
       <div style="padding:0 20px 16px;text-align:center">
-        <button onclick="document.getElementById('_cust_sig_overlay').remove()" style="background:none;border:none;color:#9ca3af;font-size:12px;cursor:pointer;text-decoration:underline">Skip — print without customer signature</button>
+        <button onclick="_stopCustCamera();document.getElementById('_cust_sig_overlay').remove();_proceedToPrintSizeStep('${invNum}',false)" style="background:none;border:none;color:#9ca3af;font-size:12px;cursor:pointer;text-decoration:underline">Skip — print without customer signature</button>
       </div>
     </div>`;
   document.body.appendChild(overlay);
@@ -7538,8 +7547,9 @@ async function saveCustSig(invNum, source) {
     document.getElementById('_cust_sig_overlay')?.remove();
     showToast('✅ Customer signature saved.','success');
     logActivity('Customer signature', `Signature captured for Invoice #${invNum}`, source);
-    // Immediately go to print
-    _showPrintModeModal(invNum);
+    // Signature just captured — go straight to the paper-size step instead
+    // of looping back to ask the with/without signature question again.
+    _proceedToPrintSizeStep(invNum, true);
   } catch(e) {
     setSyncStatus('error');
     showToast('Failed to save signature: '+e.message,'error');
