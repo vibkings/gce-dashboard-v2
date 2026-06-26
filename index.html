@@ -6143,6 +6143,21 @@ async function v2SaveSale(mode) {
     const gtCheck = invoiceItems.reduce((a,l)=>a+Math.round(l.price*l.qty*(1-(l.discPct||0)/100)),0);
     if (partAmt<=0) { showToast('Enter the amount paid now for a part payment.','error'); return; }
     if (partAmt>=gtCheck) { showToast(`That covers the full total (${fmt(gtCheck)}) — select "Cash" instead of Part payment.`,'error'); return; }
+
+    // A walk-in or zero-credit-limit customer paying in part must have the
+    // goods held back (pending supply) — otherwise the stock would go out
+    // the door immediately while money is still owed, with no later "Mark
+    // supplied" step left to catch it. Registered customers WITH a credit
+    // limit are exempt — their shortfall is tracked against their account.
+    const isZeroLimitOrWalkin = invoiceType==='walkin' || (invoiceType==='registered' && (invoiceCustomer?.creditLimit||0)===0);
+    if (isZeroLimitOrWalkin) {
+      const wholeHeld = document.getElementById('s-pending-supply')?.checked||false;
+      const allLinesHeld = invoiceItems.every(l => (l.supplyMode||'supply')==='hold');
+      if (!wholeHeld && !allLinesHeld) {
+        _showPartPaymentSupplyBlock(mode);
+        return;
+      }
+    }
   }
 
   // ── CREDIT LIMIT ENFORCEMENT ─────────────────────────────
@@ -10209,6 +10224,44 @@ function showToast(msg, type='info') {
 }
 
 // Centre-screen blocking error — for critical failures staff MUST see
+// Part-payment sale (walk-in / zero-credit-limit) where the goods were not
+// marked as held — block the save with a clear, centered choice instead of
+// silently letting stock go out the door unpaid.
+function _showPartPaymentSupplyBlock(mode) {
+  const existing = document.getElementById('_pp_supply_block_overlay');
+  if (existing) existing.remove();
+  const overlay = document.createElement('div');
+  overlay.id = '_pp_supply_block_overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:999999;display:flex;align-items:center;justify-content:center;padding:20px;backdrop-filter:blur(4px)';
+  overlay.innerHTML = `
+    <div style="background:#fff;border-radius:16px;padding:28px 26px;width:100%;max-width:420px;box-shadow:0 24px 80px rgba(0,0,0,.5);text-align:center">
+      <div style="width:56px;height:56px;background:#fef2f2;border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 14px;font-size:26px">⚠️</div>
+      <div style="font-size:17px;font-weight:800;color:#dc2626;margin-bottom:10px">Action Required</div>
+      <div style="font-size:13.5px;color:#374151;line-height:1.6;margin-bottom:20px">
+        This is a <b>part payment</b> for a walk-in / zero-credit-limit customer, but the goods aren't marked as held.<br><br>
+        Either collect the <b>full</b> payment now, or hold these goods as <b>Not Yet Supplied</b> until the balance is paid.
+      </div>
+      <button onclick="_resolvePartPaymentSupplyBlock_hold('${mode}')"
+        style="width:100%;padding:12px;background:#1a237e;border:none;border-radius:10px;color:#fff;font-size:14px;font-weight:700;cursor:pointer;margin-bottom:8px">
+        📦 Hold goods — Not Yet Supplied
+      </button>
+      <button onclick="document.getElementById('_pp_supply_block_overlay').remove()"
+        style="width:100%;padding:12px;background:#f3f4f6;border:none;border-radius:10px;color:#374151;font-size:14px;font-weight:700;cursor:pointer">
+        Go back &amp; adjust payment
+      </button>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+}
+
+function _resolvePartPaymentSupplyBlock_hold(mode) {
+  const cb = document.getElementById('s-pending-supply');
+  if (cb) cb.checked = true;
+  else invoiceItems.forEach(l => l.supplyMode = 'hold'); // fallback if the checkbox isn't on screen
+  document.getElementById('_pp_supply_block_overlay')?.remove();
+  v2SaveSale(mode);
+}
+
 function showBlockingError(title, message) {
   const existing = document.getElementById('_blocking_error_overlay');
   if (existing) existing.remove();
