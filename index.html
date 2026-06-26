@@ -3229,7 +3229,7 @@ function showAddCategoryModal(onSavedFocusId) {
     </div>
   `, [
     {label:'Cancel', action:'close', style:''},
-    {label:'➕ Add Category', action:`addCategory(${JSON.stringify(onSavedFocusId||'')})`, style:'btn-primary'}
+    {label:'➕ Add Category', action:`addCategory('${String(onSavedFocusId||'').replace(/'/g,"\\'")}')`, style:'btn-primary'}
   ]);
   setTimeout(()=>document.getElementById('newcat-name')?.focus(), 50);
 }
