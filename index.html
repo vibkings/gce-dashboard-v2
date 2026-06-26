@@ -4734,14 +4734,19 @@ function showCollectBalanceModal(invoiceNum) {
   const items = Object.values(STATE.sales||{}).filter(s=>s.invoiceNum===invoiceNum && !s.voided);
   const first = items[0];
   const custName = first?.printName || first?.custName || 'Walk-in';
-  showModal('💰 Collect Remaining Balance', `
+  showModal('💰 Collect Balance / Installment', `
     <div style="font-size:13px;margin-bottom:10px">
       <b>${esc(custName)}</b> — Invoice #${esc(invoiceNum)}<br>
-      This invoice was paid in part. The remaining balance must be collected before these goods can be supplied.
+      This invoice was paid in part. You can collect the full remaining balance now, or take another installment — either way, <b>the goods stay in the store and won't be marked supplied until the balance reaches ₦0</b>.
     </div>
     <div style="background:#fef9c3;border:1px solid #fde68a;border-radius:8px;padding:12px 14px;margin-bottom:14px;text-align:center">
-      <div style="font-size:11px;color:#92400e;font-weight:700;letter-spacing:.5px">REMAINING BALANCE TO COLLECT</div>
+      <div style="font-size:11px;color:#92400e;font-weight:700;letter-spacing:.5px">REMAINING BALANCE</div>
       <div style="font-size:26px;font-weight:900;color:#92400e">${fmt(shortfall)}</div>
+    </div>
+    <div class="form-group">
+      <label>Amount paying now <span class="req">*</span></label>
+      <input class="form-input" id="cb-amount" type="number" min="1" max="${shortfall}" value="${shortfall}">
+      <div style="font-size:11px;color:#888;margin-top:4px">Up to ${fmt(shortfall)}. Pay less than that to record an installment — goods still won't be released until this hits ₦0.</div>
     </div>
     <div class="form-group">
       <label>Payment mode <span class="req">*</span></label>
@@ -4757,7 +4762,7 @@ function showCollectBalanceModal(invoiceNum) {
     </div>
   `, [
     {label:'Cancel', action:'close', style:''},
-    {label:'✓ Confirm Payment & Supply', action:`confirmCollectBalance('${invoiceNum}')`, style:'btn-primary'}
+    {label:'✓ Confirm Payment', action:`confirmCollectBalance('${invoiceNum}')`, style:'btn-primary'}
   ]);
 }
 
@@ -4773,6 +4778,9 @@ function v2CollectBalanceModeChange() {
 async function confirmCollectBalance(invoiceNum) {
   const shortfall = _invoiceShortfall(invoiceNum);
   if (shortfall <= 0) { closeModal(); await _doSupplyAllNow(invoiceNum); return; }
+  const amtNow = parseFloat(document.getElementById('cb-amount')?.value)||0;
+  if (amtNow<=0) { showToast('Enter the amount being paid now.','error'); return; }
+  if (amtNow>shortfall) { showToast(`Cannot exceed the outstanding balance of ${fmt(shortfall)}.`,'error'); return; }
   const mode = document.getElementById('cb-mode')?.value || 'cash';
   const needsBank = mode==='transfer'||mode==='pos';
   const bankName = needsBank ? (document.getElementById('cb-bank')?.value||'') : '';
@@ -4784,32 +4792,41 @@ async function confirmCollectBalance(invoiceNum) {
   const custId = first.custId || null;
   const custName = first.printName || first.custName || 'Walk-in';
   const date = new Date().toLocaleDateString();
+  const remainingAfter = Math.max(0, shortfall - amtNow);
+  const isFullSettlement = remainingAfter <= 0;
 
   setSyncStatus('saving');
   try {
-    // Record the balance collected as Sales income, same accounting trail
-    // as any other receipt — tagged to this invoice for reporting.
+    // Record whatever was actually collected this time as Sales income —
+    // an installment of 3,000 logs as 3,000, not the full balance.
     const cfId = uid();
-    const cf = {id:cfId, type:'in', cat:'Sales (Part)', desc:`Balance payment before supply — Inv #${invoiceNum} — ${custName}`, amount:shortfall, payMode:mode, bankName, custId, custName, date, month:first.month, invoiceNum, by:STATE.user.name};
+    const cf = {id:cfId, type:'in', cat:'Sales (Part)', desc:`${isFullSettlement?'Balance payment':'Installment'} before supply — Inv #${invoiceNum} — ${custName}`, amount:amtNow, payMode:mode, bankName, custId, custName, date, month:first.month, invoiceNum, by:STATE.user.name};
     await fsSave(COLS.CASHFLOW, cfId, cf);
     if (!STATE.cashflow) STATE.cashflow = {};
     STATE.cashflow[cfId] = {...cf, _id:cfId, _savedAt:Date.now()};
 
-    // Mark every line of this invoice as fully paid now, so the shortfall
-    // check returns 0 from this point on.
+    // partPayment accumulates with each installment — once it reaches the
+    // invoice total, _invoiceShortfall returns 0 and goods can go out.
     const invoiceTotal = items.reduce((a,s)=>a+(s.total||0),0);
+    const newPartPayment = Math.min(invoiceTotal, (first.partPayment||0) + amtNow);
     for (const s of items) {
       const sid = s._id||s.id;
-      const updSale = {...s, partPayment:invoiceTotal, balanceSettledAt:Date.now(), balanceSettledMode:mode};
+      const updSale = {...s, partPayment:newPartPayment, ...(isFullSettlement?{balanceSettledAt:Date.now(), balanceSettledMode:mode}:{})};
       await saveSaleDoc(s.month, sid, updSale);
       STATE.sales[sid] = {...updSale, _id:sid, _savedAt:Date.now()};
     }
     setSyncStatus('synced');
-    showToast(`✅ Balance of ${fmt(shortfall)} collected.`,'success');
-    logActivity('Balance collected before supply', `Inv #${invoiceNum} — ${fmt(shortfall)} via ${mode}`, '');
     closeModal();
-    // Balance is now settled — proceed straight to supplying the goods.
-    await _doSupplyAllNow(invoiceNum);
+    if (isFullSettlement) {
+      showToast(`✅ Balance fully paid (${fmt(amtNow)}).`,'success');
+      logActivity('Balance collected before supply', `Inv #${invoiceNum} — ${fmt(amtNow)} via ${mode} — fully settled`, '');
+      // Balance is now settled — proceed straight to supplying the goods.
+      await _doSupplyAllNow(invoiceNum);
+    } else {
+      showToast(`✅ Installment of ${fmt(amtNow)} received. ${fmt(remainingAfter)} still owed — goods remain in store until it's fully paid.`,'info');
+      logActivity('Installment received', `Inv #${invoiceNum} — ${fmt(amtNow)} via ${mode} — ${fmt(remainingAfter)} remaining`, '');
+      renderSales();
+    }
   } catch(e) {
     setSyncStatus('error');
     showToast('Failed to record payment: '+e.message,'error');
