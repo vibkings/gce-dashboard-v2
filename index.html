@@ -2285,22 +2285,27 @@ async function _testFirestoreConnection() {
       setSyncStatus('synced');
     } else if (r.status === 404) {
       showToast('⚠️ Firestore DB not found — please create it in Firebase Console.', 'error');
+      setSyncStatus('notsynced');
       _showFirestoreGuide('404');
     } else if (r.status === 403 || r.status === 401) {
       showToast('⚠️ Firestore permission denied — check security rules.', 'error');
+      setSyncStatus('notsynced');
       _showFirestoreGuide('403');
     } else if (r.status === 400) {
       // Often means API key restrictions
       showToast('⚠️ Firestore API key issue — check Firebase API key restrictions.', 'error');
+      setSyncStatus('notsynced');
       _showFirestoreGuide('400');
     }
   } catch(e) {
     // "Failed to fetch" = no network OR CORS block OR API key HTTP referrer restriction
     if (navigator.onLine) {
       // We have internet but fetch failed = API key restriction most likely
+      setSyncStatus('notsynced');
       _showFirestoreGuide('cors');
+    } else {
+      setSyncStatus('offline');
     }
-    // If offline, do nothing — normal
   }
 }
 
@@ -10079,18 +10084,31 @@ function showBlockingError(title, message) {
 
 function setSyncStatus(status) {
   STATE.syncStatus = status;
-  const el = document.getElementById('sync-status');
+  const el = document.getElementById('sync-label');
+  const dot = document.getElementById('sync-dot');
   if (!el) return;
+
+  if (status === 'synced') STATE._lastSyncAt = Date.now();
+  const lastSyncStr = STATE._lastSyncAt
+    ? new Date(STATE._lastSyncAt).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})
+    : '';
+
   const map = {
-    synced:     {text:'● Synced',     color:'#22c55e'},
-    saving:     {text:'↑ Saving...',  color:'#f59e0b'},
-    connecting: {text:'● Connecting…',color:'#f59e0b'},
-    error:      {text:'✕ Sync error', color:'#ef4444'},
-    offline:    {text:'◌ Offline',    color:'#9ca3af'},
+    synced:     {text: lastSyncStr ? `● Synced · ${lastSyncStr}` : '● Synced', color:'#22c55e', dotClass:''},
+    saving:     {text:'↑ Saving...',          color:'#f59e0b', dotClass:'syncing'},
+    connecting: {text:'● Connecting…',        color:'#f59e0b', dotClass:'syncing'},
+    error:      {text:'✕ Sync error',         color:'#ef4444', dotClass:'error'},
+    offline:    {text:'◌ Offline',            color:'#9ca3af', dotClass:'offline'},
+    // Distinct from 'offline' (no internet at all) — this is "we have a
+    // connection but couldn't reach Firestore" (API key/CORS/permission
+    // issues etc.), which previously left the label stuck on "Connecting…"
+    // forever with no indication anything had failed.
+    notsynced:  {text: lastSyncStr ? `✕ Not synced · last: ${lastSyncStr}` : '✕ Not synced', color:'#ef4444', dotClass:'error'},
   };
   const s = map[status] || map.connecting;
   el.textContent = s.text;
   el.style.color = s.color;
+  if (dot) dot.className = 'sync-dot' + (s.dotClass ? ' '+s.dotClass : '');
 }
 
 // ════════════════════════════════════════════════════════════
