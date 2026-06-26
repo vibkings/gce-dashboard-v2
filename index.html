@@ -3974,7 +3974,8 @@ function renderSales() {
           <option value="pos">POS</option>
           <option value="transfer">Bank transfer</option>
           <option value="split">Split payment (2 modes)</option>
-          ${invoiceType==='registered'?'<option value="credit">Credit (full amount owed)</option><option value="part">Part payment</option>':''}\
+          ${invoiceType==='registered'?'<option value="credit">Credit (full amount owed)</option>':''}
+          <option value="part">Part payment</option>\
           ${(()=>{
             if(invoiceType!=='registered'||!invoiceCustomer)return'';
             const totalDep=Object.values(STATE.cashflow||{}).filter(cf=>cf.custId===(invoiceCustomer._id||invoiceCustomer.id)&&cf.cat==='Customer Deposit').reduce((a,d)=>a+(d.amount||0),0);
@@ -4243,7 +4244,7 @@ function renderSales() {
     <!-- NEW INVOICE FORM -->
     <p class="sec-title">New invoice</p>
     <div style="background:#fff8e1;border:1px solid #ffe082;border-radius:var(--radius-sm);padding:10px 14px;margin-bottom:1rem;font-size:12px">
-      <b>Rules:</b> Invoice number required. Walk-in customers: cash only. Credit sales: registered customers with credit limit only.
+      <b>Rules:</b> Invoice number required. Walk-in &amp; zero-credit-limit customers: cash or part payment (remaining balance must be paid before goods are supplied). Credit (full amount owed): registered customers only.
     </div>
 
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:.5rem">
@@ -4618,6 +4619,13 @@ function v2SetLineSupplyMode(idx, mode) {
 function showSupplyQtyModal(invoiceNum, saleId) {
   const s = STATE.sales?.[saleId];
   if (!s) { showToast('Sale record not found.','error'); return; }
+  // Same rule as the "Mark supplied" button — a part/deposit-paid invoice
+  // with money still outstanding must settle that balance first. Once paid,
+  // everything pending on the invoice goes out together (see
+  // confirmCollectBalance → _doSupplyAllNow), so this redirects there
+  // instead of letting a single line slip through unpaid.
+  const shortfall = _invoiceShortfall(invoiceNum);
+  if (shortfall > 0) { showCollectBalanceModal(invoiceNum); return; }
   const pendingQty = s.pendingQty!=null ? s.pendingQty : Math.max(0,(s.qty||0)-(s.suppliedQty||0));
   if (pendingQty<=0) { showToast('Nothing pending for this item.','info'); return; }
   const invItem = STATE.inventory?.[s.itemId];
@@ -4664,7 +4672,34 @@ async function confirmSupplyQty(saleId) {
   } catch(e) { setSyncStatus('error'); showToast('Failed to supply.','error'); }
 }
 
+// Invoice-level shortfall for a part/deposit payment — how much the
+// customer still owes on this specific invoice. partPayment is stored
+// identically on every line of an invoice (the part-payment amount applies
+// to the whole sale, not per line), so it's read once and compared against
+// the SUM of line totals.
+function _invoiceShortfall(invoiceNum) {
+  const items = Object.values(STATE.sales||{}).filter(s=>s.invoiceNum===invoiceNum && !s.voided);
+  if (!items.length) return 0;
+  const payment = items[0].payment;
+  if (payment!=='part' && payment!=='deposit') return 0;
+  const total = items.reduce((a,s)=>a+(s.total||0),0);
+  const paid = items[0].partPayment||0;
+  return Math.max(0, total-paid);
+}
+
+// Public entry point for the "✓ Mark supplied" button. Walk-in and
+// zero-credit-limit customers can pay part now and the rest at collection —
+// but the goods must not go out the door until that remaining balance is
+// actually in. If there's a shortfall, redirect to the balance-collection
+// modal instead of supplying anything; supply only proceeds once that's
+// settled (see confirmCollectBalance below).
 async function supplyAllNow(invoiceNum) {
+  const shortfall = _invoiceShortfall(invoiceNum);
+  if (shortfall > 0) { showCollectBalanceModal(invoiceNum); return; }
+  await _doSupplyAllNow(invoiceNum);
+}
+
+async function _doSupplyAllNow(invoiceNum) {
   const items = Object.values(STATE.sales||{}).filter(s=>s.invoiceNum===invoiceNum && s.pendingSupply && !s.voided);
   if (!items.length) { showToast('Nothing pending for this invoice.','info'); return; }
   setSyncStatus('saving');
@@ -4690,6 +4725,95 @@ async function supplyAllNow(invoiceNum) {
     logActivity('Stock supplied', `Inv #${invoiceNum} — Supply all (${suppliedCount} lines)${stillShort>0?`, ${stillShort} still short`:''}`, '');
     renderSales(); updateInventoryBadge();
   } catch(e) { setSyncStatus('error'); showToast('Failed.','error'); }
+}
+
+// ── Collect remaining balance before goods can be supplied ─────────────
+function showCollectBalanceModal(invoiceNum) {
+  const shortfall = _invoiceShortfall(invoiceNum);
+  if (shortfall <= 0) { _doSupplyAllNow(invoiceNum); return; }
+  const items = Object.values(STATE.sales||{}).filter(s=>s.invoiceNum===invoiceNum && !s.voided);
+  const first = items[0];
+  const custName = first?.printName || first?.custName || 'Walk-in';
+  showModal('💰 Collect Remaining Balance', `
+    <div style="font-size:13px;margin-bottom:10px">
+      <b>${esc(custName)}</b> — Invoice #${esc(invoiceNum)}<br>
+      This invoice was paid in part. The remaining balance must be collected before these goods can be supplied.
+    </div>
+    <div style="background:#fef9c3;border:1px solid #fde68a;border-radius:8px;padding:12px 14px;margin-bottom:14px;text-align:center">
+      <div style="font-size:11px;color:#92400e;font-weight:700;letter-spacing:.5px">REMAINING BALANCE TO COLLECT</div>
+      <div style="font-size:26px;font-weight:900;color:#92400e">${fmt(shortfall)}</div>
+    </div>
+    <div class="form-group">
+      <label>Payment mode <span class="req">*</span></label>
+      <select class="form-input" id="cb-mode" onchange="v2CollectBalanceModeChange()">
+        <option value="cash">Cash</option>
+        <option value="pos">POS</option>
+        <option value="transfer">Bank transfer</option>
+      </select>
+    </div>
+    <div class="form-group" id="cb-bank-wrap" style="display:none">
+      <label>Bank / Account</label>
+      <select class="form-input" id="cb-bank"></select>
+    </div>
+  `, [
+    {label:'Cancel', action:'close', style:''},
+    {label:'✓ Confirm Payment & Supply', action:`confirmCollectBalance('${invoiceNum}')`, style:'btn-primary'}
+  ]);
+}
+
+function v2CollectBalanceModeChange() {
+  const mode = document.getElementById('cb-mode')?.value;
+  const wrap = document.getElementById('cb-bank-wrap');
+  const needsBank = mode==='transfer'||mode==='pos';
+  if (wrap) wrap.style.display = needsBank ? 'block' : 'none';
+  const bankSel = document.getElementById('cb-bank');
+  if (bankSel && needsBank) bankSel.innerHTML = bankSelectOpts(mode==='pos'?'pos':'transfer');
+}
+
+async function confirmCollectBalance(invoiceNum) {
+  const shortfall = _invoiceShortfall(invoiceNum);
+  if (shortfall <= 0) { closeModal(); await _doSupplyAllNow(invoiceNum); return; }
+  const mode = document.getElementById('cb-mode')?.value || 'cash';
+  const needsBank = mode==='transfer'||mode==='pos';
+  const bankName = needsBank ? (document.getElementById('cb-bank')?.value||'') : '';
+  if (needsBank && !bankName) { showToast('Select a bank/POS terminal.','error'); return; }
+
+  const items = Object.values(STATE.sales||{}).filter(s=>s.invoiceNum===invoiceNum && !s.voided);
+  if (!items.length) { showToast('Invoice not found.','error'); return; }
+  const first = items[0];
+  const custId = first.custId || null;
+  const custName = first.printName || first.custName || 'Walk-in';
+  const date = new Date().toLocaleDateString();
+
+  setSyncStatus('saving');
+  try {
+    // Record the balance collected as Sales income, same accounting trail
+    // as any other receipt — tagged to this invoice for reporting.
+    const cfId = uid();
+    const cf = {id:cfId, type:'in', cat:'Sales (Part)', desc:`Balance payment before supply — Inv #${invoiceNum} — ${custName}`, amount:shortfall, payMode:mode, bankName, custId, custName, date, month:first.month, invoiceNum, by:STATE.user.name};
+    await fsSave(COLS.CASHFLOW, cfId, cf);
+    if (!STATE.cashflow) STATE.cashflow = {};
+    STATE.cashflow[cfId] = {...cf, _id:cfId, _savedAt:Date.now()};
+
+    // Mark every line of this invoice as fully paid now, so the shortfall
+    // check returns 0 from this point on.
+    const invoiceTotal = items.reduce((a,s)=>a+(s.total||0),0);
+    for (const s of items) {
+      const sid = s._id||s.id;
+      const updSale = {...s, partPayment:invoiceTotal, balanceSettledAt:Date.now(), balanceSettledMode:mode};
+      await saveSaleDoc(s.month, sid, updSale);
+      STATE.sales[sid] = {...updSale, _id:sid, _savedAt:Date.now()};
+    }
+    setSyncStatus('synced');
+    showToast(`✅ Balance of ${fmt(shortfall)} collected.`,'success');
+    logActivity('Balance collected before supply', `Inv #${invoiceNum} — ${fmt(shortfall)} via ${mode}`, '');
+    closeModal();
+    // Balance is now settled — proceed straight to supplying the goods.
+    await _doSupplyAllNow(invoiceNum);
+  } catch(e) {
+    setSyncStatus('error');
+    showToast('Failed to record payment: '+e.message,'error');
+  }
 }
 
 // ── Pending Supply: change a pending item to a different item ──
@@ -5997,6 +6121,12 @@ async function v2SaveSale(mode) {
 
   const pt = document.getElementById('s-payment')?.value || 'cash';
   const partAmt = parseFloat(document.getElementById('s-part-payment')?.value)||0;
+
+  if (pt==='part') {
+    const gtCheck = invoiceItems.reduce((a,l)=>a+Math.round(l.price*l.qty*(1-(l.discPct||0)/100)),0);
+    if (partAmt<=0) { showToast('Enter the amount paid now for a part payment.','error'); return; }
+    if (partAmt>=gtCheck) { showToast(`That covers the full total (${fmt(gtCheck)}) — select "Cash" instead of Part payment.`,'error'); return; }
+  }
 
   // ── CREDIT LIMIT ENFORCEMENT ─────────────────────────────
   if ((pt==='credit'||pt==='part') && invoiceCustomer) {
