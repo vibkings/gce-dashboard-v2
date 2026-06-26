@@ -6781,7 +6781,7 @@ function _buildInvoiceHTML(invNum, mode='a4', invTypeOverride='sales', showOutst
   const sigDataUrl=(STATE.user?.role==='admin'&&ADMIN_SIG_DATAURL)?ADMIN_SIG_DATAURL:(sellerSigId&&STATE.signatures?.[sellerSigId])||'';
 
   // Shield SVG
-  const shieldSVG=`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 95" width="70" height="83">
+  const shieldSVG=`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 95" width="79" height="94">
     <defs>
       <linearGradient id="sg" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" style="stop-color:#c0392b"/><stop offset="100%" style="stop-color:#7b241c"/></linearGradient>
       <linearGradient id="gg" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" style="stop-color:#f9d835"/><stop offset="100%" style="stop-color:#c9a227"/></linearGradient>
@@ -6842,11 +6842,11 @@ function _buildInvoiceHTML(invNum, mode='a4', invTypeOverride='sales', showOutst
   const fs=(a,b)=>isA5?a:b; // font size helper
 
   const itemRowsFull=items.map((s,i)=>`<tr style="border-bottom:1px solid #e8e8e8">
-    <td style="padding:${fs('5px','6px')} 8px;font-size:${fs('11px','12px')};font-weight:600">${esc(s.name)}</td>
-    <td style="padding:${fs('5px','6px')} 8px;text-align:center;font-size:${fs('11px','12px')}">${_qtySupplyLabel(s)}</td>
-    <td style="padding:${fs('5px','6px')} 8px;text-align:right;font-size:${fs('11px','12px')}">₦${(s.salePrice||s.unitPrice||0).toLocaleString()}</td>
-    <td style="padding:${fs('5px','6px')} 8px;text-align:center;font-size:${fs('10px','11px')};color:#c0392b">${(s.discPct||0)>0?s.discPct+'%':'—'}</td>
-    <td style="padding:${fs('5px','6px')} 8px;text-align:right;font-size:${fs('12px','13px')};font-weight:700">₦${(s.total||0).toLocaleString()}</td>
+    <td style="padding:${fs('7px','9px')} 8px;font-size:${fs('11px','12px')};font-weight:600">${esc(s.name)}</td>
+    <td style="padding:${fs('7px','9px')} 8px;text-align:center;font-size:${fs('11px','12px')}">${_qtySupplyLabel(s)}</td>
+    <td style="padding:${fs('7px','9px')} 8px;text-align:right;font-size:${fs('11px','12px')}">₦${(s.salePrice||s.unitPrice||0).toLocaleString()}</td>
+    <td style="padding:${fs('7px','9px')} 8px;text-align:center;font-size:${fs('10px','11px')};color:#c0392b">${(s.discPct||0)>0?s.discPct+'%':'—'}</td>
+    <td style="padding:${fs('7px','9px')} 8px;text-align:right;font-size:${fs('12px','13px')};font-weight:700">₦${(s.total||0).toLocaleString()}</td>
   </tr>`).join('');
 
   const blankRows=''; // No blank rows — table adjusts to content naturally
@@ -6905,12 +6905,12 @@ function _buildInvoiceHTML(invNum, mode='a4', invTypeOverride='sales', showOutst
 </div>
 
 <!-- ═══ HEADER ═══ -->
-<div style="display:flex;align-items:flex-start;justify-content:flex-start;gap:14px;padding-bottom:10px;border-bottom:3px solid #c0392b;margin-bottom:10px">
+<div style="display:flex;align-items:flex-start;justify-content:flex-start;gap:14px;padding-bottom:8px;border-bottom:3px solid #c0392b;margin-bottom:6px">
   <div style="flex-shrink:0">${shieldSVG}</div>
   <div style="flex:1">
-    <div style="font-size:${fs('13px','17px')};font-weight:900;color:#c0392b;line-height:1.15;margin-bottom:4px;white-space:nowrap">GREAT CHID ELECTRO (NIG.) | GLOBAL DOORS LTD</div>
-    <div style="font-size:${fs('7.5px','8.5px')};color:#444;margin-bottom:5px">A Subsidiary of DE-CHIDEX ELECTRIC INTERNATIONAL. Multi-Stockist of Electrical Materials, Fancy Well Brackets, Chandellers, and Home Furnitures.</div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:${fs('7.5px','8.5px')}">
+    <div style="font-size:${fs('15px','19px')};font-weight:900;color:#c0392b;line-height:1.15;margin-bottom:4px;white-space:nowrap">GREAT CHID ELECTRO (NIG.) | GLOBAL DOORS LTD</div>
+    <div style="font-size:${fs('8px','9px')};color:#444;margin-bottom:5px">A Subsidiary of DE-CHIDEX ELECTRIC INTERNATIONAL. Multi-Stockist of Electrical Materials, Fancy Well Brackets, Chandellers, and Home Furnitures.</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:${fs('8px','9px')}">
       <div>
         <div style="font-weight:700;color:#c0392b;margin-bottom:1px">OGBOMOSO OFFICE</div>
         <div><b>Address:</b> Ile-Bara Cke-Ado, Sabo Ilorin Rd, Ogbomoso, Oyo State.</div>
@@ -6954,11 +6954,11 @@ function _buildInvoiceHTML(invNum, mode='a4', invTypeOverride='sales', showOutst
 <table style="border:1px solid #ccc;margin-bottom:0">
   <thead>
     <tr style="background:#1a237e;border-bottom:2px solid #10164f">
-      <th style="padding:${fs('6px','7px')} 8px;text-align:left;font-size:${fs('9px','10px')};font-weight:800;color:#fff">Item Description</th>
-      <th style="padding:${fs('6px','7px')} 8px;text-align:center;font-size:${fs('9px','10px')};font-weight:800;width:42px;color:#fff">Qty</th>
-      <th style="padding:${fs('6px','7px')} 8px;text-align:right;font-size:${fs('9px','10px')};font-weight:800;width:${fs('80px','100px')};color:#fff">Unit Price</th>
-      <th style="padding:${fs('6px','7px')} 8px;text-align:center;font-size:${fs('9px','10px')};font-weight:800;width:50px;color:#fff">Discount</th>
-      <th style="padding:${fs('6px','7px')} 8px;text-align:right;font-size:${fs('9px','10px')};font-weight:800;width:${fs('80px','100px')};color:#fff">Total</th>
+      <th style="padding:${fs('8px','9px')} 8px;text-align:left;font-size:${fs('9px','10px')};font-weight:800;color:#fff">Item Description</th>
+      <th style="padding:${fs('8px','9px')} 8px;text-align:center;font-size:${fs('9px','10px')};font-weight:800;width:42px;color:#fff">Qty</th>
+      <th style="padding:${fs('8px','9px')} 8px;text-align:right;font-size:${fs('9px','10px')};font-weight:800;width:${fs('80px','100px')};color:#fff">Unit Price</th>
+      <th style="padding:${fs('8px','9px')} 8px;text-align:center;font-size:${fs('9px','10px')};font-weight:800;width:50px;color:#fff">Discount</th>
+      <th style="padding:${fs('8px','9px')} 8px;text-align:right;font-size:${fs('9px','10px')};font-weight:800;width:${fs('80px','100px')};color:#fff">Total</th>
     </tr>
   </thead>
   <tbody>${itemRowsFull}${blankRows}</tbody>
@@ -6969,7 +6969,7 @@ function _buildInvoiceHTML(invNum, mode='a4', invTypeOverride='sales', showOutst
         <table style="width:100%;border-collapse:collapse">
           ${totalDisc>0?`<tr style="border-bottom:1px solid #eee"><td style="padding:${fs('3px','4px')} 8px;font-size:${fs('10px','11px')};color:#555">Subtotal:</td><td style="padding:${fs('3px','4px')} 8px;text-align:right;font-size:${fs('10px','11px')}">₦${subtotal.toLocaleString()}</td></tr>`:''}
           ${totalDisc>0?`<tr style="border-bottom:1px solid #eee"><td style="padding:${fs('3px','4px')} 8px;font-size:${fs('10px','11px')};color:#d97706">Discount:</td><td style="padding:${fs('3px','4px')} 8px;text-align:right;font-size:${fs('10px','11px')};color:#d97706">-₦${totalDisc.toLocaleString()}</td></tr>`:''}
-          <tr style="border-bottom:1px solid #ccc;background:#fafafa"><td style="padding:${fs('4px','5px')} 8px;font-size:${fs('11px','13px')};font-weight:800"><b>Total:</b></td><td style="padding:${fs('4px','5px')} 8px;text-align:right;font-size:${fs('12px','14px')};font-weight:900">₦${gt.toLocaleString()}</td></tr>
+          <tr style="border-bottom:1px solid #ccc;background:#fafafa"><td style="padding:${fs('5px','6px')} 8px;font-size:${fs('12px','14px')};font-weight:800"><b>Total:</b></td><td style="padding:${fs('5px','6px')} 8px;text-align:right;font-size:${fs('14px','16px')};font-weight:900">₦${gt.toLocaleString()}</td></tr>
           <tr style="border-bottom:1px solid #eee"><td style="padding:${fs('3px','4px')} 8px;font-size:${fs('10px','11px')};color:#555">Amount Paid:</td><td style="padding:${fs('3px','4px')} 8px;text-align:right;font-size:${fs('10px','11px')}">₦${amountPaid.toLocaleString()}</td></tr>
           ${balance>0?`<tr><td style="padding:${fs('3px','4px')} 8px;font-size:${fs('10px','11px')};color:#c0392b;font-weight:700">Balance:</td><td style="padding:${fs('3px','4px')} 8px;text-align:right;font-size:${fs('10px','11px')};color:#c0392b;font-weight:700">₦${balance.toLocaleString()}</td></tr>`:''}
         </table>
@@ -7006,9 +7006,9 @@ ${totalWithBalance>0&&showOutstanding?`
     <span style="font-size:${fs('10px','11px')};color:#555">Change applied to balance:</span>
     <span style="font-size:${fs('11px','12px')};font-weight:700;color:#27ae60">₦${totalChangeReduction.toLocaleString()}</span>
   </div>`:''}
-  <div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;margin-top:2px">
-    <span style="font-size:${fs('11px','12px')};font-weight:800;color:#c0392b">Total outstanding:</span>
-    <span style="font-size:${fs('13px','15px')};font-weight:900;color:#c0392b">₦${totalWithBalance.toLocaleString()}</span>
+  <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;margin-top:2px">
+    <span style="font-size:${fs('12px','14px')};font-weight:800;color:#c0392b">Total outstanding:</span>
+    <span style="font-size:${fs('16px','19px')};font-weight:900;color:#c0392b">₦${totalWithBalance.toLocaleString()}</span>
   </div>
   <div style="margin-top:6px;font-size:${fs('8.5px','9.5px')};color:#c0392b;font-style:italic">⚠️ Please settle your outstanding balance at your earliest convenience.</div>
   </div>
@@ -7040,8 +7040,9 @@ ${withSig ? `<div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;mar
 </div>` : ''}
 
 <!-- ═══ QR + SUPPLIED STAMP ═══ -->
-<div style="display:grid;grid-template-columns:auto 1fr;gap:8px;align-items:stretch;margin-top:4px">
-  <div style="border:1px solid #ccc;border-radius:4px;padding:6px 8px;display:flex;flex-direction:column;align-items:center;justify-content:center;min-width:${fs('72px','88px')}">
+<div style="background:#fafafa;border:1px solid #eee;border-radius:6px;padding:${fs('7px','9px')};margin-top:6px">
+<div style="display:grid;grid-template-columns:auto 1fr;gap:8px;align-items:stretch">
+  <div style="border:1px solid #ccc;border-radius:4px;padding:6px 8px;display:flex;flex-direction:column;align-items:center;justify-content:center;min-width:${fs('72px','88px')};background:#fff">
     <img id="qrimg" src="${qrUrl}" width="${fs('58','70')}" height="${fs('58','70')}" alt="QR" style="display:block;margin-bottom:3px">
     <div style="font-size:${fs('7px','8px')};color:#999;text-align:center">scan me</div>
   </div>
@@ -7055,6 +7056,7 @@ ${withSig ? `<div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;mar
     </div>
     ${!isPending&&suppliedDate?`<div style="font-size:${fs('7.5px','8.5px')};color:#166534;margin-top:2px">Supplied Date: ${suppliedDate}</div>`:''}
   </div>
+</div>
 </div>
 
 <sc`+`ript>
