@@ -7761,6 +7761,10 @@ function showEditInvoiceModal(invNum) {
   const note        = esc(first.note || '');
   const bankName    = esc(first.bankName || '');
 
+  // Whether anything on this invoice has actually been handed over yet —
+  // only worth offering the revert option if there's something to revert.
+  const totalSupplied = items.reduce((a,s)=>a+(s.suppliedQty||0),0);
+
   const paymentOpts = ['paid','credit','part'].map(v=>
     `<option value="${v}" ${payment===v?'selected':''}>${v==='paid'?'Fully Paid':v==='credit'?'Credit':'Part Payment'}</option>`).join('');
   const payModeOpts = ['cash','transfer','pos','cheque'].map(v=>
@@ -7800,6 +7804,13 @@ function showEditInvoiceModal(invNum) {
         <label>Invoice Note</label>
         <textarea class="form-input" id="ei-note" rows="2" placeholder="Add a note...">${note}</textarea>
       </div>
+      ${totalSupplied>0?`<div class="form-group" style="grid-column:1/-1;background:#fff8e1;border:1px solid #ffe082;border-radius:6px;padding:10px 12px">
+        <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;margin:0">
+          <input type="checkbox" id="ei-revert-supply" style="width:16px;height:16px;margin-top:2px;cursor:pointer;flex-shrink:0">
+          <span style="font-size:13px;line-height:1.4"><b>📦 Revert to Not Yet Supplied</b><br>
+          <span style="font-size:11.5px;color:#777">Resets every line back to pending and restocks the ${totalSupplied} unit${totalSupplied!==1?'s':''} already marked supplied. Use this if goods were marked supplied by mistake.</span></span>
+        </label>
+      </div>`:''}
       <div class="form-group" style="grid-column:1/-1">
         <label style="color:var(--danger)">Reason for Edit *</label>
         <input class="form-input" id="ei-reason" placeholder="Required — explain why this invoice was edited">
@@ -7820,12 +7831,14 @@ async function saveEditedInvoice(invNum) {
   const dueDate      = document.getElementById('ei-duedate')?.value || '';
   const deliveryAddr = document.getElementById('ei-delivaddr')?.value.trim();
   const note         = document.getElementById('ei-note')?.value.trim();
+  const revertSupply = document.getElementById('ei-revert-supply')?.checked || false;
 
   const items = Object.values(STATE.sales||{}).filter(s=>s.invoiceNum===invNum);
   if (!items.length) { showToast('Invoice not found.','error'); return; }
 
   setSyncStatus('saving');
   try {
+    let restockedTotal = 0;
     for (const s of items) {
       const upd = {
         ...s,
@@ -7835,6 +7848,23 @@ async function saveEditedInvoice(invNum) {
         editedAt: new Date().toISOString(),
         editReason: reason
       };
+      // Revert to Not Yet Supplied: put back whatever stock was already
+      // handed over on this line and reset it to fully pending, same shape
+      // as a brand-new pending-supply sale.
+      if (revertSupply && (s.suppliedQty||0) > 0) {
+        const qtyToRestock = s.suppliedQty||0;
+        const inv = STATE.inventory?.[s.itemId];
+        if (inv) {
+          const updInv = {...inv, qty:(inv.qty||0)+qtyToRestock};
+          await fsSave(COLS.INVENTORY, s.itemId, updInv);
+          STATE.inventory[s.itemId] = {...updInv, _id:s.itemId, _savedAt:Date.now()};
+        }
+        upd.suppliedQty = 0;
+        upd.pendingQty = s.qty||0;
+        upd.pendingSupply = true;
+        upd.supplyStatus = 'pending';
+        restockedTotal += qtyToRestock;
+      }
       // Sales are stored in monthly collections
       const month = s.month || (s.date ? s.date.slice(0,7) : null);
       if (month) {
@@ -7848,8 +7878,8 @@ async function saveEditedInvoice(invNum) {
     }
     closeModal();
     setSyncStatus('synced');
-    showToast('Invoice updated.', 'success');
-    logActivity('Invoice edited', `Invoice #${invNum} edited by ${STATE.user.name}`, reason.slice(0,60));
+    showToast(revertSupply&&restockedTotal>0 ? `Invoice updated — ${restockedTotal} unit${restockedTotal!==1?'s':''} restocked, reverted to Not Yet Supplied.` : 'Invoice updated.', 'success');
+    logActivity('Invoice edited', `Invoice #${invNum} edited by ${STATE.user.name}${revertSupply&&restockedTotal>0?` — reverted to pending, restocked ${restockedTotal} unit(s)`:''}`, reason.slice(0,60));
     // Refresh sales view if visible
     if (document.getElementById('pg-sales')?.classList.contains('active')) renderSalesHistory?.();
   } catch(e) {
