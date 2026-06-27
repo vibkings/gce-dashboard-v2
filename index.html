@@ -6765,7 +6765,7 @@ function _qtySupplyLabel(s, size='normal') {
   return `${qty}<div style="font-size:${fontSize};color:#16a34a;font-weight:700;white-space:nowrap;line-height:1.3">✓ ${supplied} supplied</div><div style="font-size:${fontSize};color:#c0392b;font-weight:700;white-space:nowrap;line-height:1.3">⏳ ${pending} pending</div>`;
 }
 
-function _buildInvoiceHTML(invNum, mode='a4', invTypeOverride='sales', showOutstanding=false, withSig=true) {
+function _buildInvoiceHTML(invNum, mode='a4', invTypeOverride='sales', showOutstanding=false, withSig=true, balanceSnapshot=null) {
   const items = Object.values(STATE.sales||{}).filter(s=>s.invoiceNum===invNum && !s.voided);
   if (!items.length) return null;
   const s0 = items[0];
@@ -6850,8 +6850,18 @@ function _buildInvoiceHTML(invNum, mode='a4', invTypeOverride='sales', showOutst
   // silently miss older unpaid invoices and undercount the balance. The customer
   // profile's creditBalance is kept up to date on every sale/payment/write-off,
   // so it's the authoritative source for "what this customer currently owes".
-  const totalOutstanding = (showOutstanding && cust) ? Math.max(0, cust.creditBalance||0) : 0;
-  const prevBalance = (showOutstanding && cust) ? Math.max(0, totalOutstanding - thisInvoiceCredit) : 0;
+  // If a point-in-time snapshot was precomputed (see _invoiceBalanceSnapshot,
+  // called by the print/share entry points before this function runs), use
+  // it — this reflects what the customer actually owed on the date of THIS
+  // invoice, not what they owe today. Falls back to the live
+  // customer.creditBalance (today's unchanged behaviour) if no snapshot was
+  // supplied, e.g. any call site not yet wired up to compute one.
+  const totalOutstanding = (showOutstanding && cust)
+    ? (balanceSnapshot ? Math.max(0, balanceSnapshot.total) : Math.max(0, cust.creditBalance||0))
+    : 0;
+  const prevBalance = (showOutstanding && cust)
+    ? (balanceSnapshot ? Math.max(0, balanceSnapshot.previous) : Math.max(0, totalOutstanding - thisInvoiceCredit))
+    : 0;
 
   // Change disposition — informational line on the receipt only; any change
   // applied to credit/balance was already reflected in the customer's profile
@@ -7162,15 +7172,36 @@ ${totalWithBalance>0&&showOutstanding?`
 <\/sc`+`ript>
 </body></html>`;
 }
-function _doPrint(invNum, mode, showOutstanding=false, withSig=true) {
+async function _doPrint(invNum, mode, showOutstanding=false, withSig=true) {
   const overlay = document.getElementById('_print_mode_overlay');
   if (overlay) overlay.remove();
-  const html = _buildInvoiceHTML(invNum, mode, 'sales', showOutstanding, withSig);
-  if (!html) { showToast('Invoice not found.', 'error'); return; }
   const winW = mode==='80mm' ? 400 : mode==='a5' ? 620 : 820;
   const winH = mode==='80mm' ? 700 : 960;
+  // Open the window FIRST, synchronously, before any await — popup blockers
+  // require window.open() to happen immediately within the original click
+  // handler. Awaiting the balance lookup before this line would silently
+  // break printing for every invoice (not just ones with an outstanding
+  // balance), since the async gap breaks the "direct result of a user
+  // gesture" requirement most browsers enforce.
   const w = window.open('', '_blank', `width=${winW},height=${winH}`);
   if (!w) { showToast('Allow popups to print invoices.', 'error'); return; }
+  w.document.write('<!DOCTYPE html><html><body style="font-family:sans-serif;padding:60px;text-align:center;color:#888">Preparing invoice…</body></html>');
+
+  // For credit/part/deposit invoices showing an outstanding balance,
+  // reconstruct what was actually owed as of THIS invoice's own date,
+  // rather than reading today's live balance — see _invoiceBalanceSnapshot.
+  let balanceSnapshot = null;
+  if (showOutstanding) {
+    const items = Object.values(STATE.sales||{}).filter(s=>s.invoiceNum===invNum && !s.voided);
+    const first = items[0];
+    if (first?.custId && (first.payment==='credit'||first.payment==='part'||first.payment==='deposit')) {
+      try { balanceSnapshot = await _invoiceBalanceSnapshot(first.custId, invNum, first.date); } catch(e) { console.error('balance snapshot failed', e); }
+    }
+  }
+
+  const html = _buildInvoiceHTML(invNum, mode, 'sales', showOutstanding, withSig, balanceSnapshot);
+  if (!html) { w.close(); showToast('Invoice not found.', 'error'); return; }
+  w.document.open();
   w.document.write(html);
   w.document.close();
 }
@@ -7368,7 +7399,11 @@ async function shareInvoiceFile(invNum, format) {
   const custId = first?.custId;
   const cust = custId ? STATE.customers?.[custId] : null;
   const showOutstanding = !!(cust && (cust.creditBalance||0) > 0);
-  const html = _buildInvoiceHTML(invNum, 'a4', 'sales', showOutstanding);
+  let balanceSnapshot = null;
+  if (showOutstanding && custId && (first.payment==='credit'||first.payment==='part'||first.payment==='deposit')) {
+    try { balanceSnapshot = await _invoiceBalanceSnapshot(custId, invNum, first.date); } catch(e) { console.error('balance snapshot failed', e); }
+  }
+  const html = _buildInvoiceHTML(invNum, 'a4', 'sales', showOutstanding, true, balanceSnapshot);
   await shareDocumentAs(html, format, `Invoice_${invNum.replace(/\//g,'_')}`);
 }
 
@@ -12122,8 +12157,30 @@ function renderClosing() {
   const totalRev = invList.reduce((a,g)=>a+g.total,0);
   const totalProfit = invList.reduce((a,g)=>a+g.profit,0);
   const margin = totalRev>0?Math.round(totalProfit/totalRev*100):0;
+  // Part/deposit "still owed" must reflect what was paid toward each
+  // invoice AS OF this closing date — not the live cumulative partPayment
+  // field, which would understate what was owed on an OLD closing date if
+  // an instalment was paid on some LATER date (the exact bug already found
+  // for the income breakdown above, but it affects this owed figure too).
+  // Sourced from 'Sales (Part)' cashflow entries (never partitioned, always
+  // fully loaded) rather than re-deriving from sales history.
+  const closingCutoff = _parseLocaleDate(closingDate)?.getTime();
+  const paidTowardInvoiceAsOfClosing = {};
+  if (closingCutoff != null) {
+    Object.values(STATE.cashflow||{})
+      .filter(cf=>cf.type==='in' && cf.cat==='Sales (Part)' && cf.invoiceNum)
+      .forEach(cf=>{
+        const d = _parseLocaleDate(cf.date);
+        if (d && d.getTime() <= closingCutoff) {
+          paidTowardInvoiceAsOfClosing[cf.invoiceNum] = (paidTowardInvoiceAsOfClosing[cf.invoiceNum]||0) + (cf.amount||0);
+        }
+      });
+  }
   const creditOwed = invList.filter(g=>g.payment==='credit').reduce((a,g)=>a+g.total,0)
-    + invList.filter(g=>g.payment==='part'||g.payment==='deposit').reduce((a,g)=>a+Math.max(0,g.total-(g.partPayment||0)),0);
+    + invList.filter(g=>g.payment==='part'||g.payment==='deposit').reduce((a,g)=>{
+        const paid = closingCutoff!=null ? (paidTowardInvoiceAsOfClosing[g.invoiceNum]||0) : (g.partPayment||0);
+        return a+Math.max(0,g.total-paid);
+      },0);
   const totalPaid  = invList.filter(g=>g.payment!=='credit')
     .reduce((a,g)=>a+((g.payment==='part'||g.payment==='deposit')?(g.partPayment||0):g.total),0);
 
@@ -16522,6 +16579,126 @@ async function saveApplyDeposit(id) {
 // (every month, not just current+previous) before comparing, and only ever
 // changes the stored balance if an admin explicitly confirms. Nothing here
 // auto-corrects silently — that was the bug in the old "self-heal" logic.
+// Locale dates throughout this app are stored as "M/D/YYYY" (confirmed by
+// the existing parsing in showEditExpenseModal and confirmSalesReturn —
+// search "locale \"M/D/YYYY\"") — NEVER pass these strings straight into
+// `new Date(...)`, since that constructor's handling of slash-separated
+// dates is locale/engine-dependent and can silently misparse (this is
+// exactly the bug already found and fixed once this session for sale
+// months). This converts to a real, unambiguous Date first.
+function _parseLocaleDate(dateStr) {
+  if (!dateStr) return null;
+  const d = String(dateStr).split('/');
+  if (d.length !== 3) return null;
+  const iso = `${d[2]}-${String(d[0]).padStart(2,'0')}-${String(d[1]).padStart(2,'0')}`;
+  const parsed = new Date(iso+'T12:00:00'); // noon avoids DST/timezone edges rolling to the wrong day
+  return isNaN(parsed.getTime()) ? null : parsed;
+}
+
+// Reconstructs what a customer's credit/part-payment/deposit balance
+// actually was AS OF a specific date (inclusive) — by loading their FULL
+// sales history across every month (sales are partitioned by month in
+// Firestore, so only the current+previous month are guaranteed loaded
+// otherwise — this reuses verifyCustomerBalance's safe one-customer-at-a-
+// time loading approach) and replaying every balance-affecting event dated
+// on or before that date.
+//
+// SAFETY: this is READ-ONLY and never writes anything back to
+// customer.creditBalance or any stored field. The live creditBalance
+// remains the trusted, authoritative source for "what they owe TODAY"
+// everywhere else in the app — exactly as established after a prior
+// self-heal mechanism was found to corrupt balances by under-counting
+// older invoices (see the comment in renderCustomerProfile). This function
+// exists purely to answer "what did they owe on this historical date", for
+// display on a specific historical document — it is never used to update
+// anything.
+async function _customerBalanceAsOfDate(custId, asOfDateStr) {
+  const c = STATE.customers?.[custId];
+  if (!c) return 0;
+  const asOf = _parseLocaleDate(asOfDateStr);
+  if (!asOf) return Math.max(0, c.creditBalance||0); // can't determine the date — fall back to live balance, never guess/crash
+
+  try {
+    const start = c.createdAt ? new Date(c.createdAt) : new Date(2023,0,1);
+    let y = start.getFullYear(), m = start.getMonth()+1;
+    const endY = asOf.getFullYear(), endM = asOf.getMonth()+1;
+    let guard = 0;
+    while ((y < endY || (y===endY && m<=endM)) && guard < 120) {
+      await loadMonthlySales(y, m);
+      m++; if (m>12) { m=1; y++; }
+      guard++;
+    }
+  } catch(e) {}
+
+  const cutoff = asOf.getTime();
+  const onOrBefore = (dateStr) => {
+    const d = _parseLocaleDate(dateStr);
+    return d ? d.getTime() <= cutoff : false;
+  };
+
+  const allSales = Object.values(STATE.sales||{}).filter(s=>s.custId===custId && !s.voided && onOrBefore(s.date));
+  const invGroups = {};
+  allSales.forEach(s=>{
+    const k=s.invoiceNum;
+    if(!invGroups[k]) invGroups[k]={total:0,payment:s.payment};
+    invGroups[k].total+=s.total||0;
+  });
+
+  // Part/deposit payments — sourced from cashflow (a single flat collection,
+  // never partitioned, so always fully loaded already) rather than the
+  // sale's own live cumulative partPayment field, so an instalment paid
+  // AFTER asOfDate correctly doesn't count yet.
+  const partPaidByInvoice = {};
+  Object.values(STATE.cashflow||{})
+    .filter(cf=>cf.type==='in' && cf.custId===custId && cf.cat==='Sales (Part)' && onOrBefore(cf.date))
+    .forEach(cf=>{ if(cf.invoiceNum) partPaidByInvoice[cf.invoiceNum]=(partPaidByInvoice[cf.invoiceNum]||0)+(cf.amount||0); });
+
+  let owedTotal = 0;
+  Object.entries(invGroups).forEach(([invNum, g])=>{
+    if (g.payment==='credit') owedTotal += g.total||0;
+    else if (g.payment==='part'||g.payment==='deposit') {
+      owedTotal += Math.max(0, (g.total||0) - (partPaidByInvoice[invNum]||0));
+    }
+  });
+
+  const totalCreditPaid = Object.values(STATE.cashflow||{})
+    .filter(cf=>cf.type==='in'&&cf.custId===custId&&cf.cat==='Credit Payment'&&onOrBefore(cf.date))
+    .reduce((a,p)=>a+(p.amount||0),0);
+  const totalWriteOff = Object.values(STATE.cashflow||{})
+    .filter(cf=>cf.custId===custId&&cf.cat==='Credit Write-Off'&&onOrBefore(cf.date))
+    .reduce((a,p)=>a+(p.amount||0),0);
+
+  return Math.max(0, owedTotal - totalCreditPaid - totalWriteOff);
+}
+
+// For a specific invoice being (re)printed: returns {total, previous}
+// where `total` is the customer's balance as of (and including) this
+// invoice's own date, and `previous` is that same balance with just THIS
+// invoice's own contribution subtracted back out — i.e. what they owed
+// immediately before this transaction. Subtracting this invoice's specific
+// contribution (rather than computing "the day before") correctly handles
+// multiple invoices landing on the same day without needing day-level
+// arithmetic on an otherwise-ambiguous date string.
+async function _invoiceBalanceSnapshot(custId, invNum, invoiceDateStr) {
+  const total = await _customerBalanceAsOfDate(custId, invoiceDateStr);
+  const items = Object.values(STATE.sales||{}).filter(s=>s.invoiceNum===invNum && !s.voided);
+  const thisTotal = items.reduce((a,s)=>a+(s.total||0),0);
+  const payment = items[0]?.payment;
+  let thisOwed = 0;
+  if (payment === 'credit') {
+    thisOwed = thisTotal;
+  } else if (payment === 'part' || payment === 'deposit') {
+    const cutoff = _parseLocaleDate(invoiceDateStr)?.getTime();
+    const paidTowardThis = Object.values(STATE.cashflow||{})
+      .filter(cf=>cf.invoiceNum===invNum && cf.type==='in' && cf.cat==='Sales (Part)')
+      .filter(cf=>{ const d=_parseLocaleDate(cf.date); return (d && cutoff!=null) ? d.getTime()<=cutoff : true; })
+      .reduce((a,cf)=>a+(cf.amount||0),0);
+    thisOwed = Math.max(0, thisTotal - paidTowardThis);
+  }
+  const previous = Math.max(0, total - thisOwed);
+  return {total, previous};
+}
+
 async function verifyCustomerBalance(id) {
   const c = STATE.customers?.[id]; if (!c) return;
   showToast('Loading full purchase history — this may take a moment…','info');
