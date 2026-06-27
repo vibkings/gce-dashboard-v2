@@ -15469,6 +15469,15 @@ function renderActivityLog() {
   const el=document.getElementById('activitylog-content'); if(!el)return;
   if(STATE.user?.role!=='admin'&&STATE.user?.role!=='owner'){el.innerHTML='<div class="empty-state"><div class="empty-state-icon">🔒</div><div>Admin access only.</div></div>';return;}
 
+  // Rebuilding el.innerHTML below destroys and recreates every element
+  // inside it, including the search input — which would silently drop
+  // focus (and the on-screen keyboard, on mobile) on every single
+  // keystroke. Capture whether the search box currently has focus and
+  // where the cursor is, so it can be restored after re-render.
+  const activeEl = document.activeElement;
+  const searchHadFocus = activeEl && activeEl.id === 'activitylog-search';
+  const searchCaretPos = searchHadFocus ? activeEl.selectionStart : null;
+
   const log=Object.values(STATE.activityLog||{}).sort((a,b)=>(b.time||b.date||'').localeCompare(a.time||a.date||''));
   const search=(window._actSearch||'').toLowerCase();
   const dateFrom=window._actDateFrom||'';
@@ -15520,7 +15529,7 @@ function renderActivityLog() {
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
       <div class="search-wrap" style="flex:1;min-width:220px">
         <span class="search-icon">🔍</span>
-        <input class="form-input" placeholder="Search action, detail or user..." value="${window._actSearch||''}" oninput="window._actSearch=this.value;renderActivityLog()">
+        <input class="form-input" id="activitylog-search" placeholder="Search action, detail or user..." value="${window._actSearch||''}" oninput="window._actSearch=this.value;renderActivityLog()">
       </div>
       <input type="date" class="form-input" style="width:145px;padding:5px 8px;font-size:12px" value="${dateFrom}" onchange="window._actDateFrom=this.value;renderActivityLog()">
       <span style="color:var(--text3);font-size:12px">to</span>
@@ -15576,6 +15585,16 @@ function renderActivityLog() {
       ${filtered.length>500?`<div style="padding:10px;text-align:center;font-size:12px;color:var(--text3)">Showing first 500 of ${filtered.length} entries. Use filters to narrow down.</div>`:''}`
     :`<div class="empty-state"><div class="empty-state-icon">📜</div><div>No activity recorded yet</div></div>`}
     ${rows?`</div>`:''}`;
+
+  // Restore focus/cursor to the search box if it had focus before this
+  // re-render — otherwise every keystroke would knock focus out of it.
+  if (searchHadFocus) {
+    const newSearchInput = document.getElementById('activitylog-search');
+    if (newSearchInput) {
+      newSearchInput.focus();
+      if (searchCaretPos != null) newSearchInput.setSelectionRange(searchCaretPos, searchCaretPos);
+    }
+  }
 }
 
 function exportActivityLogCSV(){
