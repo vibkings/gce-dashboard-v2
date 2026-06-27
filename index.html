@@ -1536,14 +1536,19 @@ function _saveSyncQueue() {
 
 // Collections where each entry is unique (append-only, never deduplicate)
 const APPEND_ONLY_COLS = new Set([
-  'v2_sales', 'v2_cashflow', 'v2_activityLog', 'v2_adjLog', 'v2_salesReturns', 'v2_purchaseReturns',
+  'v2_cashflow', 'v2_activityLog', 'v2_adjLog', 'v2_salesReturns', 'v2_purchaseReturns',
   'v2_purchases', 'v2_proformas', 'v2_borrows'
 ]);
-// Monthly sales collections also append-only
+// NOTE: sales (including the monthly v2_sales_YYYY_MM collections) are
+// deliberately NOT in this set. A sale record is created once but then
+// genuinely mutated many times over its life — supply status, part-payment
+// installments, edits, item exchanges — so it needs the same dedup +
+// conflict-guard protection as any other mutable collection. Treating it as
+// append-only meant an older queued write for the same sale could clobber
+// a newer one in Firestore with no safety check, which is exactly what was
+// causing an instalment payment to "revert" after a page reload.
 function isAppendOnly(col) {
-  if (APPEND_ONLY_COLS.has(col)) return true;
-  if (/^v2_sales_\d{4}_\d{2}$/.test(col)) return true;
-  return false;
+  return APPEND_ONLY_COLS.has(col);
 }
 
 function _enqueue(col, id, data, op='patch') {
@@ -4845,16 +4850,22 @@ async function confirmCollectBalance(invoiceNum) {
   const first = items[0];
   const custId = first.custId || null;
   const custName = first.printName || first.custName || 'Walk-in';
-  const date = new Date().toLocaleDateString();
+  const now = new Date();
+  const date = now.toLocaleDateString();
+  const month = now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
   const remainingAfter = Math.max(0, shortfall - amtNow);
   const isFullSettlement = remainingAfter <= 0;
 
   setSyncStatus('saving');
   try {
     // Record whatever was actually collected this time as Sales income —
-    // an installment of 3,000 logs as 3,000, not the full balance.
+    // an installment of 3,000 logs as 3,000, not the full balance. Dated
+    // and month-stamped with TODAY (when the money actually came in), not
+    // the invoice's original creation date — an instalment paid weeks
+    // after the sale belongs in today's reports, not in the month the
+    // invoice happened to be created.
     const cfId = uid();
-    const cf = {id:cfId, type:'in', cat:'Sales (Part)', desc:`${isFullSettlement?'Balance payment':'Installment'} before supply — Inv #${invoiceNum} — ${custName}`, amount:amtNow, payMode:mode, bankName, custId, custName, date, month:first.month, invoiceNum, by:STATE.user.name};
+    const cf = {id:cfId, type:'in', cat:'Sales (Part)', desc:`${isFullSettlement?'Balance payment':'Installment'} before supply — Inv #${invoiceNum} — ${custName}`, amount:amtNow, payMode:mode, bankName, custId, custName, date, month, invoiceNum, by:STATE.user.name};
     await fsSave(COLS.CASHFLOW, cfId, cf);
     if (!STATE.cashflow) STATE.cashflow = {};
     STATE.cashflow[cfId] = {...cf, _id:cfId, _savedAt:Date.now()};
@@ -11098,11 +11109,12 @@ function renderReports() {
 
   // Cash received vs credit
   // 'part' payments only had partPayment actually collected now — the rest is
-  // still owed. Previously cashReceived counted the FULL total for 'part'
-  // sales while creditOwed only looked at payment==='credit', so the unpaid
-  // remainder of a part-payment sale vanished from both sides — overstating
-  // Cash Received/Net Cash while the dashboard's own reconciliation check
-  // still showed "balanced" because the two errors cancelled out exactly.
+  // still owed. This intentionally stays scoped to THIS PERIOD's own
+  // invoices (not a cashflow-wide sum) because cashReceived feeds the
+  // revenue reconciliation check below, which must balance against
+  // `revenue` (this period's invoice totals only) — exactly why Credit
+  // Payment collections from old debts are also kept out of this figure
+  // and only added to the cash/pos/transfer breakdown table instead.
   const cashReceived = salesF.filter(s=>s.payment!=='credit'&&s.payment!=='deposit')
     .reduce((a,s)=>a+(s.payment==='part'?(s.partPayment||0):(s.total||0)),0);
   const creditOwed   = salesF.filter(s=>s.payment==='credit').reduce((a,s)=>a+(s.total||0),0)
@@ -11146,10 +11158,13 @@ function renderReports() {
       }
       return;
     }
-    // For part payments, only the partPayment amount was actually received
-    // now — the rest is still owed (credit) and must not be counted as
-    // cash/POS/transfer received.
-    const amtReceived = s.payment==='part' ? (s.partPayment||0) : (s.total||0);
+    // Part payments are sourced exclusively from 'Sales (Part)' cashflow
+    // entries below (mirroring Credit Payment) — s.partPayment is a live
+    // cumulative figure that doesn't reflect what was received in THIS
+    // specific period if an instalment was paid later, so reading it here
+    // would both miss later instalments and wrongly restate past periods.
+    if (s.payment === 'part') return;
+    const amtReceived = s.total||0;
     if (s.payMode === 'split' && s.splitPayment) {
       const sp = s.splitPayment;
       const add = (mode, amt) => {
@@ -11172,6 +11187,22 @@ function renderReports() {
   Object.values(STATE.cashflow||{})
     .filter(c=>c.type==='in'&&c.cat==='Credit Payment'&&inRange(c.date,c.month))
     .forEach(c=>{
+      const m = c.payMode||'cash';
+      if (m==='pos') posSales += c.amount||0;
+      else if (m==='transfer') transferSales += c.amount||0;
+      else cashSales += c.amount||0;
+    });
+
+  // Part-payment money collected during this period — covers both the
+  // original part-payment made at sale time and any instalment paid later,
+  // since each is logged as a 'Sales (Part)' cashflow entry dated to when
+  // it actually happened. This is now the only source of part-payment
+  // income (see the skip above), so an instalment paid weeks after the
+  // original sale correctly shows up in the period it was collected.
+  const partPaymentsThisPeriod = Object.values(STATE.cashflow||{})
+    .filter(c=>c.type==='in'&&c.cat==='Sales (Part)'&&inRange(c.date,c.month));
+  const partPaymentsCollected = partPaymentsThisPeriod.reduce((a,c)=>a+(c.amount||0),0);
+  partPaymentsThisPeriod.forEach(c=>{
       const m = c.payMode||'cash';
       if (m==='pos') posSales += c.amount||0;
       else if (m==='transfer') transferSales += c.amount||0;
@@ -12100,6 +12131,13 @@ function renderClosing() {
   let cashIncome=0, posIncome=0, transferIncome=0, creditPayIn=0;
   invList.forEach(g=>{
     if(g.payment==='credit') return; // credit — not collected yet, skip
+    if(g.payment==='part') return; // part-payment — sourced exclusively from
+      // 'Sales (Part)' cashflow entries below (same treatment as credit),
+      // since g.partPayment is a live cumulative figure that doesn't
+      // reflect what was actually received ON THIS DAY specifically —
+      // instalments collected on later days need their own cashflow entry
+      // to show up at all, and reading it here would also wrongly inflate
+      // a past closing date if a later instalment came in after the fact.
     if (g.payment === 'deposit') {
       // The deposit portion (g.partPayment) was already received and
       // bucketed into the till whenever the customer's deposit was first
@@ -12142,6 +12180,32 @@ function renderClosing() {
     else if (m==='transfer') transferIncome += c.amount||0;
     else cashIncome += c.amount||0;
   });
+
+  // Part-payment money received today (from cashflow) — covers both the
+  // original part-payment made at sale time AND any instalment collected
+  // later, since every one of those is logged as a 'Sales (Part)' cashflow
+  // entry dated to the day it was actually paid. This is the only source
+  // of part-payment income now (see the invList skip above), so an
+  // instalment paid days after the original sale correctly shows up on
+  // the day it was collected instead of never appearing at all.
+  const partPayments = Object.values(STATE.cashflow||{}).filter(c=>c.type==='in'&&c.cat==='Sales (Part)'&&c.date===closingDate);
+  const partPayIn = partPayments.reduce((a,c)=>a+(c.amount||0),0);
+  partPayments.forEach(c=>{
+    const m = c.payMode||'cash';
+    if (m==='pos') posIncome += c.amount||0;
+    else if (m==='transfer') transferIncome += c.amount||0;
+    else cashIncome += c.amount||0;
+  });
+
+  // The grand total is always the literal sum of the rows shown in the
+  // breakdown table below — NOT a totalRev+creditPayIn shortcut. That
+  // shortcut only worked because every credit/part payment used to be
+  // collected on the same day the invoice was created; an instalment paid
+  // on a LATER day breaks that assumption (the money is real and already
+  // counted in cashIncome/posIncome/transferIncome above, but isn't part
+  // of today's totalRev), so summing the rows directly is the only way to
+  // stay correct regardless of when each payment actually came in.
+  const grandTotalIncome = cashIncome + posIncome + transferIncome + creditOwed;
 
   // Cash change given out today (money that left the till as change to customers)
   // Checks changeDisp (how the change itself was given), not the sale's own
@@ -12328,6 +12392,13 @@ function renderClosing() {
         <div class="kpi-sub">${dayExp.length} transactions</div>
       </div>`}
     </div>
+    ${partPayIn>0?`<div style="display:grid;grid-template-columns:1fr;gap:10px;margin-bottom:1.25rem">
+      <div class="kpi-card info">
+        <div class="kpi-label">INSTALMENTS / PART-PAYMENTS RECEIVED TODAY</div>
+        <div class="kpi-value" style="font-size:22px;color:var(--info)">${fmt(partPayIn)}</div>
+        <div class="kpi-sub">${partPayments.length} payment${partPayments.length!==1?'s':''} — includes today's own part-payment sales and any instalment paid today on an older invoice</div>
+      </div>
+    </div>`:''}
 
     <!-- Payment Breakdown, Expenses & Balance table -->
     <div style="background:var(--white);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px 16px;margin-bottom:1.25rem">
@@ -12376,9 +12447,9 @@ function renderClosing() {
         <tfoot>
           <tr style="background:#3b1f0e;color:#fff;font-weight:800">
             <td style="padding:10px 12px;text-transform:uppercase;letter-spacing:.05em">TOTAL</td>
-            <td style="padding:10px 12px;text-align:right;color:#86efac;font-size:15px">${fmt(totalRev+creditPayIn)}</td>
+            <td style="padding:10px 12px;text-align:right;color:#86efac;font-size:15px">${fmt(grandTotalIncome)}</td>
             <td style="padding:10px 12px;text-align:right;color:#fca5a5;font-size:15px">${totalExp>0?'-'+fmt(totalExp):'-'}</td>
-            <td style="padding:10px 12px;text-align:right;color:#fbbf24;font-size:15px">${fmt(totalRev+creditPayIn-totalExp)}</td>
+            <td style="padding:10px 12px;text-align:right;color:#fbbf24;font-size:15px">${fmt(grandTotalIncome-totalExp)}</td>
           </tr>
         </tfoot>
       </table>
