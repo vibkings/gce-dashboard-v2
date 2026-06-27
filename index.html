@@ -6869,7 +6869,7 @@ function _buildInvoiceHTML(invNum, mode='a4', invTypeOverride='sales', showOutst
        width:${pageW};margin:0 auto;padding:${pad};position:relative}
   table{width:100%;border-collapse:collapse}
   .wm{position:fixed;top:50%;left:55%;transform:translate(-50%,-50%);
-      pointer-events:none;z-index:0;opacity:0.032;display:flex;flex-direction:column;align-items:center;gap:4px}
+      pointer-events:none;z-index:0;opacity:0.045;display:flex;flex-direction:column;align-items:center;gap:4px}
   @media print{body{padding:${fs('8mm','10mm')}}button{display:none!important}.wm{position:fixed}}
 </style>
 </head><body>
@@ -7032,22 +7032,22 @@ ${totalWithBalance>0&&showOutstanding?`
 </div>
 
 <!-- ═══ SIGNATURES ═══ -->
-${withSig ? `<div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-bottom:${fs('12px','16px')}">
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-bottom:${fs('12px','16px')}">
   <div style="text-align:center">
-    <div style="height:${fs('44px','52px')};border-bottom:1px solid #333;margin-bottom:4px;display:flex;align-items:center;justify-content:center">
+    <div style="height:${fs('48px','58px')};border-bottom:1px solid #333;margin-bottom:4px;display:flex;align-items:center;justify-content:center">
       ${custSigUrl
-        ? `<img src="${custSigUrl}" style="max-height:${fs('40px','48px')};max-width:160px;object-fit:contain">`
+        ? `<img src="${custSigUrl}" style="max-height:${fs('44px','54px')};max-width:170px;object-fit:contain">`
         : `<span style="font-size:${fs('9px','10px')};color:#bbb;font-style:italic">[ Sign here for receipt ]</span>`}
     </div>
     <div style="font-size:${fs('9.5px','10.5px')};color:#555">Customer Signature</div>
   </div>
   <div style="text-align:center">
-    <div style="height:${fs('44px','52px')};border-bottom:1px solid #333;margin-bottom:4px;display:flex;align-items:center;justify-content:center">
-      ${sigDataUrl?`<img src="${sigDataUrl}" style="max-height:${fs('40px','48px')};max-width:140px;object-fit:contain">`:''}
+    <div style="height:${fs('48px','58px')};border-bottom:1px solid #333;margin-bottom:4px;display:flex;align-items:center;justify-content:center">
+      ${sigDataUrl?`<img src="${sigDataUrl}" style="max-height:${fs('44px','54px')};max-width:150px;object-fit:contain">`:''}
     </div>
     <div style="font-size:${fs('9.5px','10.5px')};color:#555">Authorized Signature</div>
   </div>
-</div>` : ''}
+</div>
 
 <!-- ═══ QR + SUPPLIED STAMP ═══ -->
 <div style="background:#fafafa;border:1px solid #eee;border-radius:6px;padding:${fs('7px','9px')};margin-top:6px">
@@ -7556,7 +7556,7 @@ function _initCustSigCanvas() {
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
   ctx.strokeStyle = '#1a1a2e';
-  ctx.lineWidth = 2.5;
+  ctx.lineWidth = 4.5;
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
 
@@ -7639,7 +7639,7 @@ function _cleanSignatureCanvas(canvas) {
   for (let p = 0, i = 0; p < n; p++, i += 4) {
     const stretched = ((norm[p] - min) / range) * 255;   // 0 (ink) .. 255 (background)
     const inkAmt = 255 - stretched;
-    const inkStrength = inkAmt < 35 ? 0 : Math.min(1, (inkAmt - 35) / 140);
+    const inkStrength = inkAmt < 20 ? 0 : Math.min(1, (inkAmt - 20) / 95);
     const val = Math.round(255 - inkStrength * 235);      // 255 white .. ~20 near-black ink
     d[i] = d[i+1] = d[i+2] = val;
     d[i+3] = 255; // flattened — fully opaque, no transparency needed for print/JPEG
@@ -17116,7 +17116,7 @@ function renderUsersFull(){
 function initSigCanvas(){
   const canvas=document.getElementById('sig-canvas');if(!canvas)return;
   const ctx=canvas.getContext('2d');let drawing=false;
-  ctx.strokeStyle='#1a1a1a';ctx.lineWidth=2;ctx.lineCap='round';ctx.lineJoin='round';
+  ctx.strokeStyle='#1a1a1a';ctx.lineWidth=4;ctx.lineCap='round';ctx.lineJoin='round';
   const pos=(e)=>{const r=canvas.getBoundingClientRect();const t=e.touches?e.touches[0]:e;return{x:(t.clientX-r.left)*(canvas.width/r.width),y:(t.clientY-r.top)*(canvas.height/r.height)};};
   canvas.onmousedown=canvas.ontouchstart=(e)=>{e.preventDefault();drawing=true;const p=pos(e);ctx.beginPath();ctx.moveTo(p.x,p.y);};
   canvas.onmousemove=canvas.ontouchmove=(e)=>{e.preventDefault();if(!drawing)return;const p=pos(e);ctx.lineTo(p.x,p.y);ctx.stroke();};
