@@ -4025,7 +4025,8 @@ function renderSales() {
       </div>
       <div class="form-group" id="s-part-wrap" style="margin:0;display:none;grid-column:1/-1">
         <label>Amount paid now (₦)</label>
-        <input class="form-input" id="s-part-payment" type="number" min="0" placeholder="0">
+        <input class="form-input" id="s-part-payment" type="number" min="0" placeholder="0" oninput="_updateAmountGuide(this.value,'s-part-payment-guide')">
+        <div id="s-part-payment-guide" style="font-size:12px;color:#888;margin-top:4px;font-weight:600"></div>
       </div>
       <div class="form-group" id="s-part-mode-wrap" style="margin:0;display:none">
         <label>Payment mode (part paid)</label>
@@ -4076,7 +4077,9 @@ function renderSales() {
               <option value="pos">POS</option>
             </select></div>
           <div class="form-group" style="margin:0"><label>Amount 1 (₦)</label>
-            <input class="form-input" id="s-deposit-sf-split-amt1" type="number" min="0" placeholder="0" oninput="v2OnDepositSplitAmtChange()"></div>
+            <input class="form-input" id="s-deposit-sf-split-amt1" type="number" min="0" placeholder="0" oninput="v2OnDepositSplitAmtChange();_updateAmountGuide(this.value,'s-deposit-sf-split-amt1-guide')">
+            <div id="s-deposit-sf-split-amt1-guide" style="font-size:11px;color:#888;margin-top:2px"></div>
+          </div>
           <div class="form-group" style="margin:0"><label>Mode 2</label>
             <select class="form-input" id="s-deposit-sf-split-mode2" onchange="v2OnDepositSplitModeChange()">
               <option value="transfer">Bank transfer</option>
@@ -4084,7 +4087,9 @@ function renderSales() {
               <option value="pos">POS</option>
             </select></div>
           <div class="form-group" style="margin:0"><label>Amount 2 (₦)</label>
-            <input class="form-input" id="s-deposit-sf-split-amt2" type="number" min="0" placeholder="0" oninput="v2OnDepositSplitAmtChange()"></div>
+            <input class="form-input" id="s-deposit-sf-split-amt2" type="number" min="0" placeholder="0" oninput="v2OnDepositSplitAmtChange();_updateAmountGuide(this.value,'s-deposit-sf-split-amt2-guide')">
+            <div id="s-deposit-sf-split-amt2-guide" style="font-size:11px;color:#888;margin-top:2px"></div>
+          </div>
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">
           <div class="form-group" style="margin:0;display:none" id="s-deposit-sf-split-bank-wrap1">
@@ -4135,7 +4140,9 @@ function renderSales() {
             <option value="pos">POS</option>
           </select></div>
         <div class="form-group" style="margin:0"><label>Amount 1 (₦)</label>
-          <input class="form-input" id="s-split-amt1" type="number" min="0" placeholder="0" oninput="v2OnSplitAmtChange()"></div>
+          <input class="form-input" id="s-split-amt1" type="number" min="0" placeholder="0" oninput="v2OnSplitAmtChange();_updateAmountGuide(this.value,'s-split-amt1-guide')">
+          <div id="s-split-amt1-guide" style="font-size:11px;color:#888;margin-top:2px"></div>
+        </div>
         <div class="form-group" style="margin:0"><label>Mode 2</label>
           <select class="form-input" id="s-split-mode2" onchange="v2OnSplitModeChange()">
             <option value="transfer">Bank transfer</option>
@@ -4143,7 +4150,9 @@ function renderSales() {
             <option value="pos">POS</option>
           </select></div>
         <div class="form-group" style="margin:0"><label>Amount 2 (₦)</label>
-          <input class="form-input" id="s-split-amt2" type="number" min="0" placeholder="0" oninput="v2OnSplitAmtChange()"></div>
+          <input class="form-input" id="s-split-amt2" type="number" min="0" placeholder="0" oninput="v2OnSplitAmtChange();_updateAmountGuide(this.value,'s-split-amt2-guide')">
+          <div id="s-split-amt2-guide" style="font-size:11px;color:#888;margin-top:2px"></div>
+        </div>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">
         <div class="form-group" style="margin:0;display:none" id="s-split-bank-wrap1">
@@ -4789,7 +4798,8 @@ function showCollectBalanceModal(invoiceNum) {
     </div>
     <div class="form-group">
       <label>Amount paying now <span class="req">*</span></label>
-      <input class="form-input" id="cb-amount" type="number" min="1" max="${shortfall}" value="${shortfall}">
+      <input class="form-input" id="cb-amount" type="number" min="1" max="${shortfall}" value="${shortfall}" oninput="_updateAmountGuide(this.value,'cb-amount-guide')">
+      <div id="cb-amount-guide" style="font-size:12px;color:#888;margin-top:4px;font-weight:600">${shortfall>0?'= '+fmt(shortfall):''}</div>
       <div style="font-size:11px;color:#888;margin-top:4px">Up to ${fmt(shortfall)}. Pay less than that to record an installment — goods still won't be released until this hits ₦0.</div>
     </div>
     <div class="form-group">
@@ -7973,7 +7983,7 @@ function showAddCommissionModal(invNum) {
           <input type="hidden" id="comm-cust-id">
         </div>
       </div>
-      <div class="form-group"><label>Commission Amount (₦) *</label><input class="form-input" id="comm-amt" type="number" min="0" placeholder="0"></div>
+      <div class="form-group"><label>Commission Amount (₦) *</label><input class="form-input" id="comm-amt" type="number" min="0" placeholder="0" oninput="_updateAmountGuide(this.value,'comm-amt-guide')"><div id="comm-amt-guide" style="font-size:11px;color:#888;margin-top:2px"></div></div>
       <div class="form-group" style="grid-column:1/-1"><label>Note</label><input class="form-input" id="comm-note" placeholder="e.g. panel doors commission"></div>
     </div>`,
     [{label:'Cancel',action:'close',style:''},{label:'Add Commission',action:`saveCommission('${invNum}')`,style:'btn-primary'}]);
@@ -8034,7 +8044,8 @@ function renderPayCommissionModal() {
     </div>
     <div class="form-group" style="margin-bottom:10px">
       <label>Amount to pay out (₦)</label>
-      <input class="form-input" id="pc-amount" type="number" min="1" max="${st.due}" value="${st.amount}" onchange="window._pcState.amount=parseFloat(this.value)||0;renderPayCommissionModal()">
+      <input class="form-input" id="pc-amount" type="number" min="1" max="${st.due}" value="${st.amount}" oninput="_updateAmountGuide(this.value,'pc-amount-guide')" onchange="window._pcState.amount=parseFloat(this.value)||0;renderPayCommissionModal()">
+      <div id="pc-amount-guide" style="font-size:11px;color:#888;margin-top:2px">${st.amount>0?'= '+fmt(st.amount):''}</div>
     </div>
     ${st.owed>0?`
     <div class="form-group" style="margin-bottom:10px">
@@ -8045,7 +8056,8 @@ function renderPayCommissionModal() {
     </div>
     ${st.clearDebt?`<div class="form-group" style="margin-bottom:10px">
       <label>Amount to apply to debt (₦)</label>
-      <input class="form-input" id="pc-debtamt" type="number" min="0" max="${Math.min(st.amount,st.owed)}" value="${st.debtAmt}" onchange="window._pcState.debtAmt=Math.min(parseFloat(this.value)||0,Math.min(window._pcState.amount,window._pcState.owed));renderPayCommissionModal()">
+      <input class="form-input" id="pc-debtamt" type="number" min="0" max="${Math.min(st.amount,st.owed)}" value="${st.debtAmt}" oninput="_updateAmountGuide(this.value,'pc-debtamt-guide')" onchange="window._pcState.debtAmt=Math.min(parseFloat(this.value)||0,Math.min(window._pcState.amount,window._pcState.owed));renderPayCommissionModal()">
+      <div id="pc-debtamt-guide" style="font-size:11px;color:#888;margin-top:2px">${st.debtAmt>0?'= '+fmt(st.debtAmt):''}</div>
     </div>`:''}`:''}
     ${remainder>0?`
     <div class="form-group" style="margin-bottom:10px">
@@ -8474,7 +8486,8 @@ function renderPurchases() {
         </div>
         <div id="pnp-part-wrap" style="display:none;grid-column:1/-1">
           <div style="font-size:10px;color:var(--text3);margin-bottom:3px">AMOUNT PAID NOW (₦)</div>
-          <input class="form-input" id="pnp-part-payment" type="number" min="0" placeholder="0" style="width:100%">
+          <input class="form-input" id="pnp-part-payment" type="number" min="0" placeholder="0" style="width:100%" oninput="_updateAmountGuide(this.value,'pnp-part-payment-guide')">
+          <div id="pnp-part-payment-guide" style="font-size:11px;color:#888;margin-top:3px"></div>
           <div style="font-size:10px;color:var(--text3);margin-top:3px">Applies against the full order value (including any pending items). The rest is added to this supplier's outstanding balance.</div>
         </div>
       </div>
@@ -10674,7 +10687,8 @@ function renderExpenses() {
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
             <div>
               <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);margin-bottom:3px">AMOUNT (₦)</div>
-              <input class="form-input" id="exp-amt" type="number" min="0" placeholder="0" style="width:100%">
+              <input class="form-input" id="exp-amt" type="number" min="0" placeholder="0" style="width:100%" oninput="_updateAmountGuide(this.value,'exp-amt-guide')">
+              <div id="exp-amt-guide" style="font-size:11px;color:#888;margin-top:3px"></div>
             </div>
             <div>
               <div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);margin-bottom:3px">PAYMENT MODE</div>
@@ -10864,7 +10878,8 @@ function showAddExpenseModal(prefill) {
       </div>
       <div class="form-group">
         <label>Amount (₦) <span class="req">*</span></label>
-        <input class="form-input" id="ae-amt" type="number" min="0" placeholder="0" value="${prefill?.amount||''}">
+        <input class="form-input" id="ae-amt" type="number" min="0" placeholder="0" value="${prefill?.amount||''}" oninput="_updateAmountGuide(this.value,'ae-amt-guide')">
+        <div id="ae-amt-guide" style="font-size:11px;color:#888;margin-top:2px">${prefill?.amount>0?'= '+fmt(prefill.amount):''}</div>
       </div>
       <div class="form-group">
         <label>Category</label>
@@ -10916,7 +10931,8 @@ function showEditExpenseModal(id) {
       </div>
       <div class="form-group">
         <label>Amount (₦) <span class="req">*</span></label>
-        <input class="form-input" id="ae-amt" type="number" min="0" value="${exp.amount||0}">
+        <input class="form-input" id="ae-amt" type="number" min="0" value="${exp.amount||0}" oninput="_updateAmountGuide(this.value,'ae-amt-guide')">
+        <div id="ae-amt-guide" style="font-size:11px;color:#888;margin-top:2px">${exp.amount>0?'= '+fmt(exp.amount):''}</div>
       </div>
       <div class="form-group">
         <label>Category</label>
@@ -15894,7 +15910,8 @@ function renderCustomerProfile(id){
       </div>
       ${creditBalance>0?`<div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
         <div><div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);margin-bottom:3px">AMOUNT PAID (₦)</div>
-          <input class="form-input" id="cpr-amt" type="number" min="0" placeholder="0" style="width:150px" oninput="document.getElementById('cpr-calc').textContent=this.value>0?'Remaining: '+new Intl.NumberFormat('en-NG',{style:'currency',currency:'NGN',minimumFractionDigits:0}).format(Math.max(0,${creditBalance}-parseFloat(this.value||0))):''">
+          <input class="form-input" id="cpr-amt" type="number" min="0" placeholder="0" style="width:150px" oninput="_updateAmountGuide(this.value,'cpr-amt-guide');document.getElementById('cpr-calc').textContent=this.value>0?'Remaining: '+new Intl.NumberFormat('en-NG',{style:'currency',currency:'NGN',minimumFractionDigits:0}).format(Math.max(0,${creditBalance}-parseFloat(this.value||0))):''">
+          <div id="cpr-amt-guide" style="font-size:11px;color:#888;margin-top:2px"></div>
         </div>
         <div><div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);margin-bottom:3px">PAYMENT MODE</div>
           <select class="form-input" id="cpr-mode" style="width:150px" onchange="toggleGenericBankField('cpr','in')">
@@ -16298,7 +16315,8 @@ function showApplyDepositModal(id) {
     <div class="form-grid c2">
       <div class="form-group" style="grid-column:1/-1">
         <label>Invoice amount to settle <span class="req">*</span></label>
-        <input class="form-input" id="ad-invoice-amt" type="number" min="1" placeholder="e.g. 50000" oninput="adCalc()">
+        <input class="form-input" id="ad-invoice-amt" type="number" min="1" placeholder="e.g. 50000" oninput="adCalc();_updateAmountGuide(this.value,'ad-invoice-amt-guide')">
+        <div id="ad-invoice-amt-guide" style="font-size:11px;color:#888;margin-top:2px"></div>
       </div>
       <div class="form-group" style="grid-column:1/-1">
         <label>Invoice # (optional)</label>
@@ -16504,7 +16522,7 @@ async function applyVerifiedBalance(id, newBalance) {
 function showCustomerDepositModal(id){
   const c=STATE.customers?.[id];if(!c)return;
   showModal(`💰 Customer Deposit — ${esc(c.name)}`,`<div class="form-grid c2">
-    <div class="form-group"><label>Amount (₦) *</label><input class="form-input" id="cdep-amt" type="number" min="0" placeholder="0"></div>
+    <div class="form-group"><label>Amount (₦) *</label><input class="form-input" id="cdep-amt" type="number" min="0" placeholder="0" oninput="_updateAmountGuide(this.value,'cdep-amt-guide')"><div id="cdep-amt-guide" style="font-size:11px;color:#888;margin-top:2px"></div></div>
     <div class="form-group"><label>Mode</label><select class="form-input" id="cdep-mode" onchange="toggleGenericBankField('cdep','in')"><option value="cash">Cash</option><option value="transfer">Transfer</option><option value="pos">POS</option></select></div>
     <div class="form-group" id="cdep-bank-wrap" style="display:none;grid-column:1/-1"><label id="cdep-bank-label">Bank</label><select class="form-input" id="cdep-bank">${bankSelectOpts('transfer')}</select></div>
     <div class="form-group" style="grid-column:1/-1"><label>Note</label><input class="form-input" id="cdep-note" placeholder="Optional"></div>
@@ -18031,7 +18049,8 @@ function showSupplierDepositModal(supId) {
     <div class="form-grid c2">
       <div class="form-group">
         <label>Amount (₦) <span class="req">*</span></label>
-        <input class="form-input" id="sdep-amount" type="number" min="1" placeholder="0">
+        <input class="form-input" id="sdep-amount" type="number" min="1" placeholder="0" oninput="_updateAmountGuide(this.value,'sdep-amount-guide')">
+        <div id="sdep-amount-guide" style="font-size:11px;color:#888;margin-top:2px"></div>
       </div>
       <div class="form-group">
         <label>Date</label>
@@ -18173,7 +18192,8 @@ function renderHeldChange() {
         </div>
         <div class="form-group">
           <label>Amount held (₦) <span class="req">*</span></label>
-          <input class="form-input" id="hc-amount" type="number" min="1" placeholder="0">
+          <input class="form-input" id="hc-amount" type="number" min="1" placeholder="0" oninput="_updateAmountGuide(this.value,'hc-amount-guide')">
+          <div id="hc-amount-guide" style="font-size:11px;color:#888;margin-top:2px"></div>
         </div>
         <div class="form-group">
           <label>Invoice # (optional)</label>
