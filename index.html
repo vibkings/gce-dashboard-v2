@@ -2013,6 +2013,18 @@ async function saveSaleDoc(invoiceMonth, id, data) {
   return fsSave(col, id, data);
 }
 
+// Returns a trustworthy "YYYY-MM" for a sale record, or null. IMPORTANT:
+// s.date is a locale-formatted string (toLocaleDateString(), e.g.
+// "15/6/2026"), NOT ISO — slicing it directly produces garbage like
+// "15/6/20" that would silently write to a bogus Firestore collection
+// instead of failing loudly (worse than a crash: no error, just data that
+// quietly never gets read back). Only a properly-formatted s.month is
+// trusted; anything else should fall back to the plain sales collection
+// rather than guessing from the date string.
+function _safeMonthFor(s) {
+  return (typeof s?.month === 'string' && /^\d{4}-\d{2}$/.test(s.month)) ? s.month : null;
+}
+
 // ════════════════════════════════════════════════════════════
 // BIDIRECTIONAL SMART SYNC
 // Runs once per session per collection.
@@ -4672,8 +4684,16 @@ async function confirmSupplyQty(saleId) {
     const newSupplied = (s.suppliedQty||0)+actualQty;
     const newPending = Math.max(0, pendingQty-actualQty);
     const updSale = {...s, suppliedQty:newSupplied, pendingQty:newPending, pendingSupply:newPending>0, supplyStatus:newPending>0?'pending':'supplied'};
-    await saveSaleDoc(s.month, saleId, updSale);
+    // Update STATE first — inventory was already deducted above, so even if
+    // the save below hits a snag we don't want suppliedQty/pendingQty left
+    // out of sync with stock that's already gone out the door.
     STATE.sales[saleId] = {...updSale, _id:saleId, _savedAt:Date.now()};
+    const month = _safeMonthFor(s);
+    if (month) {
+      await saveSaleDoc(month, saleId, updSale);
+    } else {
+      await fsSave(COLS.SALES, saleId, updSale);
+    }
     closeModal();
     setSyncStatus('synced');
     showToast(`✅ Supplied ${actualQty} × ${s.name}.${newPending>0?` ${newPending} still pending.`:' Fully supplied.'}`,'success');
@@ -4713,7 +4733,7 @@ async function _doSupplyAllNow(invoiceNum) {
   const items = Object.values(STATE.sales||{}).filter(s=>s.invoiceNum===invoiceNum && s.pendingSupply && !s.voided);
   if (!items.length) { showToast('Nothing pending for this invoice.','info'); return; }
   setSyncStatus('saving');
-  let suppliedCount=0, stillShort=0;
+  let suppliedCount=0, stillShort=0, saveFailures=0;
   try {
     for (const s of items) {
       const pendingQty = s.pendingQty!=null ? s.pendingQty : Math.max(0,(s.qty||0)-(s.suppliedQty||0));
@@ -4725,14 +4745,28 @@ async function _doSupplyAllNow(invoiceNum) {
       const newPending = Math.max(0, pendingQty-qty);
       const updSale = {...s, suppliedQty:newSupplied, pendingQty:newPending, pendingSupply:newPending>0, supplyStatus:newPending>0?'pending':'supplied'};
       const sid = s._id||s.id;
-      await saveSaleDoc(s.month, sid, updSale);
+      // Update STATE immediately — inventory was already deducted above, so
+      // if the save below fails we still want suppliedQty/pendingQty to
+      // reflect reality for the rest of this session rather than silently
+      // desyncing from the inventory that's already gone out.
       STATE.sales[sid] = {...updSale, _id:sid, _savedAt:Date.now()};
+      try {
+        const month = _safeMonthFor(s);
+        if (month) {
+          await saveSaleDoc(month, sid, updSale);
+        } else {
+          await fsSave(COLS.SALES, sid, updSale);
+        }
+      } catch(itemErr) {
+        saveFailures++;
+        console.error('_doSupplyAllNow: failed to save line', sid, itemErr);
+      }
       suppliedCount++;
       if (newPending>0) stillShort++;
     }
     setSyncStatus('synced');
-    showToast(`✅ Supplied ${suppliedCount} item line${suppliedCount!==1?'s':''} for Inv #${invoiceNum}.${stillShort>0?` ${stillShort} line${stillShort!==1?'s':''} still short on stock.`:''}`, stillShort>0?'warning':'success');
-    logActivity('Stock supplied', `Inv #${invoiceNum} — Supply all (${suppliedCount} lines)${stillShort>0?`, ${stillShort} still short`:''}`, '');
+    showToast(`✅ Supplied ${suppliedCount} item line${suppliedCount!==1?'s':''} for Inv #${invoiceNum}.${stillShort>0?` ${stillShort} line${stillShort!==1?'s':''} still short on stock.`:''}${saveFailures>0?` ⚠️ ${saveFailures} line(s) failed to save — please refresh and check.`:''}`, (stillShort>0||saveFailures>0)?'warning':'success');
+    logActivity('Stock supplied', `Inv #${invoiceNum} — Supply all (${suppliedCount} lines)${stillShort>0?`, ${stillShort} still short`:''}${saveFailures>0?`, ${saveFailures} save failures`:''}`, '');
     renderSales(); updateInventoryBadge();
   } catch(e) { setSyncStatus('error'); showToast('Failed.','error'); }
 }
@@ -4819,11 +4853,32 @@ async function confirmCollectBalance(invoiceNum) {
     // invoice total, _invoiceShortfall returns 0 and goods can go out.
     const invoiceTotal = items.reduce((a,s)=>a+(s.total||0),0);
     const newPartPayment = Math.min(invoiceTotal, (first.partPayment||0) + amtNow);
+    let saveFailures = 0;
     for (const s of items) {
       const sid = s._id||s.id;
       const updSale = {...s, partPayment:newPartPayment, ...(isFullSettlement?{balanceSettledAt:Date.now(), balanceSettledMode:mode}:{})};
-      await saveSaleDoc(s.month, sid, updSale);
+      // Update STATE first so the UI reflects the new balance immediately
+      // even in the rare case the Firestore-side save below fails — a
+      // failed write shouldn't also mean the cashier sees stale numbers
+      // for the rest of their session.
       STATE.sales[sid] = {...updSale, _id:sid, _savedAt:Date.now()};
+      try {
+        const month = _safeMonthFor(s);
+        if (month) {
+          await saveSaleDoc(month, sid, updSale);
+        } else {
+          await fsSave(COLS.SALES, sid, updSale);
+        }
+      } catch(itemErr) {
+        // Don't let one bad record (e.g. missing/malformed month) abort the
+        // whole installment — keep going so the rest of the invoice's lines
+        // still get the updated balance saved.
+        saveFailures++;
+        console.error('confirmCollectBalance: failed to save line', sid, itemErr);
+      }
+    }
+    if (saveFailures>0) {
+      showToast(`⚠️ Payment recorded, but ${saveFailures} line${saveFailures!==1?'s':''} failed to save the new balance — please retry or contact support.`,'error');
     }
     setSyncStatus('synced');
     closeModal();
@@ -4962,7 +5017,11 @@ async function confirmChangeItem() {
       discAmt: Math.round((s.salePrice||s.unitPrice||0)*calc.newQtyForOriginal*((s.discPct||0)/100)),
       profit: ((s.salePrice||s.unitPrice||0)-(s.cost||0))*calc.newQtyForOriginal - Math.round((s.salePrice||s.unitPrice||0)*calc.newQtyForOriginal*((s.discPct||0)/100))
     };
-    await saveSaleDoc(s.month, st.saleId, updOrig);
+    {
+      const origMonth = _safeMonthFor(s);
+      if (origMonth) await saveSaleDoc(origMonth, st.saleId, updOrig);
+      else await fsSave(COLS.SALES, st.saleId, updOrig);
+    }
     STATE.sales[st.saleId] = {...updOrig, _id:st.saleId, _savedAt:Date.now()};
 
     // 2) Supply the replacement now, as much as stock allows
@@ -4987,7 +5046,11 @@ async function confirmChangeItem() {
       pendingSupply: stillPendingQty>0,
       exchangedFrom: s.name
     };
-    await saveSaleDoc(s.month, newSaleId, newSale);
+    {
+      const newMonth = _safeMonthFor(newSale);
+      if (newMonth) await saveSaleDoc(newMonth, newSaleId, newSale);
+      else await fsSave(COLS.SALES, newSaleId, newSale);
+    }
     STATE.sales[newSaleId] = {...newSale, _id:newSaleId, _savedAt:Date.now()};
 
     // 4) Settle the price difference, dated today
@@ -7876,7 +7939,7 @@ async function saveEditedInvoice(invNum) {
         restockedTotal += qtyToRestock;
       }
       // Sales are stored in monthly collections
-      const month = s.month || (s.date ? s.date.slice(0,7) : null);
+      const month = _safeMonthFor(s);
       if (month) {
         const [yr, mo] = month.split('-').map(Number);
         const col = salesCol(yr, mo);
@@ -17525,7 +17588,7 @@ async function cleanupFlaggedInvoices(){
           restoredCount++;
         }
       }
-      const month = s.month || (s.date ? s.date.slice(0,7) : null);
+      const month = _safeMonthFor(s);
       let col = COLS.SALES;
       if (month) { const [yr,mo]=month.split('-').map(Number); col = salesCol(yr,mo); }
       // Use the real, immediate Firestore delete here (not the soft-delete
