@@ -1384,6 +1384,7 @@ const STATE = {
   demoSales:          {},
   tillCounts:         {},
   stockCounts:        {},
+  transferLog:        {},
   recycleBin:         {},
   activityLog:        {},
   banks:              {},
@@ -2228,6 +2229,15 @@ async function initDataLayer() {
     loadCollection(COLS.HELDCHANGE,   'heldChange'),
     loadCollection(COLS.TILLCOUNTS,   'tillCounts'),
     loadCollection(COLS.DEMOSALES,    'demoSales'),
+    // These four were being written correctly with fsSave (data was always
+    // safe in Firestore) but never had a matching loadCollection call here —
+    // so STATE.activityLog/recycleBin/stockCounts/transferLog started empty
+    // on every fresh page load, making it look like the records had been
+    // wiped when they were just never fetched back.
+    loadCollection('v2_activityLog',  'activityLog'),
+    loadCollection('v2_recycleBin',   'recycleBin'),
+    loadCollection('v2_stockCounts',  'stockCounts'),
+    loadCollection('v2_transferLog',  'transferLog'),
   ]);
   await withTimeout(mainLoadPromise, TIMEOUT);
   _watchSlowLoad(mainLoadPromise);
