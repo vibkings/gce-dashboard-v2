@@ -8234,7 +8234,18 @@ async function voidInvoice(invNum) {
   setSyncStatus('saving');
   try {
     for (const s of items) {
-      await fsDelete(COLS.SALES, s._id); delete STATE.sales[s._id];
+      // Sales live in monthly-partitioned collections (v2_sales_YYYY_MM),
+      // not the plain v2_sales collection — deleting from COLS.SALES wrote
+      // the tombstone somewhere the app never reads from, so the real
+      // record was untouched and reappeared after every reload.
+      const month = _safeMonthFor(s);
+      if (month) {
+        const [yr, mo] = month.split('-').map(Number);
+        await fsDelete(salesCol(yr, mo), s._id);
+      } else {
+        await fsDelete(COLS.SALES, s._id);
+      }
+      delete STATE.sales[s._id];
       const inv = STATE.inventory[s.itemId];
       if (inv) { const u={...inv,qty:(inv.qty||0)+s.qty}; await fsSave(COLS.INVENTORY,s.itemId,u); STATE.inventory[s.itemId]={...u,_id:s.itemId,_savedAt:Date.now()}; }
     }
