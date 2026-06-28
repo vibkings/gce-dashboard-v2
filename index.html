@@ -911,7 +911,7 @@ input[type=number]::-webkit-inner-spin-button{opacity:.25}
       <span class="sync-label" id="sync-label">Connecting...</span>
 
       <!-- Toolbar buttons matching v1 screenshot -->
-      <button onclick="runSyncQueue()" title="Push local changes to Firestore" class="hdr-tool-btn">🔄 Sync</button>
+      <button onclick="manualSyncClick()" title="Push local changes to Firestore" class="hdr-tool-btn">🔄 Sync</button>
       <button onclick="downloadFirestoreData()" title="Pull latest data from Firestore" class="hdr-tool-btn">☁️⬇ Download</button>
       <button onclick="restoreFromFirestore()" title="Full restore from Firestore" class="hdr-tool-btn">☁️⬆ Restore</button>
       <button onclick="toggleBackupPanel()" title="Auto Backup & Google Drive" class="hdr-tool-btn" id="backup-btn">💾 Backup</button>
@@ -1561,6 +1561,55 @@ function _enqueue(col, id, data, op='patch') {
   _syncQueue.push({ col, id, data, op, ts: Date.now(), v: (data?._updatedAt||new Date().toISOString()) });
   _saveSyncQueue();
   if (_online && !_syncRunning) runSyncQueue();
+}
+
+// The Sync button used to just call runSyncQueue() directly, which silently
+// does nothing if the queue happens to be empty, you're offline, or a sync
+// is already running — giving zero feedback either way, which looks
+// exactly like "the button isn't working". It's also the recovery path for
+// data that fell out of the queue entirely from the sales/append-only sync
+// bug fixed earlier — once a queue entry is gone, clicking Sync again does
+// nothing for it, since there's nothing left in the queue to push. This
+// gives real feedback, and when there's nothing queued, re-pushes every
+// currently-cached sale just in case anything is sitting locally but never
+// made it to Firestore.
+function manualSyncClick() {
+  if (!_online) { showToast('📴 Offline — connect to the internet to sync.', 'error'); return; }
+  if (_syncRunning) { showToast('⏳ Sync already in progress…', 'info'); return; }
+  if (_syncQueue.length > 0) {
+    showToast(`🔄 Syncing ${_syncQueue.length} pending change${_syncQueue.length!==1?'s':''}…`, 'info');
+    runSyncQueue();
+  } else {
+    const count = forceFullResync();
+    if (count > 0) {
+      showToast(`🔄 Re-checking ${count} local invoice${count!==1?'s':''} are backed up…`, 'info');
+      runSyncQueue();
+    } else {
+      showToast('✅ Already fully synced — nothing to do.', 'success');
+    }
+  }
+}
+
+// Re-queues every currently-cached sale for push to Firestore, regardless
+// of whether it's still sitting in the pending sync queue. This is the
+// recovery path for invoices that look fine on this device but never
+// actually reached the shared database — the queue entry that would have
+// pushed them can be long gone (dropped on an unrecoverable error, or lost
+// to the append-only conflict-guard bug that's since been fixed) while the
+// actual record is still sitting safely in this device's local cache.
+// Re-enqueuing is safe even for records that DID already sync correctly —
+// the conflict-guard in runSyncQueue() will simply skip anything the
+// server already has a newer copy of.
+function forceFullResync() {
+  let count = 0;
+  Object.values(STATE.sales||{}).forEach(s => {
+    if (s._deleted || !s._id) return;
+    const month = _safeMonthFor(s);
+    const col = month ? salesCol(...month.split('-').map(Number)) : COLS.SALES;
+    _enqueue(col, s._id, s, 'patch');
+    count++;
+  });
+  return count;
 }
 
 async function runSyncQueue() {
