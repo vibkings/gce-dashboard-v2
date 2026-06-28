@@ -1642,9 +1642,17 @@ async function runSyncQueue() {
       successCount++;
     } catch(e) {
       const msg = e.message||'';
-      // Don't retry 404 deletes or 409 conflicts — they're unrecoverable
-      if (msg.includes('404') || msg.includes('409')) {
-        console.warn(`Sync dropped (${msg.includes('404')?'404':'conflict'}) ${item.col}/${item.id}`);
+      // Only a 404 on a DELETE genuinely means "already gone, nothing to
+      // do" — safe to skip without retrying. Every other failure —
+      // including a PATCH that comes back 404 or 409 — must be retried.
+      // PATCH requests don't have a real permanent-404 case (Firestore
+      // creates the document if it doesn't exist), so a 404/409 there is
+      // almost always transient. Silently dropping those (the previous
+      // behaviour, which applied to ALL operations, not just deletes) is
+      // exactly how sale line items vanished without ever reaching the
+      // server, with nothing but a buried console.warn to show for it.
+      if (item.op === 'delete' && msg.includes('404')) {
+        console.warn(`Sync skipped (already deleted) ${item.col}/${item.id}`);
       } else {
         // Exponential backoff — increment retry count
         failed.push({ ...item, retries: (item.retries||0)+1 });
@@ -1663,6 +1671,15 @@ async function runSyncQueue() {
   }
   setSyncStatus(failed.length ? 'error' : 'synced');
   if (failed.length) console.warn(`${failed.length} items still in sync queue (will retry)`);
+
+  // If something has been failing to sync for a while, say so loudly —
+  // the passive status indicator is easy to miss, and this is exactly the
+  // kind of thing that previously went unnoticed for days.
+  const stuckMaxRetries = failed.length ? Math.max(...failed.map(f=>f.retries||0)) : 0;
+  if (stuckMaxRetries >= 5 && Date.now() - (window._lastSyncStuckToast||0) > 60000) {
+    window._lastSyncStuckToast = Date.now();
+    showToast?.(`⚠️ ${failed.length} change(s) still haven't reached the server after several attempts — check your connection. They'll keep retrying automatically.`, 'error');
+  }
 
   // Schedule retry for failed items with exponential backoff
   if (failed.length && _online) {
@@ -4508,7 +4525,7 @@ function renderSales() {
             </div>
             <div class="form-group" style="margin:0">
               <label>Value</label>
-              <input class="form-input" id="s-inv-disc-val" type="number" min="0" placeholder="0" value="${preservedDiscVal}" oninput="debouncedSearchRerender(this, v2UpdateInvoiceDiscount)">
+              <input class="form-input" id="s-inv-disc-val" type="number" min="0" placeholder="0" value="${preservedDiscVal}" oninput="v2RecalcInvoiceDiscount();debouncedSearchRerender(this, renderSales)">
             </div>
           </div>
         </div>
@@ -4907,7 +4924,14 @@ function _invoiceShortfall(invoiceNum) {
   const payment = items[0].payment;
   if (payment!=='part' && payment!=='deposit') return 0;
   const total = items.reduce((a,s)=>a+(s.total||0),0);
-  const paid = items[0].partPayment||0;
+  // partPayment is duplicated identically across every line of an invoice,
+  // but if one line's sync ever lagged behind the others it could be left
+  // holding a stale, lower value — reading the WRONG line would then show
+  // the balance as if no installment had ever been paid. Taking the
+  // maximum across all lines is always safe (the true value can only ever
+  // have grown over time) and self-heals past inconsistencies rather than
+  // depending on every line having synced perfectly.
+  const paid = Math.max(0, ...items.map(s=>s.partPayment||0));
   return Math.max(0, total-paid);
 }
 
@@ -5052,8 +5076,11 @@ async function confirmCollectBalance(invoiceNum) {
 
     // partPayment accumulates with each installment — once it reaches the
     // invoice total, _invoiceShortfall returns 0 and goods can go out.
+    // Uses the MAX across all lines (not just the first), same reasoning
+    // as _invoiceShortfall — guards against one line holding a stale copy.
     const invoiceTotal = items.reduce((a,s)=>a+(s.total||0),0);
-    const newPartPayment = Math.min(invoiceTotal, (first.partPayment||0) + amtNow);
+    const currentPartPayment = Math.max(0, ...items.map(s=>s.partPayment||0));
+    const newPartPayment = Math.min(invoiceTotal, currentPartPayment + amtNow);
     let saveFailures = 0;
     for (const s of items) {
       const sid = s._id||s.id;
@@ -6489,6 +6516,22 @@ async function v2SaveSale(mode) {
     const currentBalance = invoiceCustomer.creditBalance||0;
     const wouldOwe = pt==='credit' ? gt : Math.max(0, gt-partAmt);
     const newTotal = currentBalance + wouldOwe;
+
+    // FULL credit (the customer walks out owing the entire amount, no
+    // protection mechanism in place) requires an actual credit limit to
+    // be set — there's nothing capping how much could build up otherwise.
+    // Part payment is deliberately exempt from this: a walk-in or
+    // zero-limit customer paying in part is protected by the goods being
+    // held until the balance clears, not by a credit limit.
+    if (pt==='credit' && creditLimit<=0 && wouldOwe>0) {
+      showBlockingError(
+        'No Credit Limit Set',
+        `<b>${invoiceCustomer.name}</b> doesn't have a credit limit set, so they can't be sold to on full credit.<br><br>
+        Set a credit limit for this customer first (Customers tab → Edit Customer), or use Cash or Part Payment instead.`
+      );
+      return;
+    }
+
     if (creditLimit > 0 && newTotal > creditLimit) {
       const available = Math.max(0, creditLimit - currentBalance);
       showBlockingError(
@@ -6503,11 +6546,6 @@ async function v2SaveSale(mode) {
         Ask the customer to make a payment first, or change the payment type.`
       );
       return;
-    }
-    if (creditLimit === 0 && (pt==='credit'||pt==='part') && wouldOwe > 0) {
-      // No credit limit set — warn but allow (staff can override)
-      // If you want to block: uncomment below
-      // showToast('⛔ Customer has no credit limit set. Cannot process credit sale.','error'); return;
     }
   }
   const dateVal = document.getElementById('s-inv-date')?.value;
@@ -7017,7 +7055,15 @@ async function _saveProformaRecord(custName, date, validDays=7){
 // only thing that's new. A flat ₦ amount is converted to its equivalent
 // percentage of the subtotal, so the same 5% cap applies consistently
 // regardless of which input method was used.
-function v2UpdateInvoiceDiscount() {
+//
+// Split into a pure state-update (runs synchronously on every keystroke)
+// and the actual re-render (debounced, via debouncedSearchRerender) —
+// exactly the same split every working search box already uses. The
+// earlier version debounced the STATE UPDATE itself, not just the render,
+// which is why focus still dropped: by the time the delayed render ran,
+// it was reading from a function that did its own DOM lookups bundled
+// together with the render call, defeating the focus-restore timing.
+function v2RecalcInvoiceDiscount() {
   const type = document.getElementById('s-inv-disc-type')?.value || 'none';
   const rawVal = parseFloat(document.getElementById('s-inv-disc-val')?.value) || 0;
   const subtotal = invoiceItems.reduce((a,l)=>a+(l.price*l.qty),0);
@@ -7032,6 +7078,9 @@ function v2UpdateInvoiceDiscount() {
     l.discPct = pct;
     l.discAmt = Math.round(l.price * l.qty * pct / 100);
   });
+}
+function v2UpdateInvoiceDiscount() {
+  v2RecalcInvoiceDiscount();
   renderSales();
 }
 
@@ -7101,9 +7150,13 @@ function _buildInvoiceHTML(invNum, mode='a4', invTypeOverride='sales', showOutst
     payModeLabel=`Split: ${sp.mode1}${sp.bank1?' ('+sp.bank1+')':''} ₦${(sp.amt1||0).toLocaleString()} + ${sp.mode2}${sp.bank2?' ('+sp.bank2+')':''} ₦${(sp.amt2||0).toLocaleString()}`;
   }
   let amountPaid=gt;
+  // partPayment is duplicated across every line — take the max across all
+  // of them rather than trusting whichever happens to be first, in case
+  // one line's copy ever lagged behind the others.
+  const _maxPartPayment = Math.max(0, ...items.map(s=>s.partPayment||0));
   if(payment==='credit') amountPaid=0;
-  else if(payment==='part') amountPaid=s0.partPayment||0;
-  else if(payment==='deposit') amountPaid=s0.partPayment||0; // partPayment stores deposit portion
+  else if(payment==='part') amountPaid=_maxPartPayment;
+  else if(payment==='deposit') amountPaid=_maxPartPayment; // partPayment stores deposit portion
   const balance=Math.max(0,gt-amountPaid);
   const tendered=s0.tenderedAmt||amountPaid;
   const change=Math.max(0,tendered-gt);
@@ -7131,8 +7184,8 @@ function _buildInvoiceHTML(invNum, mode='a4', invTypeOverride='sales', showOutst
   // What this invoice added to credit (used only to split the statement display
   // into "previous outstanding" + "this invoice" — does not affect the total)
   const thisInvoiceCredit = payment==='credit' ? gt
-    : payment==='part' ? Math.max(0, gt-(s0.partPayment||0))
-    : payment==='deposit' ? Math.max(0, gt-(s0.partPayment||0))
+    : payment==='part' ? Math.max(0, gt-_maxPartPayment)
+    : payment==='deposit' ? Math.max(0, gt-_maxPartPayment)
     : 0;
 
   // Outstanding balance is read directly from the customer profile's running
@@ -7711,7 +7764,7 @@ function showInvoiceViewModal(invNum) {
   const bankName = first.bankName || '';
   const posName = first.posName || '';
   const splitPayment = first.splitPayment || null;
-  const partPayment = first.partPayment || 0;
+  const partPayment = Math.max(0, ...items.map(s=>s.partPayment||0));
   const grandTotal = items.reduce((a,s)=>a+(s.total||0),0);
   const grossProfit = items.reduce((a,s)=>a+(s.profit||0),0);
   const totalDisc = items.reduce((a,s)=>a+(s.discAmt||0),0);
