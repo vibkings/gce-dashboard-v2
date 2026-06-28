@@ -3807,6 +3807,20 @@ function renderSales() {
   const el = document.getElementById('sales-content');
   if (!el) return;
 
+  // Rebuilding the New Invoice form below (via innerHTML) destroys and
+  // recreates every input in it — including ones with no baked-in value,
+  // which would silently reset to empty on every re-render. renderSales()
+  // gets called constantly while building an invoice (adding an item,
+  // picking a customer, changing payment type, etc.), so without this a
+  // backdated date picked early on would reset to "today" the moment the
+  // next item was added — exactly as reported. Capture whatever is
+  // currently typed/selected before rebuilding, then bake it back in below.
+  const _preserve = (id) => document.getElementById(id)?.value || '';
+  const preservedInvDate   = _preserve('s-inv-date');
+  const preservedPrintName = _preserve('s-print-name');
+  const preservedInvAddr   = _preserve('s-inv-address');
+  const preservedPartPay   = _preserve('s-part-payment');
+
   const now  = new Date();
   const today = now.toLocaleDateString();
   const curMonth = now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
@@ -3954,11 +3968,11 @@ function renderSales() {
         <div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:4px">
           <div class="form-group" style="flex:1;min-width:200px;margin:0">
             <label>Print invoice as <span style="font-size:10px;color:var(--text3);font-weight:400">(optional)</span></label>
-            <input class="form-input" id="s-print-name" placeholder="e.g. customer name to show on invoice">
+            <input class="form-input" id="s-print-name" placeholder="e.g. customer name to show on invoice" value="${esc(preservedPrintName)}">
           </div>
           <div class="form-group" style="flex:1;min-width:200px;margin:0">
             <label>Delivery / billing address <span style="font-size:10px;color:var(--text3);font-weight:400">(optional)</span></label>
-            <input class="form-input" id="s-inv-address" placeholder="e.g. 12 Oke-Ado Street, Ogbomosho">
+            <input class="form-input" id="s-inv-address" placeholder="e.g. 12 Oke-Ado Street, Ogbomosho" value="${esc(preservedInvAddr)}">
           </div>
         </div>`:`
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:4px">
@@ -3977,12 +3991,12 @@ function renderSales() {
           </div>
           <div class="form-group" style="margin:0">
             <label>Print invoice as <span style="font-size:10px;color:var(--text3);font-weight:400">(optional — leave blank to use customer name)</span></label>
-            <input class="form-input" id="s-print-name" placeholder="e.g. client name to show on invoice">
+            <input class="form-input" id="s-print-name" placeholder="e.g. client name to show on invoice" value="${esc(preservedPrintName)}">
           </div>
           <div class="form-group" style="margin:0;grid-column:1/-1">
             <label>Delivery / billing address <span style="font-size:10px;color:var(--text3);font-weight:400">(optional)</span></label>
             <input class="form-input" id="s-inv-address" placeholder="Enter address or leave blank"
-              value="${invoiceCustomer&&invoiceCustomer.address?esc(invoiceCustomer.address):''}">
+              value="${preservedInvAddr ? esc(preservedInvAddr) : (invoiceCustomer&&invoiceCustomer.address?esc(invoiceCustomer.address):'')}">
           </div>
           ${invoiceCustomer?`<div style="grid-column:1/-1;padding:8px 12px;border-radius:var(--radius-sm);font-size:13px;background:${(()=>{const b=invoiceCustomer.creditBalance||0,l=invoiceCustomer.creditLimit||0;return b>0?(l>0&&b>=l?'#fef2f2':'#fef9c3'):'#f0fdf4';})()};border:1px solid ${(()=>{const b=invoiceCustomer.creditBalance||0,l=invoiceCustomer.creditLimit||0;return b>0?(l>0&&b>=l?'#fca5a5':'#fde68a'):'#bbf7d0';})()}">
             ${(()=>{const bal=invoiceCustomer.creditBalance||0;const lim=invoiceCustomer.creditLimit||0;const avail=lim>0?Math.max(0,lim-bal):null;const atLimit=lim>0&&bal>=lim;if(atLimit)return '<span style="color:#dc2626;font-weight:700">🚫 <b>'+esc(invoiceCustomer.name)+'</b> AT CREDIT LIMIT — owes '+fmt(bal)+' of '+fmt(lim)+'. Credit sales blocked.</span>';if(bal>0&&lim>0)return '⚠️ <b>'+esc(invoiceCustomer.name)+'</b> owes <b style="color:#dc2626">'+fmt(bal)+'</b> · Limit '+fmt(lim)+' · Available: <b style="color:#15803d">'+fmt(avail)+'</b>';if(bal>0)return '⚠️ <b>'+esc(invoiceCustomer.name)+'</b> owes <b style="color:#dc2626">'+fmt(bal)+'</b>';if(lim>0)return '✅ <b>'+esc(invoiceCustomer.name)+'</b> — No balance · Credit limit: '+fmt(lim);return '✅ <b>'+esc(invoiceCustomer.name)+'</b> — No outstanding balance';})()}
@@ -4030,8 +4044,8 @@ function renderSales() {
       </div>
       <div class="form-group" id="s-part-wrap" style="margin:0;display:none;grid-column:1/-1">
         <label>Amount paid now (₦)</label>
-        <input class="form-input" id="s-part-payment" type="number" min="0" placeholder="0" oninput="_updateAmountGuide(this.value,'s-part-payment-guide')">
-        <div id="s-part-payment-guide" style="font-size:12px;color:#888;margin-top:4px;font-weight:600"></div>
+        <input class="form-input" id="s-part-payment" type="number" min="0" placeholder="0" value="${preservedPartPay}" oninput="_updateAmountGuide(this.value,'s-part-payment-guide')">
+        <div id="s-part-payment-guide" style="font-size:12px;color:#888;margin-top:4px;font-weight:600">${preservedPartPay?'= '+fmt(parseFloat(preservedPartPay)||0):''}</div>
       </div>
       <div class="form-group" id="s-part-mode-wrap" style="margin:0;display:none">
         <label>Payment mode (part paid)</label>
@@ -4290,7 +4304,7 @@ function renderSales() {
       </div>
       <div class="form-group" style="margin:0">
         <label>Invoice date <span style="font-size:10px;color:var(--text3);font-weight:400">(leave blank for today)</span></label>
-        <input class="form-input" id="s-inv-date" type="date">
+        <input class="form-input" id="s-inv-date" type="date" value="${preservedInvDate}">
         <div style="margin-top:4px;font-size:11px;color:var(--text3)">Today: ${today}</div>
       </div>
     </div>
