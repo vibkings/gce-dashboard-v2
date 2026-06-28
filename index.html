@@ -18227,7 +18227,11 @@ async function addBank(){
 }
 
 function exportBackup(){
-  const data={inventory:STATE.inventory,sales:STATE.sales,purchases:STATE.purchases,customers:STATE.customers,suppliers:STATE.suppliers,cashflow:STATE.cashflow,banks:STATE.banks,settings:STATE.settings,salesReturns:STATE.salesReturns,purchaseReturns:STATE.purchaseReturns,pendingDeliveries:STATE.pendingDeliveries,activityLog:STATE.activityLog,invCounter:STATE.invCounter,exportedAt:new Date().toISOString(),version:'v2'};
+  const data={inventory:STATE.inventory,sales:STATE.sales,purchases:STATE.purchases,customers:STATE.customers,suppliers:STATE.suppliers,cashflow:STATE.cashflow,banks:STATE.banks,settings:STATE.settings,salesReturns:STATE.salesReturns,purchaseReturns:STATE.purchaseReturns,pendingDeliveries:STATE.pendingDeliveries,activityLog:STATE.activityLog,invCounter:STATE.invCounter,
+    warehouse:STATE.warehouse, proformas:STATE.proformas, borrows:STATE.borrows, adjLog:STATE.adjLog,
+    heldChange:STATE.heldChange, tillCounts:STATE.tillCounts, demoSales:STATE.demoSales, users:STATE.users,
+    messageLog:STATE.messageLog, recycleBin:STATE.recycleBin, stockCounts:STATE.stockCounts, transferLog:STATE.transferLog,
+    exportedAt:new Date().toISOString(),version:'v2'};
   const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
   const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`gce-v2-backup-${_todayLocalISO()}.json`;a.click();
   const info=`Last backup saved: ${new Date().toLocaleString()} · Items: ${Object.keys(STATE.inventory||{}).length} inventory · Sales: ${Object.keys(STATE.sales||{}).length} records`;
@@ -18246,12 +18250,43 @@ function importBackup(input){
       setSyncStatus('saving');
       // Merge imported data
       const merge=async(col,obj)=>{if(!obj)return;for(const[id,val]of Object.entries(obj)){try{await fsSave(col,id,val);}catch(err){}}};
+      // Sales must go into the correct MONTHLY collection (v2_sales_YYYY_MM)
+      // — saving to the plain v2_sales collection silently writes
+      // somewhere the app never reads from, which is exactly the bug that
+      // already caused real invoices to go missing once before.
+      const mergeSales=async(obj)=>{
+        if(!obj)return;
+        for(const[id,val]of Object.entries(obj)){
+          try{
+            const month=_safeMonthFor(val);
+            const col=month?salesCol(...month.split('-').map(Number)):'v2_sales';
+            await fsSave(col,id,val);
+          }catch(err){}
+        }
+      };
       if(data.inventory)await merge('v2_inventory',data.inventory);
-      if(data.sales)await merge('v2_sales',data.sales);
+      if(data.sales)await mergeSales(data.sales);
       if(data.purchases)await merge('v2_purchases',data.purchases);
       if(data.customers)await merge('v2_customers',data.customers);
       if(data.suppliers)await merge('v2_suppliers',data.suppliers);
       if(data.banks)await merge('v2_banks',data.banks);
+      if(data.cashflow)await merge('v2_cashflow',data.cashflow);
+      if(data.salesReturns)await merge('v2_salesReturns',data.salesReturns);
+      if(data.purchaseReturns)await merge('v2_purchaseReturns',data.purchaseReturns);
+      if(data.pendingDeliveries)await merge('v2_pendingDeliveries',data.pendingDeliveries);
+      if(data.activityLog)await merge('v2_activityLog',data.activityLog);
+      if(data.warehouse)await merge('v2_warehouse',data.warehouse);
+      if(data.proformas)await merge('v2_proformas',data.proformas);
+      if(data.borrows)await merge('v2_borrows',data.borrows);
+      if(data.adjLog)await merge('v2_adjLog',data.adjLog);
+      if(data.heldChange)await merge('v2_heldChange',data.heldChange);
+      if(data.tillCounts)await merge('v2_tillCounts',data.tillCounts);
+      if(data.demoSales)await merge('v2_demoSales',data.demoSales);
+      if(data.users)await merge('v2_users',data.users);
+      if(data.messageLog)await merge('v2_messageLog',data.messageLog);
+      if(data.recycleBin)await merge('v2_recycleBin',data.recycleBin);
+      if(data.stockCounts)await merge('v2_stockCounts',data.stockCounts);
+      if(data.transferLog)await merge('v2_transferLog',data.transferLog);
       input.value='';setSyncStatus('synced');
       showToast('Backup imported. Refreshing...','success');
       setTimeout(()=>location.reload(),1500);
@@ -19205,6 +19240,9 @@ function _buildBackupPayload() {
     banks:STATE.banks, settings:STATE.settings,
     salesReturns:STATE.salesReturns, purchaseReturns:STATE.purchaseReturns, pendingDeliveries:STATE.pendingDeliveries,
     activityLog:STATE.activityLog, invCounter:STATE.invCounter,
+    warehouse:STATE.warehouse, proformas:STATE.proformas, borrows:STATE.borrows, adjLog:STATE.adjLog,
+    heldChange:STATE.heldChange, tillCounts:STATE.tillCounts, demoSales:STATE.demoSales, users:STATE.users,
+    messageLog:STATE.messageLog, recycleBin:STATE.recycleBin, stockCounts:STATE.stockCounts, transferLog:STATE.transferLog,
     exportedAt: new Date().toISOString(), version:'v2'
   };
 }
