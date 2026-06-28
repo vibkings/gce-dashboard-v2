@@ -4385,7 +4385,7 @@ function renderSales() {
       <div style="position:relative;flex:1;max-width:360px">
         <span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--text3)">🔍</span>
         <input class="form-input" id="sales-search" style="padding-left:32px" placeholder="Search by invoice #, customer or item..."
-          value="${salesSearch}" oninput="salesSearch=this.value;window._salesFilter='all';window._v2SalesPage=0;renderSales()">
+          value="${salesSearch}" oninput="salesSearch=this.value;window._salesFilter='all';window._v2SalesPage=0;debouncedSearchRerender(this, renderSales)">
       </div>
       <button class="btn btn-sm" onclick="salesSearch='';window._salesFilter='today';renderSales()" style="color:var(--danger);border-color:#f5c2c7;display:${salesSearch?'inline-flex':'none'}">✕ Clear</button>
     </div>
@@ -9946,7 +9946,7 @@ function renderMessageLog(){
       <div class="kpi-card" style="border-left:3px solid var(--text3)"><div class="kpi-label">TOTAL ATTEMPTS</div><div class="kpi-value" style="font-size:22px;font-weight:800">${log.length}</div></div>
     </div>
     <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
-      <input class="form-input" placeholder="Search by customer or phone..." value="${esc(window._msgLogSearch||'')}" style="max-width:240px" oninput="window._msgLogSearch=this.value;renderMessageLog()">
+      <input class="form-input" placeholder="Search by customer or phone..." id="msglog-search" value="${esc(window._msgLogSearch||'')}" style="max-width:240px" oninput="window._msgLogSearch=this.value;debouncedSearchRerender(this, renderMessageLog)">
       <select class="form-input" style="max-width:180px" onchange="window._msgLogChannel=this.value;renderMessageLog()">
         <option value="all" ${channelFilter==='all'?'selected':''}>All channels</option>
         <option value="whatsapp-twilio" ${channelFilter==='whatsapp-twilio'?'selected':''}>WhatsApp (Twilio)</option>
@@ -13159,7 +13159,7 @@ function renderStockMgmt() {
       ${hiddenNote}
       <div class="search-wrap" style="max-width:340px;margin-bottom:10px">
         <span class="search-icon">🔍</span>
-        <input type="text" class="form-input" id="sm-all-search" placeholder="Search items..." value="${esc(window._smAllSearch||'')}" style="padding-right:30px" oninput="window._smAllSearch=this.value;renderStockMgmt()">
+        <input type="text" class="form-input" id="sm-all-search" placeholder="Search items..." value="${esc(window._smAllSearch||'')}" style="padding-right:30px" oninput="window._smAllSearch=this.value;debouncedSearchRerender(this, renderStockMgmt)">
         ${window._smAllSearch?`<span class="search-clear show" onclick="window._smAllSearch='';renderStockMgmt()" title="Clear search">✕</span>`:''}
       </div>
       <div class="tbl-wrap"><table><thead><tr><th>Item</th><th>Category</th><th style="text-align:center">System Qty</th><th>Counted Qty</th><th>Status</th></tr></thead><tbody>${allRows||'<tr><td colspan="5" style="text-align:center;color:var(--text3);padding:16px">No items match.</td></tr>'}</tbody></table></div>
@@ -14197,7 +14197,7 @@ function renderCustomerOverview() {
       <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--brand);margin-bottom:12px;display:flex;align-items:center;gap:6px"><span style="width:3px;height:14px;background:var(--brand);border-radius:2px;display:inline-block"></span>📋 CUSTOMER PERFORMANCE</div>
       <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
         ${['all','balance','cleared','active'].map(f=>`<button class="btn btn-sm ${filter===f?'btn-primary':''}" onclick="window._custOvFilter='${f}';renderCustomerOverview()">${f==='all'?'All':f==='balance'?'Has Balance':f==='cleared'?'Cleared':'Active'}</button>`).join('')}
-        <div class="search-wrap" style="margin-left:auto;max-width:240px"><span class="search-icon">🔍</span><input class="form-input" placeholder="Search customers..." value="${window._custOvSearch||''}" oninput="window._custOvSearch=this.value;renderCustomerOverview()"></div>
+        <div class="search-wrap" style="margin-left:auto;max-width:240px"><span class="search-icon">🔍</span><input class="form-input" id="custov-search" placeholder="Search customers..." value="${window._custOvSearch||''}" oninput="window._custOvSearch=this.value;debouncedSearchRerender(this, renderCustomerOverview)"></div>
       </div>
       ${rows?`<div class="tbl-wrap" style="border-radius:var(--radius);border:1px solid var(--border)"><table><thead><tr><th>CUSTOMER</th><th>PHONE</th><th>TYPE</th><th class="td-right">TOTAL SPENT</th><th class="td-right">CREDIT PAID</th><th class="td-right">CREDIT BALANCE</th><th>LAST PURCHASE</th><th style="text-align:center">INVOICES</th><th>STATUS</th><th>ACTION</th></tr></thead><tbody>${rows}</tbody></table></div>`:'<div class="empty-state"><div class="empty-state-icon">👥</div><div>No customers match filter.</div></div>'}
     </div>`;
@@ -14397,7 +14397,7 @@ function renderInvValuation() {
           ${['all','low','out','over'].map(f=>`<button class="btn btn-sm ${filter===f?'btn-primary':''}" onclick="window._invValFilter='${f}';renderInvValuation()">${f==='all'?'All':f==='low'?`Low Stock`:f==='out'?`Out of Stock`:'Overstocked'}</button>`).join('')}
           <div class="search-wrap" style="max-width:200px">
             <span class="search-icon">🔍</span>
-            <input class="form-input" placeholder="Search items..." value="${window._invValSearch||''}" oninput="window._invValSearch=this.value;renderInvValuation()" style="font-size:12px">
+            <input class="form-input" id="invval-search" placeholder="Search items..." value="${window._invValSearch||''}" oninput="window._invValSearch=this.value;debouncedSearchRerender(this, renderInvValuation)" style="font-size:12px">
           </div>
         </div>
       </div>
@@ -14854,7 +14854,7 @@ function renderReturnsTracker() {
         <input type="date" class="form-input" style="width:150px;padding:5px 8px;font-size:12px" value="${dateTo}" onchange="window._retDateTo=this.value;renderReturnsTracker()">
         <div class="search-wrap" style="flex:1;max-width:240px">
           <span class="search-icon">🔍</span>
-          <input class="form-input" placeholder="Search item, customer, invoice..." value="${window._retSearch||''}" oninput="window._retSearch=this.value;renderReturnsTracker()">
+          <input class="form-input" id="ret-search" placeholder="Search item, customer, invoice..." value="${window._retSearch||''}" oninput="window._retSearch=this.value;debouncedSearchRerender(this, renderReturnsTracker)">
         </div>
         ${search||dateFrom||dateTo||typeFilter!=='all'?`<button class="btn btn-sm" onclick="window._retSearch='';window._retDateFrom='';window._retDateTo='';window._retTypeFilter='all';renderReturnsTracker()" style="color:var(--danger);border-color:var(--danger)">Clear</button>`:''}
       </div>
