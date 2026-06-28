@@ -2020,21 +2020,42 @@ async function _refreshFromFirestore(col, stateKey) {
 // Load monthly sales collection (on demand for reports/overview)
 async function loadMonthlySales(year, month) {
   const col = salesCol(year, month);
-  let items = [];
+  let localItems = [];
   try {
     const store = _lfStore(col);
-    if (store) await store.iterate(val => items.push(val));
+    if (store) await store.iterate(val => localItems.push(val));
   } catch(e) {}
-  if (!items.length) {
+
+  let items = localItems;
+  // ALWAYS reconcile with Firestore when online — trusting "local has
+  // something" as "local is complete" was exactly how a multi-line invoice
+  // could silently lose lines after a reload: if even ONE line's local
+  // copy survived (e.g. the rest were evicted under low disk space, or
+  // never finished syncing), the server was never even checked, so the
+  // missing lines stayed missing forever. Merges by whichever copy of each
+  // record was saved more recently, same conflict rule as
+  // _refreshFromFirestore, so an unsynced local edit still wins over a
+  // stale server copy.
+  if (_online) {
     try {
-      const fetched = await _fsList(col);
-      // Only use Firestore result if it returned something meaningful
-      if (fetched.length > 0) {
-        items = fetched;
+      const serverItems = await _fsList(col);
+      if (serverItems.length > 0) {
+        const merged = {};
+        localItems.forEach(it => { if (it._id) merged[it._id] = it; });
+        serverItems.forEach(it => {
+          if (!it._id) return;
+          const local = merged[it._id];
+          if (!local) { merged[it._id] = it; return; }
+          const localTs = local._savedAt || (local._updatedAt ? new Date(local._updatedAt).getTime() : 0);
+          const serverTs = it._savedAt || (it._updatedAt ? new Date(it._updatedAt).getTime() : 0);
+          if (serverTs >= localTs) merged[it._id] = it; // server same-or-newer wins
+          // else: local is strictly newer (e.g. not synced up yet) — keep it
+        });
+        items = Object.values(merged);
         const store = _lfStore(col);
         if (store) items.forEach(d => store.setItem(d._id, d).catch(()=>{}));
       }
-    } catch(e) { items = []; }
+    } catch(e) { /* offline-ish failure — fall back to whatever local had */ }
   }
   // Merge into STATE.sales — filter tombstones (deleted records stay out of STATE)
   items.forEach(item => {
