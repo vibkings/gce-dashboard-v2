@@ -3319,9 +3319,9 @@ function renderInventory() {
 
   // Filter ALL items first (search works across all pages)
   const filtered = items.filter(i => {
-    if (searchTerm && !i.name?.toLowerCase().includes(searchTerm) &&
-        !(i.cat||'').toLowerCase().includes(searchTerm) &&
-        !(i.supplierName||'').toLowerCase().includes(searchTerm)) return false;
+    if (searchTerm && !_fuzzyMatch(i.name, searchTerm) &&
+        !_fuzzyMatch(i.cat||'', searchTerm) &&
+        !_fuzzyMatch(i.supplierName||'', searchTerm)) return false;
     if (catFilter && i.cat !== catFilter) return false;
     if (statusFilter) { if (statusFilter !== itemStatus(i)) return false; }
     return true;
@@ -3852,9 +3852,9 @@ function renderSales() {
     const g = invGroups[k];
     if (salesSearch) {
       const t = salesSearch.toLowerCase();
-      if (!k.toLowerCase().includes(t) &&
-          !(g.custName||'').toLowerCase().includes(t) &&
-          !g.items.some(s=>(s.name||'').toLowerCase().includes(t))) return false;
+      if (!_fuzzyMatch(k, t) &&
+          !_fuzzyMatch(g.custName||'', t) &&
+          !g.items.some(s=>_fuzzyMatch(s.name||'', t))) return false;
     }
     if (filter==='today') return g.date===today;
     if (filter==='date'&&filterDate) {
@@ -4467,8 +4467,8 @@ function printSalesLedger() {
   const keys = Object.keys(invGroups).filter(k=>{
     const g = invGroups[k];
     if (searchTerm) {
-      if (!k.toLowerCase().includes(searchTerm) && !(g.custName||'').toLowerCase().includes(searchTerm) &&
-          !g.items.some(s=>(s.name||'').toLowerCase().includes(searchTerm))) return false;
+      if (!_fuzzyMatch(k, searchTerm) && !_fuzzyMatch(g.custName||'', searchTerm) &&
+          !g.items.some(s=>_fuzzyMatch(s.name||'', searchTerm))) return false;
     }
     if (filter==='today') return g.date===today;
     if (filter==='date'&&filterDate) {
@@ -4547,7 +4547,7 @@ function v2CustSearch(val) {
   const term = (val||'').toLowerCase().trim();
   if (!term) { dd.style.display='none'; return; }
   const matches = Object.values(STATE.customers||{})
-    .filter(c => c.name?.toLowerCase().includes(term)||(c.phone||'').includes(term)).slice(0,15);
+    .filter(c => _fuzzyMatch(c.name, term)||(c.phone||'').includes(term)).slice(0,15);
   if (!matches.length) { dd.style.display='none'; return; }
   dd.innerHTML = matches.map(c => `<div style="padding:9px 12px;cursor:pointer;border-bottom:1px solid var(--border);font-size:13px"
     onmouseover="this.style.background='var(--surface)'" onmouseout="this.style.background=''"
@@ -4615,7 +4615,7 @@ function v2FilterItemDd(val) {
   const term = (val||'').toLowerCase().trim();
   if (!term) { dd.style.display='none'; return; }
   const matches = Object.values(STATE.inventory||{})
-    .filter(i => (i.name?.toLowerCase().includes(term)||(i.cat||'').toLowerCase().includes(term))).slice(0,20);
+    .filter(i => (_fuzzyMatch(i.name, term)||_fuzzyMatch(i.cat||'', term))).slice(0,20);
   if (!matches.length) { dd.style.display='none'; return; }
   dd.innerHTML = matches.map(i => `<div data-id="${i._id||i.id}" data-name="${esc(i.name)}" data-price="${i.sell||0}" data-cost="${i.cost||0}"
     style="padding:9px 12px;cursor:pointer;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;font-size:13px"
@@ -5385,7 +5385,7 @@ function retFilterExchangeDd(idx, val) {
   const dd = document.getElementById(`ex-dd-${idx}`); if (!dd) return;
   const term = (val||'').toLowerCase().trim();
   if (!term) { dd.style.display='none'; return; }
-  const matches = Object.values(STATE.inventory||{}).filter(i=>(i.name||'').toLowerCase().includes(term)||(i.cat||'').toLowerCase().includes(term)).slice(0,30);
+  const matches = Object.values(STATE.inventory||{}).filter(i=>_fuzzyMatch(i.name||'', term)||_fuzzyMatch(i.cat||'', term)).slice(0,30);
   if (!matches.length) { dd.innerHTML='<div style="padding:10px 12px;color:var(--text3);font-size:12px">No matching items.</div>'; dd.style.display='block'; return; }
   dd.innerHTML = matches.map(i=>{
     const id=i._id||i.id;
@@ -8096,7 +8096,7 @@ function showAddCommissionModal(invNum) {
 function searchCommissionCust(term) {
   const dd = document.getElementById('comm-cust-dd'); if(!dd)return;
   if(!term){dd.style.display='none';return;}
-  const matches=Object.values(STATE.customers||{}).filter(c=>(c.name||'').toLowerCase().includes(term.toLowerCase())).slice(0,8);
+  const matches=Object.values(STATE.customers||{}).filter(c=>_fuzzyMatch(c.name||'', term)).slice(0,8);
   if(!matches.length){dd.style.display='none';return;}
   dd.style.display='block';
   dd.innerHTML=matches.map(c=>`<div style="padding:8px 12px;cursor:pointer;border-bottom:1px solid #f0f0f0;font-size:13px" onmousedown="document.getElementById('comm-cust-search').value='${esc(c.name).replace(/'/g,"\\'")}';document.getElementById('comm-cust-id').value='${c._id||c.id}';document.getElementById('comm-cust-dd').style.display='none'">${esc(c.name)}</div>`).join('');
@@ -8354,9 +8354,9 @@ function renderPurchases() {
   });
   let histGroupList = Object.values(histGroupsMap).filter(g =>
     !searchVal ||
-    (g.invoiceNum||'').toLowerCase().includes(searchVal) ||
-    (g.supplier||'').toLowerCase().includes(searchVal) ||
-    g.itemNames.some(n=>(n||'').toLowerCase().includes(searchVal))
+    _fuzzyMatch(g.invoiceNum||'', searchVal) ||
+    _fuzzyMatch(g.supplier||'', searchVal) ||
+    g.itemNames.some(n=>_fuzzyMatch(n||'', searchVal))
   );
   // Break same-day ties by actual save time (max across the PO's line
   // items), so a freshly-created PO doesn't land below an older same-day
@@ -8809,7 +8809,7 @@ function searchSupplierForPurchase(term) {
   if (!dd) return;
   if (!term) { dd.style.display='none'; return; }
   const matches = Object.values(STATE.suppliers||{})
-    .filter(s=>(s.name||'').toLowerCase().includes(term.toLowerCase())).slice(0,8);
+    .filter(s=>_fuzzyMatch(s.name||'', term)).slice(0,8);
   // Also include typed text as free-form option
   const freeOpt = `<div style="padding:8px 10px;cursor:pointer;font-size:12px;color:var(--text3);border-bottom:1px solid var(--border)"
     onmousedown="pickSupplierForPurchase('${esc(term).replace(/'/g,"\\'")}')">Use "${esc(term)}"</div>`;
@@ -8836,7 +8836,7 @@ function searchInvForPurch(term) {
   if (hid) hid.value = ''; // typing manually invalidates a previous selection
   if (!term || term.length < 1) { dd.style.display='none'; if(panel) panel.style.display='none'; return; }
   const matches = Object.values(STATE.inventory||{})
-    .filter(i=>(i.name||'').toLowerCase().includes(term.toLowerCase())).slice(0,10);
+    .filter(i=>_fuzzyMatch(i.name||'', term)).slice(0,10);
   const exactMatch = matches.find(i=>(i.name||'').toLowerCase()===term.toLowerCase());
   if (panel) panel.style.display = exactMatch ? 'none' : 'block';
   if (!matches.length) { dd.style.display='none'; return; }
@@ -9924,7 +9924,7 @@ function renderMessageLog(){
   let log=Object.values(STATE.messageLog||{}).sort((a,b)=>(b._savedAt||0)-(a._savedAt||0));
   if(channelFilter!=='all') log=log.filter(m=>m.channel===channelFilter);
   if(statusFilter!=='all') log=log.filter(m=>m.status===statusFilter);
-  if(search) log=log.filter(m=>(m.custName||'').toLowerCase().includes(search)||(m.phone||'').includes(search));
+  if(search) log=log.filter(m=>_fuzzyMatch(m.custName||'', search)||(m.phone||'').includes(search));
 
   const totalSent=log.filter(m=>m.status==='sent').length;
   const totalFailed=log.filter(m=>m.status==='failed').length;
@@ -9980,7 +9980,7 @@ function renderCustomers(){
 
   const custs=Object.values(STATE.customers||{}).sort((a,b)=>(a.name||'').localeCompare(b.name||''));
   const searchTerm=(document.getElementById('cust-search')?.value||'').toLowerCase();
-  const filtered=custs.filter(c=>!searchTerm||c.name?.toLowerCase().includes(searchTerm)||(c.phone||'').includes(searchTerm));
+  const filtered=custs.filter(c=>!searchTerm||_fuzzyMatch(c.name, searchTerm)||(c.phone||'').includes(searchTerm));
   const totalOwed=custs.reduce((a,c)=>a+(c.creditBalance||0),0);
   const creditCusts=custs.filter(c=>(c.creditBalance||0)>0).length;
   el.innerHTML=`
@@ -10562,6 +10562,21 @@ function fmt(n) {
 function esc(str) {
   if (!str) return '';
   return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// Multi-word search matching used across every search/filter box in the
+// app: every word in what was typed must appear SOMEWHERE in the target
+// text, in any order — not necessarily next to each other. So typing
+// "2.5mm binolex" matches an item actually named "2.5mm Single Binolex
+// Back", even though "binolex" doesn't immediately follow "2.5mm" in the
+// real name. A plain .includes() (the old behaviour) required an exact
+// contiguous substring and would miss this.
+function _fuzzyMatch(text, query) {
+  if (!query) return true;
+  const t = String(text||'').toLowerCase();
+  const words = String(query).toLowerCase().trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return true;
+  return words.every(w => t.includes(w));
 }
 
 // ── Bank/POS dropdown helper ───────────────────────────────
@@ -11591,7 +11606,7 @@ function renderWarehouse() {
 
   // Filter
   const filtered = search
-    ? whItems.filter(i=>(i.name||'').toLowerCase().includes(search)||(i.cat||'').toLowerCase().includes(search))
+    ? whItems.filter(i=>_fuzzyMatch(i.name||'', search)||_fuzzyMatch(i.cat||'', search))
     : whItems;
 
   // Stock rows
@@ -11942,7 +11957,7 @@ function trFilterItemDd(val) {
   const cartQtyById = {}; cart.forEach(c=>{cartQtyById[c.id]=(cartQtyById[c.id]||0)+c.qty;});
   const sourceItems = isToShop ? Object.values(STATE.warehouse||{}) : Object.values(STATE.inventory||{});
   if (!term) { dd.style.display='none'; return; }
-  const matches = sourceItems.filter(i=>(i.name||'').toLowerCase().includes(term)||(i.cat||'').toLowerCase().includes(term)).slice(0,30);
+  const matches = sourceItems.filter(i=>_fuzzyMatch(i.name||'', term)||_fuzzyMatch(i.cat||'', term)).slice(0,30);
   if (!matches.length) { dd.innerHTML='<div style="padding:10px 12px;color:var(--text3);font-size:12px">No matching items.</div>'; dd.style.display='block'; return; }
   dd.innerHTML = matches.map(i=>{
     const id=i._id||i.id; const avail=(i.qty||0)-(cartQtyById[id]||0);
@@ -13138,7 +13153,7 @@ function renderStockMgmt() {
   } else if(tab==='count'){
     if (window._smCountAllActive) {
       const search=(window._smAllSearch||'').toLowerCase();
-      const allItems = items.filter(i=>!search || (i.name||'').toLowerCase().includes(search) || (i.cat||'').toLowerCase().includes(search)).sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+      const allItems = items.filter(i=>!search || _fuzzyMatch(i.name||'', search) || _fuzzyMatch(i.cat||'', search)).sort((a,b)=>(a.name||'').localeCompare(b.name||''));
       const allRows = allItems.map(i=>_countRowHtml(i,'cca',true)).join('');
       body=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-wrap:wrap;gap:8px"><div class="sec-title" style="margin:0">Count all items</div><button class="btn" onclick="window._smCountAllActive=false;renderStockMgmt()" style="color:var(--danger)">✕ Cancel</button></div>
       ${hiddenNote}
@@ -13173,7 +13188,7 @@ function adjFilterItemDd(val) {
   const dd = document.getElementById('adj-item-dd'); if (!dd) return;
   const term = (val||'').toLowerCase().trim();
   if (!term) { dd.style.display='none'; return; }
-  const matches = Object.values(STATE.inventory||{}).filter(i=>(i.name||'').toLowerCase().includes(term)||(i.cat||'').toLowerCase().includes(term)).slice(0,30);
+  const matches = Object.values(STATE.inventory||{}).filter(i=>_fuzzyMatch(i.name||'', term)||_fuzzyMatch(i.cat||'', term)).slice(0,30);
   if (!matches.length) { dd.innerHTML='<div style="padding:10px 12px;color:var(--text3);font-size:12px">No matching items.</div>'; dd.style.display='block'; return; }
   dd.innerHTML = matches.map(i=>{
     const id=i._id||i.id;
@@ -13296,7 +13311,7 @@ function _stockSheetItems(catFilter, searchTerm) {
   if (catFilter) items = items.filter(i => (i.cat||'Uncategorized') === catFilter);
   if (searchTerm) {
     const s = searchTerm.toLowerCase();
-    items = items.filter(i => (i.name||'').toLowerCase().includes(s) || (i.cat||'').toLowerCase().includes(s));
+    items = items.filter(i => _fuzzyMatch(i.name||'', s) || _fuzzyMatch(i.cat||'', s));
   }
   return items.sort((a,b) => (a.cat||'Uncategorized').localeCompare(b.cat||'Uncategorized') || (a.name||'').localeCompare(b.name||''));
 }
@@ -13480,7 +13495,7 @@ function closeBorrowModal() {
 function filterBorrowItemDd(term,showAll) {
   const box=document.getElementById('_b_item_dd');if(!box)return;
   const q=(term||'').toLowerCase().trim();
-  const items=Object.values(STATE.inventory||{}).filter(i=>showAll||!q||(i.name||'').toLowerCase().includes(q)||(i.cat||'').toLowerCase().includes(q)).slice(0,40);
+  const items=Object.values(STATE.inventory||{}).filter(i=>showAll||!q||_fuzzyMatch(i.name||'', q)||_fuzzyMatch(i.cat||'', q)).slice(0,40);
   if(!items.length){box.innerHTML='<div style="padding:10px 12px;color:var(--text3);font-size:13px">No items match.</div>';box.style.display='block';return;}
   box.innerHTML=items.map(i=>{
     const sc=i.qty<=0?'#dc2626':i.qty<=(i.minQty||5)?'#d97706':'#16a34a';
@@ -13791,7 +13806,7 @@ function renderDemoSales(){
     ${demoItems.length?`<div class="tbl-wrap" style="margin-bottom:.75rem"><table><thead><tr><th>#</th><th>Item</th><th style="text-align:center">Qty</th><th class="td-right">Price</th><th class="td-right">Total</th><th></th></tr></thead><tbody>${itemRows}</tbody><tfoot><tr style="font-weight:700;background:var(--surface)"><td colspan="4" style="text-align:right;padding:8px">Total</td><td class="td-right">${fmt(grandTotal)}</td><td></td></tr></tfoot></table></div><div style="display:flex;gap:8px;margin-bottom:1rem"><button class="btn btn-primary" onclick="saveDemoSale()">Save & Print</button><button class="btn" onclick="window._demoItems=[];renderDemoSales()" style="color:var(--danger)">Clear</button></div>`:'<div style="text-align:center;padding:20px;color:#888;font-size:13px;border:1px dashed #ccc;border-radius:8px;margin-bottom:1rem">Add items above.</div>'}`;
 }
 
-function v2DemoFilterDd(term){const box=document.getElementById('demo-item-dd');if(!box)return;if(!term){box.style.display='none';return;}const matches=Object.values(STATE.inventory||{}).filter(i=>(i.name||'').toLowerCase().includes(term.toLowerCase())).slice(0,10);if(!matches.length){box.style.display='none';return;}box.style.display='block';box.innerHTML=matches.map(i=>`<div style="padding:8px 10px;cursor:pointer;border-bottom:1px solid var(--border)" onmousedown="selectDemoItem('${i._id||i.id}','${esc(i.name).replace(/'/g,"\\'")}',${i.sellPrice||i.sell||0})"><b>${esc(i.name)}</b><span style="float:right;font-size:11px;color:var(--text3)">${fmt(i.sellPrice||i.sell||0)}</span></div>`).join('');}
+function v2DemoFilterDd(term){const box=document.getElementById('demo-item-dd');if(!box)return;if(!term){box.style.display='none';return;}const matches=Object.values(STATE.inventory||{}).filter(i=>_fuzzyMatch(i.name||'', term)).slice(0,10);if(!matches.length){box.style.display='none';return;}box.style.display='block';box.innerHTML=matches.map(i=>`<div style="padding:8px 10px;cursor:pointer;border-bottom:1px solid var(--border)" onmousedown="selectDemoItem('${i._id||i.id}','${esc(i.name).replace(/'/g,"\\'")}',${i.sellPrice||i.sell||0})"><b>${esc(i.name)}</b><span style="float:right;font-size:11px;color:var(--text3)">${fmt(i.sellPrice||i.sell||0)}</span></div>`).join('');}
 function selectDemoItem(id,name,price){const inp=document.getElementById('demo-item-search');const hid=document.getElementById('demo-item-id');const priceInp=document.getElementById('demo-price');const box=document.getElementById('demo-item-dd');if(inp)inp.value=name;if(hid)hid.value=id;if(box)box.style.display='none';if(priceInp&&!priceInp.value)priceInp.value=price;}
 function addDemoItem(){const id=document.getElementById('demo-item-id')?.value;const name=document.getElementById('demo-item-search')?.value.trim();const qty=parseInt(document.getElementById('demo-qty')?.value)||1;const price=parseFloat(document.getElementById('demo-price')?.value)||0;if(!name){showToast('Select an item first.','error');return;}if(!window._demoItems)window._demoItems=[];window._demoItems.push({id,name,qty,price,total:qty*price});renderDemoSales();}
 async function saveDemoSale(){if(!window._demoItems||!window._demoItems.length){showToast('Add items first.','error');return;}const id=uid();const now=new Date();const date=now.toLocaleDateString();const invoiceNum='DEM-'+Date.now().toString().slice(-6);const printName=document.getElementById('demo-print-name')?.value.trim()||'Walk-in';const grandTotal=window._demoItems.reduce((a,i)=>a+i.price*i.qty,0);const demo={id,invoiceNum,printName,custName:printName,items:[...window._demoItems],grandTotal,date,by:STATE.user?.name};setSyncStatus('saving');try{await fsSave('v2_demoSales',id,demo);if(!STATE.demoSales)STATE.demoSales={};STATE.demoSales[id]={...demo,_id:id,_savedAt:Date.now()};window._demoItems=[];setSyncStatus('synced');showToast('Demo recorded.','success');printDemoInvoice(id);window._demoSub='list';renderDemoSales();}catch(e){setSyncStatus('error');showToast('Failed.','error');}}
@@ -13970,7 +13985,7 @@ function renderSupplierOverview() {
   const search=(window._supOvSearch||'').toLowerCase();
   const filter=window._supOvFilter||'all';
   const filtered=supData.filter(s=>{
-    if(search&&!(s.name||'').toLowerCase().includes(search)&&!(s.phone||'').toLowerCase().includes(search))return false;
+    if(search&&!_fuzzyMatch(s.name||'', search)&&!_fuzzyMatch(s.phone||'', search))return false;
     if(filter==='balance')return s.owedToSupplier>0;
     if(filter==='cleared')return s.owedToSupplier<=0&&s.invoiceCount>0;
     if(filter==='active')return s.invoiceCount>0;
@@ -14122,7 +14137,7 @@ function renderCustomerOverview() {
   const search=(window._custOvSearch||'').toLowerCase();
   const filter=window._custOvFilter||'all';
   const filtered=custData.filter(c=>{
-    if(search&&!(c.name||'').toLowerCase().includes(search)&&!(c.phone||'').toLowerCase().includes(search))return false;
+    if(search&&!_fuzzyMatch(c.name||'', search)&&!_fuzzyMatch(c.phone||'', search))return false;
     if(filter==='balance')return c.creditBalance>0;
     if(filter==='cleared')return c.creditBalance<=0&&c.invoiceCount>0;
     if(filter==='active')return c.invoiceCount>0;
@@ -14247,7 +14262,7 @@ function renderInvValuation() {
   if(filter==='low') tableItems=items.filter(i=>i.status==='low');
   else if(filter==='out') tableItems=items.filter(i=>i.status==='out');
   else if(filter==='over') tableItems=items.filter(i=>i.status==='over');
-  if(searchTerm) tableItems=tableItems.filter(i=>(i.name||'').toLowerCase().includes(searchTerm)||(i.cat||'').toLowerCase().includes(searchTerm));
+  if(searchTerm) tableItems=tableItems.filter(i=>_fuzzyMatch(i.name||'', searchTerm)||_fuzzyMatch(i.cat||'', searchTerm));
 
   const statusBadges={
     out:'<span class="chip chip-out">OUT</span>',
@@ -14680,7 +14695,7 @@ function renderReturnsTracker() {
   // Filtered list
   const filtered=allRet.filter(r=>{
     const rs=_retSummary(r);
-    if(search&&!rs.itemsLabel.toLowerCase().includes(search)&&!(r.custName||'').toLowerCase().includes(search)&&!(r.invoiceNum||'').toLowerCase().includes(search))return false;
+    if(search&&!_fuzzyMatch(rs.itemsLabel, search)&&!_fuzzyMatch(r.custName||'', search)&&!_fuzzyMatch(r.invoiceNum||'', search))return false;
     if(dateFrom){const d=new Date(r.date);const f=new Date(dateFrom);f.setHours(0,0,0,0);if(d<f)return false;}
     if(dateTo){const d=new Date(r.date);const t=new Date(dateTo);t.setHours(23,59,59,999);if(d>t)return false;}
     if(typeFilter!=='all'&&r.refundType!==typeFilter)return false;
@@ -15219,7 +15234,7 @@ function prodReportLiveSearch(term,force) {
   const box=document.getElementById('prod-report-dd'); if(!box)return;
   if(!term&&!force){box.style.display='none';return;}
   window._prSearch=term;
-  const matches=Object.values(STATE.inventory||{}).filter(i=>(i.name||'').toLowerCase().includes(term.toLowerCase())).slice(0,12);
+  const matches=Object.values(STATE.inventory||{}).filter(i=>_fuzzyMatch(i.name||'', term)).slice(0,12);
   if(!matches.length){box.style.display='none';return;}
   box.style.display='block';
   box.innerHTML=matches.map(i=>`<div style="padding:10px 14px;cursor:pointer;border-bottom:1px solid var(--border)"
@@ -15556,7 +15571,7 @@ function renderActivityLog() {
 
   const filtered=log.filter(l=>{
     if(actFilter!=='all'&&(l.action||'')!==actFilter)return false;
-    if(search&&!(l.action||'').toLowerCase().includes(search)&&!(l.detail||'').toLowerCase().includes(search)&&!(l.by||l.user||'').toLowerCase().includes(search))return false;
+    if(search&&!_fuzzyMatch(l.action||'', search)&&!_fuzzyMatch(l.detail||'', search)&&!_fuzzyMatch(l.by||l.user||'', search))return false;
     if(dateFrom){const d=new Date(l.date);const f=new Date(dateFrom);f.setHours(0,0,0,0);if(d<f)return false;}
     if(dateTo){const d=new Date(l.date);const t=new Date(dateTo);t.setHours(23,59,59,999);if(d>t)return false;}
     return true;
@@ -15804,7 +15819,7 @@ function renderCustomersFull(){
   // All Customers list
   const custs=Object.values(STATE.customers||{}).sort((a,b)=>(a.name||'').localeCompare(b.name||''));
   const search=(window._custSearch||'').toLowerCase();
-  const filtered=custs.filter(c=>!search||(c.name||'').toLowerCase().includes(search)||(c.phone||'').includes(search)||(c.biz||'').toLowerCase().includes(search));
+  const filtered=custs.filter(c=>!search||_fuzzyMatch(c.name||'', search)||(c.phone||'').includes(search)||_fuzzyMatch(c.biz||'', search));
   const totalOwed=custs.reduce((a,c)=>a+(c.creditBalance||0),0);
   const vipCount=custs.filter(c=>c.type==='vip').length;
   const wholesaleCount=custs.filter(c=>c.type==='wholesale').length;
@@ -17098,7 +17113,7 @@ function renderSuppliersFull(){
   if(window._supProfileId){renderSupplierProfile(window._supProfileId);return;}
 
   const search=(window._supSearch||'').toLowerCase();
-  const sups=Object.values(STATE.suppliers||{}).filter(s=>!s._deleted&&(!search||(s.name||'').toLowerCase().includes(search)||(s.contact||'').toLowerCase().includes(search)||(s.phone||'').toLowerCase().includes(search))).sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+  const sups=Object.values(STATE.suppliers||{}).filter(s=>!s._deleted&&(!search||_fuzzyMatch(s.name||'', search)||_fuzzyMatch(s.contact||'', search)||_fuzzyMatch(s.phone||'', search))).sort((a,b)=>(a.name||'').localeCompare(b.name||''));
 
   const rows=sups.map(s=>{
     const supPurchases=Object.values(STATE.purchases||{}).filter(p=>p.supplier===s.name);
@@ -18136,7 +18151,7 @@ function gsSearch(q) {
 
   // Inventory
   const inv = Object.values(STATE.inventory || {}).filter(i =>
-    (i.name||'').toLowerCase().includes(q) || (i.cat||'').toLowerCase().includes(q)
+    _fuzzyMatch(i.name||'', q) || _fuzzyMatch(i.cat||'', q)
   ).slice(0, 5);
   if (inv.length) {
     results.push(`<div class="gs-group-label">📦 Inventory</div>`);
@@ -18154,7 +18169,7 @@ function gsSearch(q) {
 
   // Customers
   const custs = Object.values(STATE.customers || {}).filter(c =>
-    (c.name||'').toLowerCase().includes(q) || (c.phone||'').includes(q) || (c.biz||'').toLowerCase().includes(q)
+    _fuzzyMatch(c.name||'', q) || (c.phone||'').includes(q) || _fuzzyMatch(c.biz||'', q)
   ).slice(0, 4);
   if (custs.length) {
     results.push(`<div class="gs-group-label">👥 Customers</div>`);
@@ -18172,7 +18187,7 @@ function gsSearch(q) {
   const invNums = {};
   Object.values(STATE.sales || {}).forEach(s => {
     const n = s.invoiceNum || '';
-    if (n.toLowerCase().includes(q) || (s.custName||'').toLowerCase().includes(q) || (s.printName||'').toLowerCase().includes(q)) {
+    if (_fuzzyMatch(n, q) || _fuzzyMatch(s.custName||'', q) || _fuzzyMatch(s.printName||'', q)) {
       if (!invNums[n]) invNums[n] = {invoiceNum:n, date:s.date, custName:s.printName||s.custName||'Walk-in', total:0, payment:s.payment};
       invNums[n].total += s.total || 0;
     }
@@ -18191,7 +18206,7 @@ function gsSearch(q) {
 
   // Suppliers
   const sups = Object.values(STATE.suppliers || {}).filter(s =>
-    (s.name||'').toLowerCase().includes(q) || (s.contact||'').toLowerCase().includes(q)
+    _fuzzyMatch(s.name||'', q) || _fuzzyMatch(s.contact||'', q)
   ).slice(0, 3);
   if (sups.length) {
     results.push(`<div class="gs-group-label">🚛 Suppliers</div>`);
