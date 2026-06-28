@@ -2270,9 +2270,30 @@ async function runFullBiSync() {
 }
 
 
+// Ask the browser not to silently evict this site's local data (IndexedDB)
+// when the device gets low on disk space. By default, site storage is
+// "best effort" — Chrome is allowed to wipe it with zero warning under
+// storage pressure, which is exactly how invoices have gone missing
+// without any visible error. Persistent storage isn't guaranteed (the
+// browser decides based on its own heuristics), but requesting it costs
+// nothing and meaningfully improves the odds. Fire-and-forget — must never
+// block or delay app boot.
+async function _requestPersistentStorage() {
+  try {
+    if (!navigator.storage?.persist) return;
+    const already = await navigator.storage.persisted?.();
+    if (already) { console.log('Storage: already persistent — protected from automatic eviction.'); return; }
+    const granted = await navigator.storage.persist();
+    console.log(granted
+      ? 'Storage: persistence granted — protected from automatic eviction under low disk space.'
+      : 'Storage: persistence NOT granted — this device\'s storage may still be cleared automatically when disk space is low.');
+  } catch(e) { console.warn('Storage persistence request failed:', e); }
+}
+
 async function initDataLayer() {
   // localForage is loaded via <script> in <head> — no dynamic load needed
   _lf = typeof localforage !== 'undefined' ? localforage : null;
+  _requestPersistentStorage(); // fire-and-forget, never await this
   await _loadSyncQueue();
 
   // Test Firestore connectivity (non-blocking, no await)
