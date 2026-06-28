@@ -1806,6 +1806,23 @@ async function fsGet(col, id) {
   } catch(e) { return null; }
 }
 
+// IndexedDB write failures used to be completely silent (just a console
+// warning) — the save would still report "success" to the user even
+// though nothing was actually durably stored anywhere, which is exactly
+// how invoices have gone missing without any visible error. This surfaces
+// it loudly as a toast instead, debounced so one bad batch of saves (e.g.
+// every line item in a multi-item invoice) doesn't spam a dozen identical
+// toasts for what's really one underlying problem.
+let _lastLocalStorageFailureToast = 0;
+function _warnLocalStorageFailure(action, e) {
+  console.warn(`IndexedDB ${action} failed:`, e);
+  const t = Date.now();
+  if (t - _lastLocalStorageFailureToast > 5000) {
+    _lastLocalStorageFailureToast = t;
+    showToast?.('⚠️ Local storage save failed — your device may be low on storage space. Please check this record actually saved before continuing.', 'error');
+  }
+}
+
 async function fsSave(col, id, data) {
   const now = new Date().toISOString();
   const record = {...data, _id: id, _updatedAt: now, _savedAt: Date.now()};
@@ -1813,7 +1830,7 @@ async function fsSave(col, id, data) {
   try {
     const store = _lfStore(col);
     if (store) await store.setItem(id, record);
-  } catch(e) { console.warn('IndexedDB write failed:', e); }
+  } catch(e) { _warnLocalStorageFailure('write', e); }
   // 2. Update STATE immediately so UI reflects change right away
   // (caller also does this, but belt-and-suspenders)
   // 3. Queue Firestore sync
@@ -1839,7 +1856,7 @@ async function fsDelete(col, id) {
   try {
     const store = _lfStore(col);
     if (store) await store.setItem(id, tombstone);
-  } catch(e) { console.warn('IndexedDB tombstone write failed:', e); }
+  } catch(e) { _warnLocalStorageFailure('tombstone write', e); }
   // Write tombstone to Firestore as a PATCH (not DELETE request)
   // so other devices can see "this was intentionally removed"
   _enqueue(col, id, tombstone, 'patch');
