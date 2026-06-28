@@ -6693,7 +6693,16 @@ async function v2SaveSale(mode) {
       window._convertingProformaId = null;
     }
     invoiceItems=[]; invoiceCustomer=null;
-    window._salesFilter='today';
+    // Switch the ledger filter to wherever the invoice just saved actually
+    // landed — for a normal same-day invoice that's still "Today", but for
+    // a backdated entry, forcing 'today' here would hide the very invoice
+    // that was just created, making it look like it vanished immediately.
+    if (!dateVal || date === new Date().toLocaleDateString()) {
+      window._salesFilter='today';
+    } else {
+      window._salesFilter='date';
+      window._salesFilterDate=dateVal;
+    }
     renderSales(); renderOverviewIfActive(); updateInventoryBadge();
   } catch(e) { setSyncStatus('error'); showToast('Failed: '+e.message,'error'); }
 }
