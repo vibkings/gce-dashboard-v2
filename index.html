@@ -7889,6 +7889,13 @@ function showEditInvoiceModal(invNum) {
   const deliveryAddr= esc(first.deliveryAddr || '');
   const note        = esc(first.note || '');
   const bankName    = esc(first.bankName || '');
+  // Convert the stored locale date ("M/D/YYYY") to ISO for the native date
+  // input, which only accepts YYYY-MM-DD — never feed the locale string to
+  // it directly.
+  const invDateObj  = _parseLocaleDate(first.date);
+  const invDateISO  = invDateObj
+    ? `${invDateObj.getFullYear()}-${String(invDateObj.getMonth()+1).padStart(2,'0')}-${String(invDateObj.getDate()).padStart(2,'0')}`
+    : '';
 
   // Whether anything on this invoice has actually been handed over yet —
   // only worth offering the revert option if there's something to revert.
@@ -7904,6 +7911,17 @@ function showEditInvoiceModal(invNum) {
       <div class="form-group" style="grid-column:1/-1">
         <label>Customer Display Name</label>
         <input class="form-input" id="ei-printname" value="${printName}" placeholder="Name on invoice">
+      </div>
+      <div class="form-group" style="grid-column:1/-1">
+        <label>Invoice Date</label>
+        <input class="form-input" id="ei-date" type="date" value="${invDateISO}" data-original="${invDateISO}" onchange="
+          const changed = this.value !== this.dataset.original;
+          const sameMonth = this.value.slice(0,7) === this.dataset.original.slice(0,7);
+          document.getElementById('ei-date-warn').style.display = (changed && !sameMonth) ? 'block' : 'none';
+        ">
+        <div id="ei-date-warn" style="display:none;font-size:11.5px;color:#92400e;background:#fff8e1;border:1px solid #ffe082;border-radius:6px;padding:6px 10px;margin-top:6px">
+          ⚠️ This moves the invoice into a different month — it will shift which Daily Closing and monthly report it appears under. Make sure that's intentional.
+        </div>
       </div>
       <div class="form-group">
         <label>Payment Type</label>
@@ -7955,6 +7973,7 @@ async function saveEditedInvoice(invNum) {
   if (!reason) { showToast('Please enter a reason for the edit.','error'); return; }
 
   const printName    = document.getElementById('ei-printname')?.value.trim();
+  const newDateISO   = document.getElementById('ei-date')?.value || '';
   const payment      = document.getElementById('ei-payment')?.value || 'paid';
   const payMode      = document.getElementById('ei-paymode')?.value || 'cash';
   const dueDate      = document.getElementById('ei-duedate')?.value || '';
@@ -7965,10 +7984,24 @@ async function saveEditedInvoice(invNum) {
   const items = Object.values(STATE.sales||{}).filter(s=>s.invoiceNum===invNum);
   if (!items.length) { showToast('Invoice not found.','error'); return; }
 
+  // Figure out if the date actually changed, and to what — date inputs
+  // give back ISO (YYYY-MM-DD); convert to this app's stored locale format
+  // ("M/D/YYYY") and derive the new month ("YYYY-MM") from the SAME parsed
+  // value, so the two can never disagree with each other.
+  let newDateLocale = null, newMonth = null, dateChanged = false;
+  if (newDateISO) {
+    const [ny, nm, nd] = newDateISO.split('-').map(Number);
+    const newDateObj = new Date(ny, nm-1, nd);
+    newDateLocale = newDateObj.toLocaleDateString();
+    newMonth = `${ny}-${String(nm).padStart(2,'0')}`;
+    dateChanged = newDateLocale !== items[0].date;
+  }
+
   setSyncStatus('saving');
   try {
     let restockedTotal = 0;
     for (const s of items) {
+      const oldMonth = _safeMonthFor(s);
       const upd = {
         ...s,
         printName: printName || s.printName || s.custName,
@@ -7977,6 +8010,10 @@ async function saveEditedInvoice(invNum) {
         editedAt: new Date().toISOString(),
         editReason: reason
       };
+      if (dateChanged && newDateLocale && newMonth) {
+        upd.date = newDateLocale;
+        upd.month = newMonth;
+      }
       // Revert to Not Yet Supplied: put back whatever stock was already
       // handed over on this line and reset it to fully pending, same shape
       // as a brand-new pending-supply sale.
@@ -7994,12 +8031,20 @@ async function saveEditedInvoice(invNum) {
         upd.supplyStatus = 'pending';
         restockedTotal += qtyToRestock;
       }
-      // Sales are stored in monthly collections
-      const month = _safeMonthFor(s);
-      if (month) {
-        const [yr, mo] = month.split('-').map(Number);
+      // Sales are stored in monthly collections. If the date edit moved
+      // this invoice into a DIFFERENT month, save it into the new month's
+      // collection and remove it from the old one — otherwise it would
+      // exist twice (a stale copy under the old month, a live one under
+      // the new one) and double-count in monthly reports.
+      const targetMonth = (dateChanged && newMonth) ? newMonth : oldMonth;
+      if (targetMonth) {
+        const [yr, mo] = targetMonth.split('-').map(Number);
         const col = salesCol(yr, mo);
         await fsSave(col, s._id, upd);
+        if (oldMonth && oldMonth !== targetMonth) {
+          const [oyr, omo] = oldMonth.split('-').map(Number);
+          await fsDelete(salesCol(oyr, omo), s._id);
+        }
       } else {
         await fsSave(COLS.SALES, s._id, upd);
       }
@@ -8008,7 +8053,7 @@ async function saveEditedInvoice(invNum) {
     closeModal();
     setSyncStatus('synced');
     showToast(revertSupply&&restockedTotal>0 ? `Invoice updated — ${restockedTotal} unit${restockedTotal!==1?'s':''} restocked, reverted to Not Yet Supplied.` : 'Invoice updated.', 'success');
-    logActivity('Invoice edited', `Invoice #${invNum} edited by ${STATE.user.name}${revertSupply&&restockedTotal>0?` — reverted to pending, restocked ${restockedTotal} unit(s)`:''}`, reason.slice(0,60));
+    logActivity('Invoice edited', `Invoice #${invNum} edited by ${STATE.user.name}${dateChanged&&newDateLocale?` — date changed to ${newDateLocale}`:''}${revertSupply&&restockedTotal>0?` — reverted to pending, restocked ${restockedTotal} unit(s)`:''}`, reason.slice(0,60));
     // Refresh sales view if visible
     if (document.getElementById('pg-sales')?.classList.contains('active')) renderSalesHistory?.();
   } catch(e) {
