@@ -13087,10 +13087,26 @@ function _renderSettingsOld_unused() {
   `;
 }
 
+// Wipes ALL existing customers/suppliers before a v1 migration import, so
+// the v1 data REPLACES whatever test/sample records exist in v2 rather
+// than sitting alongside them as a merge would — customers and suppliers
+// specifically, since a real migration shouldn't leave old placeholder
+// records mixed in with the real imported list.
+async function _wipeCollectionForOverwrite(col, stateKey) {
+  const existing = Object.values(STATE[stateKey]||{});
+  for (const rec of existing) {
+    const id = rec._id || rec.id;
+    if (!id) continue;
+    try { await fsDelete(col, id); } catch(e) {}
+  }
+  STATE[stateKey] = {};
+}
+
 // ── Live Firestore Migration — reads v1 gce_business directly ──
 async function migrateFromLiveFirestore() {
   const progress = document.getElementById('live-migration-progress');
   if (!progress) return;
+  if (!confirm('This will REPLACE all existing customers and suppliers in v2 with the v1 data (inventory/warehouse will be merged, not replaced). Continue?')) return;
   // V1 structure: gce_business/{colName} is a document with field 'data' containing the array
   const V1_API_KEY = 'AIzaSyDtSPRgy3EVf9SdPGUj1fd2xxfOpYjzRvU';
   const V1_BASE = `https://firestore.googleapis.com/v1/projects/new-great-chid-dashboard/databases/(default)/documents/gce_business`;
@@ -13149,6 +13165,7 @@ async function migrateFromLiveFirestore() {
     progress.innerHTML = '<div class="alert alert-info">⏳ Fetching customers from v1...</div>';
     const customers = await fetchV1Collection('customers');
     if (customers && customers.length) {
+      await _wipeCollectionForOverwrite(COLS.CUSTOMERS, 'customers');
       for (const c of customers) {
         if (!c || !c.name) continue;
         try {
@@ -13164,6 +13181,7 @@ async function migrateFromLiveFirestore() {
     progress.innerHTML = '<div class="alert alert-info">⏳ Fetching suppliers from v1...</div>';
     const suppliers = await fetchV1Collection('suppliers');
     if (suppliers && suppliers.length) {
+      await _wipeCollectionForOverwrite(COLS.SUPPLIERS, 'suppliers');
       for (const s of suppliers) {
         if (!s || !s.name) continue;
         try {
@@ -13211,6 +13229,7 @@ async function migrateFromLiveFirestore() {
 async function importV1Backup() {
   const file = document.getElementById('v1-backup-file')?.files[0];
   if (!file) { showToast('Please select a backup file.','error'); return; }
+  if (!confirm('This will REPLACE all existing customers and suppliers in v2 with the v1 backup data (inventory/warehouse will be merged, not replaced). Continue?')) return;
   const progress = document.getElementById('migration-progress');
   progress.innerHTML = '<div class="alert alert-info">⏳ Reading backup file...</div>';
 
@@ -13229,7 +13248,7 @@ async function importV1Backup() {
       const wh = data.warehouse || [];
       progress.innerHTML = `<div class="alert alert-info">⏳ Found: ${inv.length} inventory, ${custs.length} customers, ${sups.length} suppliers. Starting...</div>`;
 
-      let invCount = 0, custCount = 0, supCount = 0, errCount = 0;
+      let invCount = 0, custCount = 0, supCount = 0, whCount = 0, errCount = 0;
 
       // Test one fsSave first to catch any Firestore issues early
       try {
@@ -13259,6 +13278,7 @@ async function importV1Backup() {
       progress.innerHTML = `<div class="alert alert-info">⏳ Inventory done (${invCount}). Now importing customers...</div>`;
 
       // Import customers
+      if (custs.length) await _wipeCollectionForOverwrite(COLS.CUSTOMERS, 'customers');
       for (const c of custs) {
         if (!c || !c.name) continue;
         try {
@@ -13272,6 +13292,7 @@ async function importV1Backup() {
       progress.innerHTML = `<div class="alert alert-info">⏳ Customers done (${custCount}). Now importing suppliers...</div>`;
 
       // Import suppliers
+      if (sups.length) await _wipeCollectionForOverwrite(COLS.SUPPLIERS, 'suppliers');
       for (const s of sups) {
         if (!s || !s.name) continue;
         try {
@@ -13290,17 +13311,20 @@ async function importV1Backup() {
           await fsSave('v2_warehouse', id, {...w, id, _v1migrated:true});
           if (!STATE.warehouse) STATE.warehouse = {};
           STATE.warehouse[id] = {...w, id, _id:id,_savedAt:Date.now()};
+          whCount++;
         } catch(e) { errCount++; }
       }
 
       updateInventoryBadge();
       renderInventory();
+      renderWarehouse();
 
       progress.innerHTML = `<div class="alert alert-success">
         ✅ <b>Migration complete!</b><br>
         📦 Inventory: <b>${invCount}</b> items<br>
         👥 Customers: <b>${custCount}</b><br>
         🚛 Suppliers: <b>${supCount}</b><br>
+        🏭 Warehouse: <b>${whCount}</b> items<br>
         ${errCount > 0 ? `⚠️ ${errCount} errors (some items may not have saved)<br>` : ''}
         <br><small>Sales history stays in v1. New sales record in v2 going forward.</small>
       </div>`;
