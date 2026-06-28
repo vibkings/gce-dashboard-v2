@@ -1827,9 +1827,10 @@ async function fsSave(col, id, data) {
   const now = new Date().toISOString();
   const record = {...data, _id: id, _updatedAt: now, _savedAt: Date.now()};
   // 1. Write to IndexedDB immediately (never fails, works offline)
+  let localSaveOk = false;
   try {
     const store = _lfStore(col);
-    if (store) await store.setItem(id, record);
+    if (store) { await store.setItem(id, record); localSaveOk = true; }
   } catch(e) { _warnLocalStorageFailure('write', e); }
   // 2. Update STATE immediately so UI reflects change right away
   // (caller also does this, but belt-and-suspenders)
@@ -1839,7 +1840,14 @@ async function fsSave(col, id, data) {
   if (_online) {
     runSyncQueue(); // fire-and-forget
   }
-  return record;
+  // _localSaveOk is a diagnostic-only flag for callers that need to know
+  // whether this specific write actually persisted somewhere durable
+  // (currently used by v2SaveSale, to roll back an inventory deduction
+  // rather than show success when the sale record itself never saved).
+  // Returned as a SEPARATE object — never mutate `record` itself here,
+  // since that exact object reference is what's sitting in the sync queue
+  // and would otherwise leak this flag into the real Firestore payload.
+  return {...record, _localSaveOk: localSaveOk};
 }
 
 async function fsDelete(col, id) {
@@ -6260,6 +6268,54 @@ async function _safeDeductInventory(itemId, requestedQty) {
   return {deducted, item:STATE.inventory[itemId]};
 }
 
+async function _atomicRestoreInventory(itemId, qty, maxRetries=8) {
+  if (!itemId || qty<=0) return {restored:0};
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      const r = await fetch(`${FB.base}/v2_inventory/${itemId}?key=${FB.apiKey}`);
+      if (!r.ok) return {restored:0, notFound:true};
+      const doc = await r.json();
+      const updateTime = doc.updateTime;
+      const serverItem = fromFsDoc(doc);
+      const currentQty = serverItem?.qty||0;
+      const newQty = currentQty + qty;
+      const body = {fields: toFsFields({...serverItem, qty:newQty})};
+      const w = await fetch(`${FB.base}/v2_inventory/${itemId}?key=${FB.apiKey}&currentDocument.updateTime=${encodeURIComponent(updateTime)}`, {
+        method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)
+      });
+      if (w.ok) {
+        const updated = fromFsDoc(await w.json());
+        STATE.inventory[itemId] = {...updated, _id:itemId, _savedAt:Date.now()};
+        try { const store=_lfStore(COLS.INVENTORY); if(store) await store.setItem(itemId, STATE.inventory[itemId]); } catch(e){}
+        return {restored:qty, item:STATE.inventory[itemId]};
+      }
+      await new Promise(res=>setTimeout(res, 60+Math.random()*180));
+    } catch(e) {
+      await new Promise(res=>setTimeout(res, 150));
+    }
+  }
+  return {restored:0, failed:true};
+}
+
+// Rolls back a deduction that was already made for a sale that ultimately
+// failed to save — same online/offline split as _safeDeductInventory, so
+// it's just as reliable as the deduction it's undoing.
+async function _safeRestoreInventory(itemId, qty) {
+  if (!itemId || qty<=0) return {restored:0};
+  if (_online) {
+    const result = await _atomicRestoreInventory(itemId, qty);
+    if (!result.failed && !result.notFound) return result;
+  }
+  const inv = STATE.inventory[itemId];
+  if (inv) {
+    const u = {...inv, qty:(inv.qty||0)+qty};
+    await fsSave(COLS.INVENTORY, itemId, u);
+    STATE.inventory[itemId] = {...u, _id:itemId,_savedAt:Date.now()};
+    return {restored:qty, item:STATE.inventory[itemId]};
+  }
+  return {restored:0};
+}
+
 async function _allocateNextInvoiceNum() {
   const year = new Date().getFullYear();
   for (let attempt = 0; attempt < 8; attempt++) {
@@ -6491,6 +6547,9 @@ async function v2SaveSale(mode) {
   const partSplitPayment = partModeVal==='split' ? {mode1:'cash', amt1:partSplitCashVal, mode2:'transfer', amt2:partSplitTransferVal, bank1:'', bank2:partBankVal} : null;
   setSyncStatus('saving');
   try {
+    const _deductedSoFar = []; // [{itemId, qty}] — for rollback if the save fails partway through
+    const _savedSaleIds = [];  // sale ids successfully written this invoice — also rolled back together
+    let _saveFailed = false;
     for (const l of invoiceItems) {
       const saleId = uid();
       let inv = STATE.inventory[l.itemId];
@@ -6509,6 +6568,7 @@ async function v2SaveSale(mode) {
         const result = await _safeDeductInventory(l.itemId, l.qty);
         suppliedQty = result.deducted;
         pendingQty = l.qty - suppliedQty;
+        if (suppliedQty>0) _deductedSoFar.push({itemId:l.itemId, qty:suppliedQty});
       }
       const sale = {
         id:saleId, invoiceId, invoiceNum:invNum, name:l.name, itemId:l.itemId,
@@ -6534,8 +6594,33 @@ async function v2SaveSale(mode) {
         supplyStatus: pendingQty>0?'pending':'supplied',
         pendingSupply: pendingQty>0
       };
-      await saveSaleDoc(month, saleId, sale);
+      const _saved = await saveSaleDoc(month, saleId, sale);
+      if (_saved._localSaveOk === false) {
+        // The sale record itself never persisted anywhere durable — this is
+        // exactly how invoices have gone missing silently before, except
+        // now we catch it BEFORE telling the user it succeeded. Stop here;
+        // rollback happens once the loop exits below.
+        _saveFailed = true;
+        break;
+      }
       STATE.sales[saleId] = {...sale, _id:saleId,_savedAt:Date.now()};
+      _savedSaleIds.push(saleId);
+    }
+
+    if (_saveFailed) {
+      // Undo every deduction made for this invoice so far, and remove any
+      // lines that DID save — an invoice with only some of its lines
+      // present would be just as wrong as the inventory being off.
+      for (const d of _deductedSoFar) { try { await _safeRestoreInventory(d.itemId, d.qty); } catch(e) {} }
+      for (const sid of _savedSaleIds) {
+        try { await fsDelete(salesCol(...month.split('-').map(Number)), sid); } catch(e) {}
+        delete STATE.sales[sid];
+      }
+      setSyncStatus('error');
+      showBlockingError('Save Failed — Nothing Was Changed',
+        `This invoice could not be saved to local storage, so it was NOT recorded and any stock deduction has been reversed — your inventory is unaffected.<br><br>` +
+        `This usually means your device is low on storage space. Please free up some space and try saving again.`);
+      return;
     }
     // ── CHANGE DISPOSITION ───────────────────────────────────
     // When customer overpays and change > 0:
