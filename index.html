@@ -2094,10 +2094,26 @@ async function runBiSync(col, stateKey) {
   _biSyncDone.add(col);
   try {
     const serverDocs = await _fsList(col);
+    const localMap = STATE[stateKey] || {};
+    // CRITICAL: same protection as _refreshFromFirestore — if Firestore
+    // returns 0 docs but we already have local data, this is almost
+    // certainly a failed/misleading fetch (e.g. a 404 misread as "the
+    // collection is empty"), not a genuinely empty collection. Trusting it
+    // would queue every local record as "new" and push it up, potentially
+    // overwriting good server data with stale local copies. This exact
+    // check already existed in _refreshFromFirestore but was missing here
+    // — which is how inventory/customers ended up queuing 1500+ records
+    // for push off a single bad fetch instead of being protected like
+    // pendingDeliveries was.
+    const localCountPre = Object.keys(localMap).length;
+    if (!serverDocs.length && localCountPre > 0) {
+      console.warn(`BiSync [${col}]: server returned 0 docs but we have ${localCountPre} locally — skipping to protect data`);
+      _biSyncDone.delete(col); // allow retry next time, this wasn't a real result
+      return;
+    }
     const store = _lfStore(col);
     const serverMap = {};
     serverDocs.forEach(d => { if (d._id) serverMap[d._id] = d; });
-    const localMap = STATE[stateKey] || {};
     const serverIds = new Set(Object.keys(serverMap));
     const queuedIds = new Set(_syncQueue.filter(q=>q.col===col).map(q=>q.id));
     let pulled = 0, pushed = 0, resolved = 0;
