@@ -1573,6 +1573,28 @@ function _enqueue(col, id, data, op='patch') {
 // gives real feedback, and when there's nothing queued, re-pushes every
 // currently-cached sale just in case anything is sitting locally but never
 // made it to Firestore.
+// Checks back on a just-saved invoice's sync status a few seconds later.
+// The save-time rollback safeguard only catches a LOCAL storage failure
+// (detected immediately); it can't see whether the push to the shared
+// server actually succeeds, since that happens in the background. If a
+// line is still stuck retrying by the time this check runs, that's
+// exactly the situation that previously caused inventory to be deducted
+// for stock that, from every other device's point of view, was never
+// actually sold — so this surfaces it loudly and immediately instead of
+// letting it surface days later as a quiet discrepancy.
+function _verifyInvoiceSyncedAfterDelay(invNum, saleIds, delayMs=6000) {
+  setTimeout(() => {
+    const stuck = (_syncQueue||[]).filter(q => saleIds.includes(q.id) && (q.retries||0) >= 2);
+    if (stuck.length > 0) {
+      showBlockingError(
+        '⚠️ Invoice May Not Have Fully Saved',
+        `Invoice #${invNum} saved on this device, but ${stuck.length} part of it still hasn't reached the shared server after several attempts — possibly a connection issue.<br><br>` +
+        `<b>Please don't assume this invoice is safe yet.</b> Stay online, click the 🔄 Sync button, and re-check this invoice before relying on it. If this keeps happening, tell support the invoice number.`
+      );
+    }
+  }, delayMs);
+}
+
 function manualSyncClick() {
   if (!_online) { showToast('📴 Offline — connect to the internet to sync.', 'error'); return; }
   if (_syncRunning) { showToast('⏳ Sync already in progress…', 'info'); return; }
@@ -4525,7 +4547,7 @@ function renderSales() {
             </div>
             <div class="form-group" style="margin:0">
               <label>Value</label>
-              <input class="form-input" id="s-inv-disc-val" type="number" min="0" placeholder="0" value="${preservedDiscVal}" oninput="v2RecalcInvoiceDiscount();debouncedSearchRerender(this, renderSales)">
+              <input class="form-input" id="s-inv-disc-val" type="text" inputmode="decimal" placeholder="0" value="${preservedDiscVal}" oninput="this.value=this.value.replace(/[^0-9.]/g,'');v2RecalcInvoiceDiscount();debouncedSearchRerender(this, renderSales)">
             </div>
           </div>
         </div>
@@ -6715,6 +6737,10 @@ async function v2SaveSale(mode) {
         `This usually means your device is low on storage space. Please free up some space and try saving again.`);
       return;
     }
+    // Schedule a check-back on whether this invoice's lines actually
+    // reach the server, not just whether they saved locally — see
+    // _verifyInvoiceSyncedAfterDelay for why this matters.
+    _verifyInvoiceSyncedAfterDelay(invNum, _savedSaleIds);
     // ── CHANGE DISPOSITION ───────────────────────────────────
     // When customer overpays and change > 0:
     // - 'cash': change left the till as physical cash. If customer has outstanding,
